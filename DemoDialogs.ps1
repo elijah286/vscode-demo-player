@@ -113,6 +113,42 @@ function Test-DemoHistoryRow($Row, [string]$Search, [string]$Project, [string]$A
     return $true
 }
 
+function Get-DemoTurnLabel($Turn) {
+    $prompt = [string]$Turn.prompt
+    if ($prompt.Length -gt 160) { $prompt = $prompt.Substring(0,160) + '...' }
+    $label = ($Turn.index + 1).ToString() + '. ' + ($prompt -replace '\s+', ' ')
+    if ($Turn.error) { return '[Unavailable] ' + $label }
+    if ($Turn.status -eq 'archived-edits') { return '[Read-only edits] ' + $label }
+    if ($Turn.status -eq 'archived-events') { return '[Read-only events] ' + $label }
+    return $label
+}
+
+function Get-DemoSelectionPreview([object[]]$Items, [bool]$RawPayload) {
+    $text = [Text.StringBuilder]::new()
+    $truncated = $false
+    foreach ($item in @($Items | Sort-Object { $_.Turn.index })) {
+        $turn = $item.Turn
+        $header = 'EXCHANGE ' + ($turn.index + 1) + "`r`n"
+        if ($turn.error) { $header += 'UNAVAILABLE: ' + $turn.error + "`r`n" }
+        if ($RawPayload) { $header += "FULL SAVED PAYLOAD (includes prompt, response, tools, and metadata):`r`n" }
+        $content = if ($RawPayload) { [string]$turn.details } else { [string]$turn.content }
+        foreach ($part in @($header, $content, "`r`n`r`n----------------`r`n`r`n")) {
+            $remaining = 32512 - $text.Length
+            if ($part.Length -gt $remaining) {
+                [void]$text.Append($part, 0, $remaining)
+                $truncated = $true
+                break
+            }
+            [void]$text.Append($part)
+        }
+        if ($truncated) { break }
+    }
+    if ($truncated) {
+        [void]$text.Append("`r`n[Preview limited to 32 KiB of text for responsiveness. Select fewer exchanges to review them separately; inspect the source file for oversized content. Captured content is not truncated.]")
+    }
+    return $text.ToString()
+}
+
 function Show-CaptureDialog($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -121,7 +157,7 @@ function Show-CaptureDialog($Owner) {
  <Grid Margin="16">
   <Grid.RowDefinitions>
    <RowDefinition Height="Auto"/><RowDefinition Height="170"/><RowDefinition Height="Auto"/>
-   <RowDefinition Height="90"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="120"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
   <StackPanel Margin="0,0,0,8">
   <DockPanel>
@@ -175,11 +211,21 @@ function Show-CaptureDialog($Owner) {
    <Button x:Name="Load" Content="Load conversation" DockPanel.Dock="Right" Padding="12,5"/>
    <TextBox x:Name="Source" ToolTip="Select a conversation or browse/paste a saved JSONL transcript. Source files are never modified." Margin="0,0,12,0" VerticalContentAlignment="Center" AutomationProperties.AutomationId="CaptureSource"/>
   </DockPanel>
-  <ListBox x:Name="Turns" Grid.Row="3" SelectionMode="Extended" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureTurns"/>
+  <Grid Grid.Row="3">
+   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+   <DockPanel Margin="0,0,0,4">
+    <Button x:Name="ClearSelection" Content="Clear selection" DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureClearSelection"/>
+    <Button x:Name="SelectAll" Content="Select all (Ctrl+A)" DockPanel.Dock="Right" Padding="8,2" AutomationProperties.AutomationId="CaptureSelectAll"/>
+    <TextBlock x:Name="SelectionCount" VerticalAlignment="Center" AutomationProperties.AutomationId="CaptureSelectionCount"/>
+   </DockPanel>
+   <ListBox x:Name="Turns" Grid.Row="1" SelectionMode="Extended" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureTurns"
+    VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+    ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+  </Grid>
   <TextBox x:Name="Preview" Grid.Row="4" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
   <StackPanel Grid.Row="5">
    <CheckBox x:Name="RawPayload" Content="Show full saved payload (tools and metadata)" Margin="0,0,0,6" AutomationProperties.AutomationId="CaptureRawPayload"/>
-   <TextBlock Text="Demo title (1-160 characters). Select up to 100 exchanges with Ctrl/Shift; playback follows source order." TextWrapping="Wrap"/>
+   <TextBlock Text="All exchanges are selected on load. Use Ctrl+A or Ctrl/Shift to adjust; save up to 100 in source order. Large previews are limited; captured content is unchanged." TextWrapping="Wrap"/>
    <TextBox x:Name="Title" Margin="0,5,0,8" MaxLength="160" AutomationProperties.AutomationId="CaptureTitle"/>
    <CheckBox x:Name="Reviewed" Content="I reviewed the selected content for secrets. External assets are not bundled; playback uses saved payloads only." AutomationProperties.AutomationId="CaptureReviewed"/>
   </StackPanel>
@@ -196,7 +242,7 @@ function Show-CaptureDialog($Owner) {
         File = $null; Inspection = $null; Result = $null; Scan = $null; Locations = @()
         Rows = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
         Warnings = [System.Collections.Generic.List[string]]::new()
-        UpdatingFilters = $false; FilterError = ''; Filters = @{}
+        UpdatingFilters = $false; FilterError = ''; Filters = @{}; UpdatingTurns = $false
     }
     $sessions = $dialog.FindName('Sessions')
     $turns = $dialog.FindName('Turns')
@@ -388,7 +434,7 @@ function Show-CaptureDialog($Owner) {
     $sourceBox.Add_TextChanged({
         if ($sourceBox.Text -ne $dialog.Tag.File) {
             $dialog.Tag.Inspection = $null
-            $turns.Items.Clear()
+            $turns.ItemsSource = $null
             $preview.Text = ''
             $reviewed.IsChecked = $false
             $captureStatus.Text = 'Load this conversation to preview it before capture.'
@@ -407,19 +453,17 @@ function Show-CaptureDialog($Owner) {
         $dialog.Tag.File = $File
         $dialog.Tag.Inspection = $inspection
         $dialog.FindName('Source').Text = $File
-        $turns.Items.Clear()
-        foreach ($turn in $inspection.turns) {
-            $label = ($turn.index + 1).ToString() + '. ' + ($turn.prompt -replace '\s+', ' ')
-            if ($turn.error) { $label = '[Unavailable] ' + $label }
-            elseif ($turn.status -eq 'archived-edits') { $label = '[Read-only edits] ' + $label }
-            elseif ($turn.status -eq 'archived-events') { $label = '[Read-only events] ' + $label }
-            $turns.Items.Add([pscustomobject]@{ Label = $label; Turn = $turn }) | Out-Null
-        }
+        $dialog.Tag.UpdatingTurns = $true
+        try {
+            $turns.ItemsSource = @($inspection.turns | ForEach-Object {
+                [pscustomobject]@{ Label = Get-DemoTurnLabel $_; Turn = $_ }
+            })
+            $turns.SelectAll()
+        } finally { $dialog.Tag.UpdatingTurns = $false }
         $displayTitle = if ($sessions.SelectedItem -and $sessions.SelectedItem.File -eq $File) { $sessions.SelectedItem.Title } else { $inspection.title }
         $title.Text = if ($displayTitle.Length -gt 160) { $displayTitle.Substring(0,160) } else { $displayTitle }
-        $preview.Text = $inspection.notice
         $reviewed.IsChecked = $false
-        $captureStatus.Text = 'Select exchanges, review their saved content, then Save Demo.'
+        & $updatePreview
     }
     $dialog.FindName('Load').Add_Click({
         try {
@@ -436,18 +480,38 @@ function Show-CaptureDialog($Owner) {
             if ($file) { & $loadSource $file }
         } catch { Show-DemoError $dialog $_ }
     })
+    $previewTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
+    $previewTimer.Interval = [TimeSpan]::FromMilliseconds(75)
+    $previewTimer.Add_Tick({
+        $previewTimer.Stop()
+        if ($dialog.Tag.Inspection) {
+            $preview.Text = Get-DemoSelectionPreview @($turns.SelectedItems) ([bool]$dialog.FindName('RawPayload').IsChecked)
+            $reviewed.IsEnabled = $true
+        }
+    })
+    $dialog.Add_Closed({ $previewTimer.Stop() })
     $updatePreview = {
+        if ($dialog.Tag.UpdatingTurns) { return }
         $reviewed.IsChecked = $false
-        $parts = @($turns.SelectedItems | Sort-Object { $_.Turn.index } | ForEach-Object {
-            $turn = $_.Turn
-            $problem = if ($turn.error) { "`r`nUNAVAILABLE: " + $turn.error } else { '' }
-            $content = if ($dialog.FindName('RawPayload').IsChecked) {
-                "FULL SAVED PAYLOAD (includes prompt, response, tools, and metadata):`r`n" + $turn.details
-            } else { $turn.content }
-            'EXCHANGE ' + ($turn.index + 1) + $problem + "`r`n" + $content
-        })
-        $preview.Text = $parts -join "`r`n`r`n----------------`r`n`r`n"
+        $reviewed.IsEnabled = $false
+        $preview.Text = ''
+        $dialog.FindName('SelectionCount').Text = $turns.SelectedItems.Count.ToString() + ' of ' + $turns.Items.Count + ' exchanges selected'
+        $captureStatus.Text = if ($turns.SelectedItems.Count -gt 100) {
+            'A demo supports at most 100 exchanges. Reduce the selection before saving.'
+        } else { 'Review the selected saved content, then Save Demo. Incomplete exchanges cannot be captured.' }
+        $previewTimer.Stop()
+        $previewTimer.Start()
     }
+    $dialog.FindName('SelectAll').Add_Click({ $turns.SelectAll() })
+    $dialog.FindName('ClearSelection').Add_Click({ $turns.UnselectAll() })
+    $turns.Add_PreviewKeyDown({
+        param($sender, $args)
+        if ($args.Key -eq [System.Windows.Input.Key]::A -and
+            ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) {
+            $sender.SelectAll()
+            $args.Handled = $true
+        }
+    })
     $turns.Add_SelectionChanged($updatePreview)
     $dialog.FindName('RawPayload').Add_Checked($updatePreview)
     $dialog.FindName('RawPayload').Add_Unchecked($updatePreview)

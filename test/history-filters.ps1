@@ -47,5 +47,30 @@ try {
     foreach ($name in @('Refresh', 'HistorySearch', 'ProjectFilter', 'AgentFilter', 'SourceFilter', 'StatusFilter', 'DateFrom', 'DateTo', 'MinPrompts', 'MinDuration', 'ClearFilters', 'AddLocation')) {
         Assert-Equal ($null -ne $dialog.FindName($name)) $true ('Control exists: ' + $name)
     }
+    foreach ($name in @('SelectAll', 'ClearSelection', 'SelectionCount')) {
+        Assert-Equal ($null -ne $dialog.FindName($name)) $true ('Selection control exists: ' + $name)
+    }
+    $turns = $dialog.FindName('Turns')
+    Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($turns)) $true 'Exchange rows are virtualized'
+    Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetVirtualizationMode($turns)) 'Recycling' 'Exchange containers are recycled'
 } finally { $dialog.Close() }
-Write-Output ('HISTORY FILTER/XAML CHECKS PASSED: ' + $count + ' assertions; no desktop window was displayed.')
+$first = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; prompt = ('x' * 100000); content = 'FIRST CONTENT'; details = 'FIRST RAW'; error = 'Explicit unavailable reason' } }
+$second = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 1; prompt = 'Second'; content = 'SECOND CONTENT'; details = 'SECOND RAW' } }
+Assert-Equal ((Get-DemoTurnLabel $first.Turn).Length -lt 200) $true 'Long prompts have bounded row labels'
+$readable = Get-DemoSelectionPreview @($second, $first) $false
+Assert-Equal ($readable.IndexOf('FIRST CONTENT') -lt $readable.IndexOf('SECOND CONTENT')) $true 'Preview follows source order'
+Assert-Equal ($readable.Contains('Explicit unavailable reason')) $true 'Unavailable reason remains visible'
+Assert-Equal ((Get-DemoSelectionPreview @($first) $true).Contains('FIRST RAW')) $true 'Raw preview uses original details'
+Assert-Equal ((Get-DemoSelectionPreview @($first) $false).Contains('FIRST RAW')) $false 'Readable preview does not expand raw data'
+$large = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; content = ('x' * 1000000); details = ('y' * 1000000) } }
+foreach ($raw in @($false, $true)) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $bounded = Get-DemoSelectionPreview @($large) $raw
+    $clock.Stop()
+    Assert-Equal ($bounded.Length -le 32768) $true 'Preview respects exact character budget'
+    Assert-Equal ($bounded.Contains('Captured content is not truncated.')) $true 'Truncation is explicit'
+    Assert-Equal ($clock.ElapsedMilliseconds -lt 100) $true 'Large preview construction stays below 100 ms'
+}
+Assert-Equal $large.Turn.content.Length 1000000 'Preview does not modify captured content'
+Assert-Equal (Get-DemoSelectionPreview @() $false) '' 'Empty selection clears the preview'
+Write-Output ('HISTORY FILTER/SELECTION/XAML CHECKS PASSED: ' + $count + ' assertions; no desktop window was displayed.')

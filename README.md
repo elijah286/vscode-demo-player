@@ -213,9 +213,18 @@ they are not silently hidden or treated as JSONL recordings.
 SDK captures use provenance kind `copilot-sdk-jsonl` in the existing version-1
 package; older players that only support native recordings will reject them.
 
-Select up to 100 exchanges with Ctrl/Shift and review the readable prompt/response
-preview. Enable **Show full saved payload** to inspect original tool data and
-metadata. Give the demo a title, acknowledge the privacy/asset
+All exchanges are selected when a conversation loads. Use **Select all** or
+**Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
+to adjust the selection. A demo can contain up to 100 exchanges; larger
+selections show an explicit warning rather than being silently reduced.
+Review the readable prompt/response preview. Exchange rows use short labels and
+recycled containers; preview updates are coalesced over 75 ms and limited to
+32,768 characters so large saved tool payloads do not stall selection.
+Enable **Show full saved payload** to preview original tool data and metadata.
+An explicit notice identifies previews that exceed the display budget; select
+fewer exchanges or inspect the source file to review oversized content.
+Capture always preserves the full selected content, not the shortened preview.
+Give the demo a title, acknowledge the privacy/asset
 notice, and Save Demo. UI capture follows source order; the underlying capture
 API also accepts explicitly ordered distinct indices. Partial or unsupported
 exchanges are marked unavailable with a reason; nothing is silently dropped.

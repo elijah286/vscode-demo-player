@@ -39,3 +39,6 @@ jobs:
       - name: Check PowerShell and dependency resolution
         shell: powershell
         run: .\test\packaging.ps1 -NodePath (Get-Command node.exe).Source
+      - name: Check history filters and bounded selection previews
+        shell: powershell
+        run: .\test\history-filters.ps1

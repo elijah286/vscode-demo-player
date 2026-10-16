@@ -44,6 +44,9 @@ jobs:
       - name: Check PowerShell and dependency resolution
         shell: powershell
         run: .\test\packaging.ps1 -NodePath (Get-Command node.exe).Source
+      - name: Check history filters and bounded selection previews
+        shell: powershell
+        run: .\test\history-filters.ps1
       - name: Verify release version
         if: startsWith(github.ref, 'refs/tags/')
         shell: powershell
@@ -87,4 +90,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "VS Code Demo Player $GITHUB_REF_NAME" --generate-notes --notes "Adds an automatic searchable conversation-history table with project, agent, date, duration, prompt-count, source and status filters; sortable columns; refresh and discovery progress; and Copilot SDK/CLI recording support. Preserves playback controls, native references, read-only recorded edits and Check for updates. Integrated history-catalog workstream: 0cb98e9. Version 0.1.0 requires this installer once to enable in-app updates. Windows x64 per-user installer with bundled Node.js; compatible desktop VS Code required. Unsigned; recordings are not included." dist/VSCodeDemoPlayer-Setup.exe dist/SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "VS Code Demo Player $GITHUB_REF_NAME" --generate-notes --notes "Makes exchange selection responsive with short virtualized rows and bounded, debounced previews. All exchanges are selected on load; Ctrl+A, Select all and Clear selection are supported. Captured content remains complete even when a large preview is explicitly shortened. Includes the automatic searchable chat-history browser from 0.2.3, plus playback controls, native references, read-only recorded edits and Check for updates. Windows x64 per-user installer with bundled Node.js; compatible desktop VS Code required. Version 0.1.0 needs this installer once to enable updates. Unsigned; recordings are not included." dist/VSCodeDemoPlayer-Setup.exe dist/SHA256SUMS.txt
