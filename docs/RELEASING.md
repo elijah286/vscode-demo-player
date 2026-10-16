@@ -10,6 +10,18 @@ acceptance for this personal tool; do not add per-commit approval or exhaustive
 environment gates. Publishing a new release does not authorize silently installing it on a
 user's computer; preserve the updater's consent behavior.
 
+The captain coordinates releases, not product implementation. Route feature and
+bug-fix requests addressed to the captain to an implementation agent, even if
+the requested change looks small. Dispatch a bounded task with an isolated
+named branch/worktree, file ownership, acceptance criteria, and the handoff
+requirements below. Have the agent implement and test it, then review and
+integrate its delivery. If integration or release checks expose a product bug,
+send that fix to the owning agent or a new isolated implementation agent rather
+than coding it in the captain's checkout. The captain retains coordination,
+review, integration/conflict resolution, combined validation, release policy and
+version metadata, installer builds, publication, and consented installation
+checks. An implementation agent must not publish or modify the shared install.
+
 The captain is an on-demand role. Between user requests, remain idle: no
 session polling, background listeners, watchers, or automatic integrations.
 Workstream handoffs and queued reports alone do not authorize a new work cycle.
