@@ -20,6 +20,11 @@ function nativeResponsePart(vscode, event) {
         const target = reference.range ? new vscode.Location(uri, new vscode.Range(...reference.range)) : uri;
         return new vscode.ChatResponseAnchorPart(target, reference.title);
     }
+    if (['questionCarousel', 'textEditGroup', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(event.kind)) {
+        const content = markdown(vscode, '');
+        content.appendCodeblock(JSON.stringify(part, null, 2), 'json');
+        return new vscode.ChatResponseMarkdownPart(content);
+    }
     if (!['toolPending', 'toolComplete'].includes(event.kind)) throw new Error('Editor playback has no renderer for saved part: ' + event.kind);
     const result = new vscode.ChatToolInvocationPart(part.toolId, part.toolCallId);
     result.invocationMessage = markdown(vscode, part.invocationMessage);

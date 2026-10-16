@@ -1,6 +1,7 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const { RESPONSE_DURATION } = require('./replay');
 
 function playbackView(state) {
     if (state.phase === 'ready') return { phase: 'ready', label: 'Ready', action: 'play', button: 'Play', enabled: true };
@@ -27,7 +28,30 @@ function controlView(state) {
     const current = ['ready', 'typing', 'response'].includes(state.phase)
         ? Math.min(state.turnIndex + 1, total)
         : Math.min(Math.max(state.turnIndex, 1), total);
-    return { ...view, current, total, progress: current + '/' + total };
+    const recording = state.recordings[current - 1];
+    const timestamp = value => typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
+    const ranges = state.recordings.map(item => ({ start: timestamp(item.request?.timestamp), end: timestamp(item.request?.modelState?.completedAt) }));
+    const timed = ranges.every((range, index) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end >= range.start && (!index || range.start >= ranges[index - 1].end));
+    const completedMs = ranges.slice(0, state.turnIndex).reduce((sum, range) => sum + range.end - range.start, 0);
+    const range = ranges[state.turnIndex];
+    const responseProgress = state.phase === 'response' && Number.isFinite(state.responseOrigin) && typeof state.clock?.now === 'function'
+        ? Math.max(0, Math.min(1, (state.clock.now() - state.responseOrigin) / RESPONSE_DURATION))
+        : 0;
+    const elapsedMs = timed ? Math.round(completedMs + (range ? (range.end - range.start) * responseProgress : 0)) : undefined;
+    const seconds = Math.floor(elapsedMs / 1000);
+    return {
+        ...view, current, total, progress: current + '/' + total,
+        windowMode: state.windowMode,
+        modeSwitchEnabled: ['ready', 'review', 'complete'].includes(state.phase),
+        resumeTurn: state.turnIndex,
+        selection: state.selection,
+        overlay: {
+            promptSummary: recording.promptSummary ?? null,
+            elapsed: timed ? [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(value => String(value).padStart(2, '0')).join(':') : null,
+            elapsedMs: elapsedMs ?? null,
+            timingMode: 'interpolated-response-time'
+        }
+    };
 }
 
 async function createControlServer({ controlPath, getState, play, pause, resume, stop, onError }) {

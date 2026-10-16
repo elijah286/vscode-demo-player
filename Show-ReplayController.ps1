@@ -41,11 +41,11 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="270"
+        Title="Demo Player" Width="360" Height="402" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="48"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Select a demo..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -66,7 +66,25 @@ if (-not $script:standalone) {
       <Button x:Name="Capture" Content="Capture Conversation" AutomationProperties.AutomationId="CaptureConversation"/>
       <Button x:Name="Library" Grid.Column="2" Content="Manage Demos" AutomationProperties.AutomationId="ManageDemos"/>
     </Grid>
-    <DockPanel Grid.Row="5" Margin="0,12,0,0">
+        <CheckBox x:Name="ShowPrompt" Grid.Row="6" Content="Show prompt summary" IsEnabled="False"
+                            VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
+        <CheckBox x:Name="ShowElapsed" Grid.Row="7" Content="Show elapsed time" IsEnabled="False"
+                            VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowElapsed"
+                            ToolTip="Interpolated response work. Excludes user idle gaps; holds during typing and pauses."/>
+        <Grid Grid.Row="8" Margin="0,4,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+            <TextBlock Text="Overlay frame" VerticalAlignment="Center" FontSize="12" Foreground="#555555"/>
+            <Button x:Name="FrameColor" Grid.Column="1" Padding="3" ToolTip="Overlay frame color: #F5B82E"
+                            AutomationProperties.AutomationId="FrameColor" AutomationProperties.Name="Overlay frame color: #F5B82E">
+                <Border x:Name="FrameColorSwatch" Width="26" Height="16" Background="#F5B82E" BorderBrush="#777777" BorderThickness="1" CornerRadius="2"/>
+            </Button>
+        </Grid>
+        <ComboBox x:Name="WindowMode" Grid.Row="9" Margin="0,6,0,0" AutomationProperties.AutomationId="WindowMode"
+                            ToolTip="Playback UI. Agents is experimental and requires sign-in in its dedicated window. Switch between turns.">
+            <ComboBoxItem Tag="Editor" Content="VS Code"/>
+            <ComboBoxItem Tag="Agents" Content="Agents (experimental)"/>
+        </ComboBox>
+    <DockPanel Grid.Row="10" Margin="0,12,0,0">
       <Button x:Name="CheckUpdates" DockPanel.Dock="Right" Content="Check for updates" Padding="8,0" AutomationProperties.AutomationId="CheckUpdates"/>
       <TextBlock x:Name="UpdateNotice" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,8,0" AutomationProperties.AutomationId="UpdateNotice"/>
     </DockPanel>
@@ -84,6 +102,11 @@ $capture = $window.FindName('Capture')
 $library = $window.FindName('Library')
 $checkUpdates = $window.FindName('CheckUpdates')
 $updateNotice = $window.FindName('UpdateNotice')
+$showPrompt = $window.FindName('ShowPrompt')
+$showElapsed = $window.FindName('ShowElapsed')
+$frameColor = $window.FindName('FrameColor')
+$frameColorSwatch = $window.FindName('FrameColorSwatch')
+$windowMode = $window.FindName('WindowMode')
 $area = [System.Windows.SystemParameters]::WorkArea
 $window.Left = [Math]::Max($area.Left, $area.Right - $window.Width - 16)
 $window.Top = [Math]::Max($area.Top, $area.Bottom - $window.Height - 16)
@@ -103,6 +126,13 @@ $script:exitRequested = $false
 $script:autoPlay = $false
 $script:connectionFailures = 0
 $script:lastFault = $null
+$script:lastView = $null
+$script:replayMode = 'Editor'
+$script:modeUpdating = $false
+$script:switching = $false
+$script:switchView = $null
+$windowMode.SelectedIndex = 0
+. (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
 function Set-IdleView {
     $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Ready - ' + $script:selectedDemo.count + ' exchanges' } else { 'Select or capture a conversation' }
@@ -117,6 +147,8 @@ function Set-IdleView {
     $chooseDemo.IsEnabled = $true
     $capture.IsEnabled = $true
     $library.IsEnabled = $true
+    $windowMode.IsEnabled = $true
+    Update-ReplayOverlays
 }
 
 function Reset-ReplaySession {
@@ -132,6 +164,8 @@ function Reset-ReplaySession {
     $script:pairedVisible = $false
     $script:autoPlay = $false
     $script:connectionFailures = 0
+    $script:lastView = $null
+    Update-ReplayOverlays
     if (-not $script:standalone -or $script:exitRequested) {
         $script:closeAllowed = $true
         $window.Close()
@@ -143,7 +177,8 @@ function Start-DemoReplay {
     # Validate the saved entry again before launching a new isolated process.
     Invoke-DemoLibrary @{ command = 'read'; id = $script:selectedDemo.id } | Out-Null
     $demoPath = Join-Path $script:LibraryRoot ($script:selectedDemo.id + '.demo.json')
-    $started = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') -DemoPath $demoPath -NoController -CodePath $script:CodePath
+    $launchArguments = @{ DemoPath = $demoPath; NoController = $true; CodePath = $script:CodePath; WindowMode = $script:replayMode }
+    $started = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') @launchArguments
     $script:ReplayProcessId = $started.ProcessId
     $script:ControlPath = $started.ControlPath
     $script:profile = $started.ProfilePath
@@ -156,6 +191,7 @@ function Start-DemoReplay {
     $chooseDemo.IsEnabled = $false
     $capture.IsEnabled = $false
     $library.IsEnabled = $false
+    $windowMode.IsEnabled = $false
 }
 
 $openLibrary = {
@@ -218,13 +254,60 @@ function Send-Control([string]$Action) {
     if ($Action -eq 'stop') { $script:stopSent = $true }
 }
 
+function Start-SwitchedPlayback {
+    if ($script:client) { $script:client.Dispose() }
+    if ($script:actionTask -and $script:actionTask.Status -eq 'RanToCompletion') { $script:actionTask.Result.Dispose() }
+    $script:client = $null
+    $script:stateTask = $null
+    $script:actionTask = $null
+    $selection = $script:switchView.selection
+    $arguments = @{
+        WindowMode = $script:replayMode
+        UserDataPath = $script:profile
+        ResumeTurn = [int]$script:switchView.resumeTurn
+        NoController = $true
+        CodePath = $script:CodePath
+    }
+    if ($selection.demoPath) { $arguments.DemoPath = $selection.demoPath }
+    elseif ($selection.playlistPath) { $arguments.PlaylistPath = $selection.playlistPath }
+    else { $arguments.SessionPath = $selection.file; $arguments.RequestIndex = [int]$selection.requestIndex; $arguments.RequestCount = [int]$selection.requestCount }
+    $launch = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') @arguments
+    $script:ControlPath = $launch.ControlPath
+    $script:ReplayProcessId = $launch.ProcessId
+    $script:stopSent = $false
+    $script:pairedVisible = $false
+    $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    $script:switching = $false
+    $script:autoPlay = $false
+    $script:connectionFailures = 0
+    $status.Text = 'Preparing ' + $script:replayMode
+}
+
+$windowMode.Add_SelectionChanged({
+    if ($script:modeUpdating -or $script:switching -or -not $windowMode.IsEnabled) { return }
+    $mode = [string]$windowMode.SelectedItem.Tag
+    if (-not $ReplayProcessId) { $script:replayMode = $mode; return }
+    if (-not $script:lastView.modeSwitchEnabled -or $mode -eq $script:lastView.windowMode) { return }
+    $script:switchView = $script:lastView
+    $script:replayMode = $mode
+    $script:switching = $true
+    $script:deadline = [DateTime]::UtcNow.AddSeconds(15)
+    $script:autoPlay = $false
+    $windowMode.IsEnabled = $false
+    $playPause.IsEnabled = $false
+    $status.Text = 'Switching to ' + $mode
+    Send-Control 'stop'
+})
+
 function Request-Stop {
     if (-not $ReplayProcessId) { return }
     if ($script:stopping) { return }
     $script:stopping = $true
+    $script:switching = $false
     $script:deadline = [DateTime]::UtcNow.AddSeconds(8)
     $status.Text = 'Stopping'
     $playPause.IsEnabled = $false
+    Update-ReplayOverlays
     Send-Control 'stop'
 }
 
@@ -251,6 +334,15 @@ $timer = [System.Windows.Threading.DispatcherTimer]::new()
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
     try {
+        if ($script:switching) {
+            if (-not (Test-ReplayAlive)) { Start-SwitchedPlayback }
+            elseif ([DateTime]::UtcNow -gt $script:deadline) {
+                $status.Text = 'Switch waiting for window close'
+                $status.ToolTip = 'Close only the isolated playback window normally to finish switching. No process will be killed.'
+                $script:deadline = [DateTime]::MaxValue
+            }
+            return
+        }
         if (-not $ReplayProcessId) { return }
         if (-not (Test-ReplayAlive)) {
             if (-not $script:pairedVisible -and -not $script:stopping) { $script:lastFault = 'The isolated player exited before it was ready.' }
@@ -264,7 +356,12 @@ $timer.Add_Tick({
             Request-Stop
         }
         if (-not $script:client -and (Test-Path -LiteralPath $ControlPath)) {
-            $connection = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($ControlPath))
+            try { $descriptorText = [System.IO.File]::ReadAllText($ControlPath) }
+            catch [System.IO.IOException] {
+                if ([DateTime]::UtcNow -lt $script:preparedDeadline) { return }
+                throw
+            }
+            $connection = ConvertFrom-Json -InputObject $descriptorText
             if ($connection.version -ne 1 -or $connection.port -lt 1 -or $connection.port -gt 65535 -or $connection.token -notmatch '^[a-f0-9]{64}$') {
                 throw 'Invalid private replay control descriptor.'
             }
@@ -318,6 +415,13 @@ $timer.Add_Tick({
                 'Finished' { [char]0xE73E }
                 default { [char]0xE768 }
             }
+            $script:lastView = $view
+            $script:replayMode = $view.windowMode
+            $script:modeUpdating = $true
+            try { $windowMode.SelectedIndex = if ($view.windowMode -eq 'Agents') { 1 } else { 0 } } finally { $script:modeUpdating = $false }
+            $windowMode.IsEnabled = [bool]$view.modeSwitchEnabled -and -not $script:actionTask
+            $script:overlayWindow.Owner = $window
+            Update-ReplayOverlays
             if ($script:autoPlay -and $view.phase -eq 'ready' -and -not $script:actionTask) {
                 $script:autoPlay = $false
                 Send-Control 'play'
@@ -339,6 +443,8 @@ $window.Add_Closed({
     $timer.Stop()
     $script:updateTimer.Stop()
     try { Stop-PlayerUpdateOperation } catch { Set-PlayerUpdateFailure $_ }
+    $script:closeAllowed = $true
+    $script:overlayWindow.Close()
     if ($script:client) { $script:client.Dispose() }
 })
 $application = [System.Windows.Application]::new()

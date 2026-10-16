@@ -76,6 +76,58 @@ test('controller maps ready, playing, paused, and finished without auto-closing'
     assert.deepEqual(controlView({ phase: 'complete' }), { phase: 'complete', label: 'Finished', button: 'Finished', enabled: false });
 });
 
+test('working-time overlay interpolates response work and excludes user idle gaps', () => {
+    const state = {
+        phase: 'response', windowMode: 'Editor', turnIndex: 0, responseOrigin: 2000,
+        clock: { now: () => 4500 },
+        recordings: [
+            { promptSummary: 'First prompt.', request: { timestamp: 1000, modelState: { completedAt: 61000 } } },
+            { request: { timestamp: 100000000, modelState: { completedAt: 100061000 } } }
+        ]
+    };
+    assert.equal(controlView(state).overlay.elapsed, '00:00:30');
+    state.phase = 'review';
+    state.turnIndex = 1;
+    assert.equal(controlView(state).overlay.elapsed, '00:01:00');
+    assert.equal(controlView(state).overlay.promptSummary, 'First prompt.');
+    assert.equal(controlView(state).modeSwitchEnabled, true);
+    state.phase = 'typing';
+    assert.equal(controlView(state).overlay.elapsed, '00:01:00');
+    assert.equal(controlView(state).modeSwitchEnabled, false);
+    state.phase = 'complete';
+    state.turnIndex = 2;
+    assert.equal(controlView(state).overlay.elapsed, '00:02:01');
+    assert.equal(controlView(state).resumeTurn, 2);
+});
+
+test('working-time overlay rejects missing endpoints and does not wrap hours', () => {
+    const state = { phase: 'complete', turnIndex: 1, recordings: [{ request: { timestamp: 0, modelState: { completedAt: 360061000 } } }] };
+    assert.equal(controlView(state).overlay.elapsed, '100:01:01');
+    delete state.recordings[0].request.modelState;
+    assert.equal(controlView(state).overlay.elapsed, null);
+});
+
+test('mode changes are exposed only at complete response boundaries', () => {
+    const state = { phase: 'review', windowMode: 'Agents', turnIndex: 1, recordings: [{}, {}], selection: { demoPath: 'portable.demo-recording.json' } };
+    assert.equal(controlView(state).modeSwitchEnabled, true);
+    assert.equal(controlView(state).resumeTurn, 1);
+    assert.deepEqual(controlView(state).selection, state.selection);
+    for (const phase of ['typing', 'response', 'stopping', 'error']) {
+        state.phase = phase;
+        assert.equal(controlView(state).modeSwitchEnabled, false);
+    }
+});
+
+test('prompt preview is a bounded excerpt separate from original recording content', async context => {
+    const request = { result: {}, message: { text: '  Exact\r\noriginal ' + 'word '.repeat(80) }, response: [{ value: 'Original answer' }] };
+    const file = await fixture(context, request);
+    const recording = await readRecording(file, 0);
+    assert.ok(recording.promptSummary.length <= 180);
+    assert.ok(recording.promptSummary.endsWith('...'));
+    assert.match(recording.promptSummary, /^Exact original /);
+    assert.deepEqual(recording.request, request);
+});
+
 test('private controller accepts only authorized state-appropriate controls', { timeout: 5000 }, async context => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-control-test-'));
     const state = { phase: 'ready', clock: { paused: false } };
@@ -179,6 +231,44 @@ test('Agents backend failure cannot fall back to a right-hand editor or submit i
     }
     assert.deepEqual(invoked, []);
     assert.equal(api.state.typed.length, 0);
+});
+
+test('portable demo resume restores completed Editor history without replaying or executing it', async context => {
+    const request = { result: {}, message: { text: 'Original packaged prompt' }, response: [{ value: 'Original packaged answer' }, { kind: 'workspaceEdit', edits: [] }] };
+    const file = await fixture(context, request);
+    const library = require('../demo-library');
+    const inspection = await library.inspectTranscript(file);
+    const recording = await library.createPackage(file, [0], 'Resume fixture', inspection.sha256);
+    const demoPath = path.join(path.dirname(file), 'portable.demo-recording.json');
+    await fs.writeFile(demoPath, JSON.stringify(recording));
+    const disposable = { dispose() {} };
+    const invoked = [];
+    class Part { constructor(...values) { this.values = values; } }
+    class Markdown {
+        constructor(value) { this.value = value; }
+        appendCodeblock(value) { this.value += value; return this; }
+    }
+    const vscode = {
+        StatusBarAlignment: { Left: 0 },
+        MarkdownString: Markdown, ChatResponseMarkdownPart: Part, ChatRequestTurn: Part, ChatResponseTurn2: Part,
+        commands: { registerCommand: () => disposable, executeCommand: async command => { invoked.push(command); } },
+        window: { createStatusBarItem: () => ({ dispose() {} }) },
+        chat: { createChatParticipant: () => disposable, createChatSessionItemController: () => disposable, registerChatSessionContentProvider: () => disposable }
+    };
+    const module = { exports: {} };
+    const source = await fs.readFile(path.join(__dirname, '..', 'native-extension.js'), 'utf8');
+    const env = { HISTORY_REPLAY_DEMO: demoPath, HISTORY_REPLAY_RESUME_TURN: '1' };
+    vm.runInNewContext(source, { module, require: name => name === 'vscode' ? vscode : require('../' + name.slice(2)), process: { env }, console });
+    const api = module.exports.activate({ subscriptions: [] });
+    await api.prepare('');
+    assert.equal(api.state.phase, 'complete');
+    assert.equal(api.state.turnIndex, 1);
+    assert.equal(api.state.history.length, 2);
+    assert.equal(api.state.selection.demoPath, demoPath);
+    assert.deepEqual(api.state.recordings[0].request, request);
+    assert.deepEqual(invoked, []);
+    env.HISTORY_REPLAY_RESUME_TURN = '2';
+    await assert.rejects(api.prepare(''), /outside the selected recording/);
 });
 
 test('recording Agent Host answers native root handshake and rejects execution', () => {
