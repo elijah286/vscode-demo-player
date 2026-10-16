@@ -12,7 +12,7 @@ $application = if ($ApplicationSource) { (Resolve-Path -LiteralPath $Application
 $fixture = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) ('source-fixture-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'runtime')) | Out-Null
-foreach ($name in @('Show-ReplayController.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1')) {
+foreach ($name in @('Show-ReplayController.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1')) {
     Copy-Item -LiteralPath (Join-Path $application $name) -Destination (Join-Path $fixture $name)
 }
 foreach ($name in @('package.json', 'library-cli.js', 'demo-library.js', 'replay.js', 'saved-parts.js', 'updater.js')) {

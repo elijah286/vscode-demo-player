@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
-const { inlineReferenceLabel, savedEditMarkdown } = require('../saved-parts');
+const { savedEditMarkdown } = require('../saved-parts');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -102,8 +102,10 @@ async function run() {
     assert.equal(actual, expected, 'Original assistant text replayed verbatim');
     const references = recording.request.response.filter(part => kindOf(part) === 'inlineReference');
     assert.deepEqual(api.state.emitted.filter(part => part.kind === 'inlineReference').map(part => part.original), references, 'Saved reference payloads are preserved');
-    for (const reference of references) {
-        await page.locator('.interactive-response').filter({ hasText: inlineReferenceLabel(reference) }).last().waitFor({ state: 'visible', timeout: 5000 });
+    if (references.length) {
+        const anchors = api.state.history[1].response.filter(part => part instanceof vscode.ChatResponseAnchorPart);
+        assert.equal(anchors.length, references.length, 'Saved references remain native history anchors');
+        await page.locator('.interactive-response .chat-inline-anchor-widget[data-href]').last().waitFor({ state: 'visible', timeout: 5000 });
     }
     const edits = recording.request.response.filter(part => kindOf(part) === 'textEditGroup');
     assert.deepEqual(api.state.emitted.filter(part => part.kind === 'textEditGroup').map(part => part.original), edits, 'Saved code edit payloads are preserved');
