@@ -99,9 +99,11 @@ For the exact integrated SHA, the captain must also:
    A test file existing on disk does not mean it ran.
 2. Run the applicable native playback and Windows controller UI harnesses from
    the README on an interactive desktop using synthetic recordings.
-3. Check the reported mode toggle in both directions, retained behavior after
-   restart if specified, and playback in both supported modes. Experimental
-   mode limitations must remain explicit; do not silently remove its guard.
+3. When a mode-toggle workstream is included, check both directions, retained
+   behavior after restart if specified, and playback in both supported modes.
+   Until a UI toggle is delivered, track its absence explicitly rather than
+   claiming it shipped. Experimental mode limitations must remain explicit;
+   do not silently remove its guard.
 4. Verify the packaging allowlist includes every new runtime dependency/file.
 5. For updater changes, run updater unit/UI checks and test the installed old
    version upgrading to the candidate with preserved library/settings,
