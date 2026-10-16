@@ -10,7 +10,7 @@ async function main() {
     const root = request.root || library.defaultLibraryRoot();
     switch (request.command) {
         case 'list': return library.listDemos(root);
-        case 'discover': return library.discoverSessions(request.storageRoot);
+        case 'discover': return library.discoverSessions(request.storageRoot, request.folder);
         case 'inspect': return library.inspectTranscript(request.file);
         case 'capture': return library.addPackage(root, await library.createPackage(request.file, request.indices, request.title, request.sha256));
         case 'import': return library.addPackage(root, await library.readPackage(request.file));

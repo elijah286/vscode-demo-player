@@ -40,4 +40,13 @@ function archivedEdit(part) {
     return { part: { kind: 'contentRef', uri, contentType: 'application/json', sizeHint: Buffer.byteLength(content) }, uri, content };
 }
 
-module.exports = { INTERNAL_PARTS, completedQuestions, archivedEdit };
+function inlineReferenceLabel(part) {
+    const reference = part.inlineReference;
+    const uri = reference?.uri ?? reference?.location?.uri ?? reference;
+    if (!uri || typeof uri.scheme !== 'string' || typeof uri.path !== 'string') {
+        throw new Error('Saved inline reference is missing its URI.');
+    }
+    return part.name || reference.name || path.win32.basename(uri.path) || uri.path;
+}
+
+module.exports = { INTERNAL_PARTS, completedQuestions, archivedEdit, inlineReferenceLabel };

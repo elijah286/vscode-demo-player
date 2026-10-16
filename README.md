@@ -83,19 +83,32 @@ Set-Location ..
 ```
 
 The controller opens without a project or selected recording. Use **Capture
-Conversation** to discover saved conversations from standard VS Code workspace
-storage. Select a session and Load, browse to a native JSONL transcript from
-another profile, or paste its path and Load.
-Discovery shows project, date, and initial-snapshot titles/opening prompts
-using at most 1 MiB per source for previews. Unavailable previews are labeled;
-Load always reconstructs and validates the full final saved conversation.
+Conversation**, choose the project directory (or paste it and click **Find
+conversations**), then select a session and Load. Discovery lists only that exact
+folder's conversations from standard VS Code workspace storage, not every project
+on the computer. Parent and similarly named sibling directories are not included.
+Use **Browse transcript** or paste a native JSONL path for other profiles,
+multi-root workspaces, or transcripts saved outside standard storage.
+Chat names come from VS Code's saved session index, opened read-only. If the
+index is absent, discovery reconstructs the final saved title or opening prompt,
+including transcripts whose initial snapshot exceeds 1 MiB. Unreadable sources
+and title-index errors are explicitly labeled; UUIDs are not used as chat names.
+Discovery shows up to 200 recent matches. Loading reconstructs and validates the
+full final saved conversation; the dialog continues processing window events
+while its helper runs, with a 30-second limit and controls disabled until done.
 
-Select up to 100 exchanges with Ctrl/Shift, inspect their full saved payloads
-(including tool data), give the demo a title, acknowledge the privacy/asset
+Select up to 100 exchanges with Ctrl/Shift and review the readable prompt/response
+preview. Enable **Show full saved payload** to inspect original tool data and
+metadata. Give the demo a title, acknowledge the privacy/asset
 notice, and Save Demo. UI capture follows source order; the underlying capture
 API also accepts explicitly ordered distinct indices. Partial or unsupported
 exchanges are marked unavailable with a reason; nothing is silently dropped.
 If the source changes after preview, reload and review it before capture.
+Saved inline file/symbol references are supported in Editor playback as inert,
+escaped labels; linked external content is not fetched or bundled. Saved edit
+groups and question carousels still require the experimental saved-parts renderer
+and remain explicitly unavailable in baseline Editor capture. Their original
+payloads are retained in the inspection preview; they are never silently skipped.
 
 The selected-demo button and **Manage Demos** open a custom searchable library,
 not a system dropdown. Select, rename, delete, import, or export a recording.

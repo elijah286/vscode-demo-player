@@ -4,6 +4,7 @@ const { createControlServer } = require('./control-server');
 const { RecordingAgentHost } = require('./recording-agent-host');
 const { NativeComposer } = require('./native-composer');
 const { packageRecordings } = require('./demo-library');
+const { inlineReferenceLabel } = require('./saved-parts');
 
 function activate(context) {
     const capabilities = {
@@ -49,6 +50,12 @@ function activate(context) {
         const part = event.part;
         if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(event.value));
         if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
+        if (event.kind === 'inlineReference') {
+            const label = new vscode.MarkdownString();
+            label.appendText(inlineReferenceLabel(part));
+            label.isTrusted = false;
+            return new vscode.ChatResponseMarkdownPart(label);
+        }
         const result = new vscode.ChatToolInvocationPart(part.toolId, part.toolCallId);
         result.invocationMessage = markdown(part.invocationMessage);
         result.isConfirmed = true;
@@ -81,6 +88,7 @@ function activate(context) {
                 stream.push(nativeEvent(event));
                 if (event.kind === 'markdown') state.emitted.push({ kind: 'markdown', value: event.value });
                 else if (event.kind === 'thinking') state.emitted.push({ kind: 'thinking', value: event.part.value });
+                else if (event.kind === 'inlineReference') state.emitted.push(event.part);
                 else if (event.kind === 'toolComplete') state.emitted.push({ kind: 'toolInvocationSerialized', toolCallId: event.part.toolCallId });
             }
             await state.clock.waitUntil(state.responseOrigin + RESPONSE_DURATION);

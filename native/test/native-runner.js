@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
+const { inlineReferenceLabel } = require('../saved-parts');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -55,8 +56,8 @@ async function run() {
     if (process.env.HISTORY_REPLAY_AGENTS === '1') {
         console.log('NATIVE AGENTS WINDOW', JSON.stringify({ url: page.url(), title: await page.title(), bodyClass: await page.locator('body').getAttribute('class') }));
     }
-    const screenshots = path.join(os.tmpdir(), 'VSCode-Demo-Player', 'visual');
-    fs.mkdirSync(screenshots, { recursive: true });
+    const screenshots = fs.mkdtempSync(path.join(os.tmpdir(), 'native-replay-visual-'));
+    console.log('NATIVE TEST SCREENSHOTS', screenshots);
     if (process.env.HISTORY_REPLAY_AGENTS === '1') {
         const commands = await vscode.commands.getCommands(true);
         console.log('NATIVE AGENTS COMMANDS', JSON.stringify(commands.filter(command => /^(sessions|agentSessions)\./.test(command) && /open|new|create|reveal|show/i.test(command))));
@@ -99,6 +100,11 @@ async function run() {
     const expected = recording.request.response.filter(part => kindOf(part) === 'markdown').map(part => typeof part === 'string' ? part : part.value).join('');
     const actual = api.state.emitted.filter(part => part.kind === 'markdown').map(part => part.value).join('');
     assert.equal(actual, expected, 'Original assistant text replayed verbatim');
+    const references = recording.request.response.filter(part => kindOf(part) === 'inlineReference');
+    assert.deepEqual(api.state.emitted.filter(part => part.kind === 'inlineReference'), references, 'Saved reference payloads are preserved');
+    for (const reference of references) {
+        await page.locator('.interactive-response').filter({ hasText: inlineReferenceLabel(reference) }).last().waitFor({ state: 'visible', timeout: 5000 });
+    }
     const typingTime = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const responseTime = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
     assert.ok(Math.abs(typingTime - 2000) < 400, 'Prompt entry follows the two-second timeline: ' + typingTime);

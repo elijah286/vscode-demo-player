@@ -4,6 +4,8 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
+const { DatabaseSync } = require('node:sqlite');
 const library = require('../demo-library');
 
 async function fixture(context) {
@@ -110,26 +112,90 @@ test('busy libraries fail visibly and leave existing recordings untouched', asyn
     assert.deepEqual(await fs.readdir(root), ['.library.lock']);
 });
 
-test('discovery lists native sources across projects without reading or modifying conversations', async context => {
+test('discovery requires a directory and lists only its exact workspace, without modifying sources', async context => {
     const { directory, source } = await fixture(context);
+    const folder = path.join(directory, 'Example Project');
+    await fs.mkdir(folder);
     const storageRoot = path.join(directory, 'storage');
     const workspace = path.join(storageRoot, 'a'.repeat(32));
     await fs.mkdir(path.join(workspace, 'chatSessions'), { recursive: true });
-    await fs.writeFile(path.join(workspace, 'workspace.json'), JSON.stringify({ folder: 'file:///C:/Example' }));
+    await fs.writeFile(path.join(workspace, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(folder).href }));
     const target = path.join(workspace, 'chatSessions', 'saved.jsonl');
     await fs.copyFile(source, target);
-    const result = await library.discoverSessions(storageRoot);
+    const other = path.join(storageRoot, 'b'.repeat(32));
+    await fs.mkdir(path.join(other, 'chatSessions'), { recursive: true });
+    await fs.writeFile(path.join(other, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(folder + '-other').href }));
+    await fs.copyFile(source, path.join(other, 'chatSessions', 'unrelated.jsonl'));
+    const before = await fs.readFile(target);
+    const result = await library.discoverSessions(storageRoot, folder + path.sep);
     assert.equal(result.sessions.length, 1);
-    assert.equal(result.sessions[0].project, 'file:///C:/Example');
+    assert.equal(result.sessions[0].project, folder + path.sep);
     assert.equal(result.sessions[0].file, target);
     assert.equal(result.sessions[0].title, 'Original conversation');
     assert.equal(result.sessions[0].preview, 'First original prompt\r\n\u03bb');
     await fs.writeFile(path.join(workspace, 'chatSessions', 'damaged.jsonl'), '{incomplete');
-    const withError = await library.discoverSessions(storageRoot);
+    assert.deepEqual(await fs.readFile(target), before);
+    await assert.rejects(library.discoverSessions(storageRoot), /Select a project folder/);
+    await assert.rejects(library.discoverSessions(storageRoot, source), /existing project directory/);
+    const withError = await library.discoverSessions(storageRoot, folder);
     assert.match(withError.sessions.find(session => session.session === 'damaged.jsonl').preview, /Preview unavailable/);
-    const missing = await library.discoverSessions(path.join(directory, 'missing'));
+    const missing = await library.discoverSessions(path.join(directory, 'missing'), folder);
     assert.deepEqual(missing.sessions, []);
     assert.match(missing.notice, /No standard/);
+});
+
+test('discovery and inspection use the VS Code index title, even for an initial snapshot above 1 MiB', async context => {
+    const { directory, source } = await fixture(context);
+    const workspace = path.join(directory, 'storage', 'a'.repeat(32));
+    const folder = path.join(directory, 'Project #1');
+    await fs.mkdir(folder);
+    await fs.mkdir(path.join(workspace, 'chatSessions'), { recursive: true });
+    await fs.writeFile(path.join(workspace, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(folder).href }));
+    const id = '12345678-1234-1234-1234-123456789abc';
+    const target = path.join(workspace, 'chatSessions', id + '.jsonl');
+    const snapshot = { customTitle: 'Stale title', requests: [{ result: {}, message: { text: 'Opening prompt' }, response: [{ value: 'x'.repeat(1024 * 1024 + 1) }] }] };
+    await fs.writeFile(target, JSON.stringify({ kind: 0, v: snapshot }) + '\n');
+    const db = new DatabaseSync(path.join(workspace, 'state.vscdb'));
+    try {
+        db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)');
+        db.prepare('INSERT INTO ItemTable VALUES (?, ?)').run('chat.ChatSessionStore.index', JSON.stringify({ version: 1, entries: { [id]: { title: 'Title shown in VS Code' } } }));
+    } finally { db.close(); }
+    const before = await fs.readFile(path.join(workspace, 'state.vscdb'));
+    const found = await library.discoverSessions(path.dirname(workspace), folder);
+    assert.equal(found.sessions[0].title, 'Title shown in VS Code');
+    assert.equal((await library.inspectTranscript(target)).title, 'Title shown in VS Code');
+    assert.deepEqual(await fs.readFile(path.join(workspace, 'state.vscdb')), before);
+    await fs.unlink(path.join(workspace, 'state.vscdb'));
+    await fs.appendFile(target, JSON.stringify({ kind: 1, k: ['customTitle'], v: 'Final saved title' }) + '\n');
+    assert.equal((await library.discoverSessions(path.dirname(workspace), folder)).sessions[0].title, 'Final saved title');
+    await fs.writeFile(path.join(workspace, 'state.vscdb'), 'damaged database');
+    const damaged = await library.discoverSessions(path.dirname(workspace), folder);
+    assert.equal(damaged.sessions[0].title, 'Final saved title');
+    assert.match(damaged.notice, /titles could not be read/);
+    assert.match((await library.inspectTranscript(source)).notice, /Recorded payloads only/);
+});
+
+test('inline file and symbol references remain capturable with readable previews and preserved raw payloads', async context => {
+    const { source } = await fixture(context);
+    const references = [
+        { kind: 'inlineReference', name: 'Saved file', inlineReference: { scheme: 'file', path: '/example/source.js' } },
+        { kind: 'inlineReference', inlineReference: { name: 'savedSymbol', location: { uri: { scheme: 'file', path: '/example/source.js' }, range: { startLineNumber: 3 } } } }
+    ];
+    for (const part of references) {
+        await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 0, 'response'], v: [part] }) + '\n');
+    }
+    const inspected = await library.inspectTranscript(source);
+    assert.equal(inspected.turns[0].error, undefined);
+    assert.match(inspected.turns[0].content, /PROMPT\nFirst original prompt/);
+    assert.match(inspected.turns[0].content, /Final original answer/);
+    assert.match(inspected.turns[0].content, /Saved reference: Saved file/);
+    assert.match(inspected.turns[0].content, /Saved reference: savedSymbol/);
+    assert.match(inspected.turns[0].content, /Recorded tool: saved-tool/);
+    assert.deepEqual(JSON.parse(inspected.turns[0].details).response.slice(-2), references);
+    const recorded = await library.createPackage(source, [0], 'Reference demo', inspected.sha256);
+    assert.deepEqual(recorded.turns[0].snapshot.requests[0].response.slice(-2), references);
+    await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 1, 'response'], v: [{ kind: 'inlineReference' }] }) + '\n');
+    assert.match((await library.inspectTranscript(source)).turns[1].error, /missing its URI/);
 });
 
 test('CLI uses JSON stdin, round-trips Unicode, and reports errors with a failing exit code', async context => {
