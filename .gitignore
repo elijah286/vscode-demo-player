@@ -1,0 +1,15 @@
+node_modules/
+.vscode-test/
+*.vsix
+*.log
+.env
+.env.*
+!.env.example
+recordings/
+captures/
+demos/
+evidence/
+*.jsonl
+*.native-chat.json
+*.playlist.json
+replay-control-*.json
