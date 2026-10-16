@@ -32,7 +32,7 @@ async function run() {
             assert.deepEqual(emitted, recording.request.response.filter(part => kindOf(part) === 'inlineReference'));
             const anchors = api.state.history[1].response.filter(part => part instanceof vscode.ChatResponseAnchorPart);
             assert.equal(anchors.length, references.length, 'Native history retains the actual anchors after each turn');
-            const visibleAnchor = page.locator('.interactive-response .chat-inline-anchor').first();
+            const visibleAnchor = page.locator('.interactive-response .chat-inline-anchor-widget[data-href]').first();
             await visibleAnchor.waitFor({ state: 'visible', timeout: 5000 });
             if (process.env.HISTORY_REPLAY_TEST_EVIDENCE) {
                 await fs.mkdir(process.env.HISTORY_REPLAY_TEST_EVIDENCE, { recursive: true });
