@@ -1,5 +1,13 @@
 # VS Code Demo Player
 
+## Contributing and releases
+
+Parallel agents must use separate worktrees and hand off committed changes to
+the release captain. Integration requires explicit user approval; publication
+may follow automatically only after the approved integration passes release
+checks. See [agent rules](AGENTS.md) and the
+[integration and release runbook](docs/RELEASING.md).
+
 **[Download the Windows installer](https://github.com/elijah286/vscode-demo-player/releases/latest/download/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 

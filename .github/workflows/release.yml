@@ -8,12 +8,25 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: demo-player-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Require the current integrated main commit for release tags
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the integration branch.' }
+          $main = git rev-parse refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the integration commit.' }
+          if ($env:GITHUB_SHA -ne $main) { throw 'Release tags must identify the current integrated main commit.' }
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.3'

@@ -1,0 +1,41 @@
+name: Integration checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Windows checks
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+      - name: Install development dependencies
+        working-directory: native
+        run: npm ci
+      - name: Unit tests and lint
+        working-directory: native
+        run: |
+          npm run test:unit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check PowerShell and dependency resolution
+        shell: powershell
+        run: .\test\packaging.ps1 -NodePath (Get-Command node.exe).Source
