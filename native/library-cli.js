@@ -11,6 +11,11 @@ async function main() {
     switch (request.command) {
         case 'list': return library.listDemos(root);
         case 'discover': return library.discoverSessions(request.storageRoot, request.folder);
+        case 'history': {
+            const result = await require('./history-catalog').discoverHistory(request,
+                event => { if (request.progress) process.stdout.write(JSON.stringify({ progress: event }) + '\n'); });
+            return request.progress ? { ...result, sessions: undefined, count: result.sessions.length } : result;
+        }
         case 'inspect': return library.inspectTranscript(request.file);
         case 'capture': return library.addPackage(root, await library.createPackage(request.file, request.indices, request.title, request.sha256));
         case 'import': return library.addPackage(root, await library.readPackage(request.file));
