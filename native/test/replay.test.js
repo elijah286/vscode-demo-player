@@ -5,11 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
-const { readRecording, readRecordings, readSnapshot, applyTranscriptRecord, recordedModel, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('../replay');
+const { readRecording, readRecordings, readSnapshot, applyTranscriptRecord, recordedModel, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('../replay');
 const { controlView, createControlServer } = require('../control-server');
 const { RecordingAgentHost } = require('../recording-agent-host');
 const { WebSocket } = require('ws');
-const { completedQuestions, archivedEdit, INTERNAL_PARTS } = require('../saved-parts');
+const { completedQuestions, archivedEdit, INTERNAL_PARTS, validateSavedEditGroup, savedEditText, savedEditMarkdown } = require('../saved-parts');
 
 async function fixture(context, request) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-unit-'));
@@ -375,7 +375,7 @@ test('saved questions replay completed with original answers instead of asking a
 });
 
 test('saved edit payloads remain exact read-only artifacts and never modify files', () => {
-    const part = { kind: 'textEditGroup', uri: { fsPath: 'C:\\source\\Original.ps1' }, edits: [[{ text: 'Original saved edit', range: { startLineNumber: 1, endLineNumber: 1 } }]], done: true };
+    const part = { kind: 'textEditGroup', uri: { fsPath: 'C:\\source\\Original.ps1' }, edits: [[{ text: 'Original saved edit', range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }]], done: true };
     const archive = archivedEdit(part);
     assert.deepEqual(JSON.parse(archive.content), part);
     const request = { message: { text: 'Original prompt' }, timestamp: 1000, response: [part] };
@@ -390,7 +390,7 @@ test('saved edit payloads remain exact read-only artifacts and never modify file
 
 test('all saved response parts are retained as display events or internal metadata', async context => {
     const questions = { kind: 'questionCarousel', resolveId: 'q', isUsed: true, questions: [{ id: 'answer', type: 'text', message: 'Original question' }], data: { answer: 'Original answer' } };
-    const edit = { kind: 'textEditGroup', uri: { fsPath: 'C:\\source\\Saved.ps1' }, edits: [[{ text: 'Original saved edit' }]], done: true };
+    const edit = { kind: 'textEditGroup', uri: { fsPath: 'C:\\source\\Saved.ps1' }, edits: [[{ text: 'Original saved edit', range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }]], done: true };
     const response = [{ value: '' }, { value: 'Original assistant text' }, questions, edit, { kind: 'undoStop', id: 'original-stop' }, { kind: 'codeblockUri', uri: { fsPath: 'C:\\source\\Saved.ps1' } }, { kind: 'mcpServersStarting' }];
     const request = { result: {}, message: { text: 'Original prompt' }, response };
     const file = await fixture(context, request);
@@ -401,6 +401,83 @@ test('all saved response parts are retained as display events or internal metada
     const host = new RecordingAgentHost([recording]);
     const started = host.beginTurn(recording.request);
     assert.deepEqual(started.action.message._meta.originalResponseParts, response);
+});
+
+test('saved code edits render original ranges and ordered replacements without reading or changing targets', async context => {
+    const file = await fixture(context, { result: {}, message: { text: 'Recorded edit' }, response: [] });
+    const before = await fs.readFile(file);
+    const range = { startLineNumber: 3, startColumn: 2, endLineNumber: 4, endColumn: 8 };
+    const part = {
+        kind: 'textEditGroup', uri: { scheme: 'file', path: '/missing/saved-source.js', fsPath: file }, done: true,
+        edits: [[{ range, text: 'first\r\nreplacement \u03bb' }], [], [{ range, text: '' }]],
+        state: { applied: 2, sha1: 'saved-original-metadata' }
+    };
+    const original = structuredClone(part);
+    assert.equal(validateSavedEditGroup(part), part);
+    const display = savedEditText(part);
+    assert.match(display, /Recorded code edit - not applied/);
+    assert.ok(display.includes('Target: ' + file));
+    assert.match(display, /range 3:2 - 4:8/);
+    assert.match(display, /first\r\nreplacement \u03bb/);
+    assert.ok(display.indexOf('Batch 1, replacement 1') < display.indexOf('Batch 3, replacement 1'));
+    assert.match(display, /Batch 2: no replacements recorded/);
+    assert.match(display, /\[Empty replacement text\]/);
+    assert.match(display, /not a reconstructed before\/after diff/);
+    assert.deepEqual(JSON.parse(archivedEdit(part).content), original);
+    assert.deepEqual(part, original);
+    assert.deepEqual(await fs.readFile(file), before);
+    const absent = { ...part, uri: { scheme: 'file', path: '/nonexistent/saved-only.js' } };
+    assert.match(savedEditText(absent), /file:\/nonexistent\/saved-only.js/);
+    assert.match(savedEditText({ ...part, edits: [] }), /No replacement batches recorded/);
+});
+
+test('saved edit code fences contain embedded Markdown and commands without interpreting them', () => {
+    const text = 'before\n``````\n[run](command:example.run)\n<script>not executable</script>\n~~~~\nafter';
+    const part = {
+        kind: 'textEditGroup', uri: { scheme: 'file', path: '/saved/`source`.js' }, done: true,
+        edits: [[{ text, range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }]]
+    };
+    const markdown = savedEditMarkdown(part);
+    assert.ok(markdown.startsWith('\n\n**Recorded code edit - not applied**\n\n'));
+    assert.ok(markdown.includes('\n\n```````text\n'));
+    assert.ok(markdown.endsWith('\n```````\n\n'));
+    assert.ok(markdown.includes(text));
+});
+
+test('incomplete and malformed saved edits fail with specific errors across extraction and editor validation', async context => {
+    const valid = {
+        kind: 'textEditGroup', uri: { scheme: 'file', path: '/saved/source.js' }, done: true,
+        edits: [[{ text: 'replacement', range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 } }]]
+    };
+    const range = valid.edits[0][0].range;
+    const cases = [
+        [{ ...valid, done: false }, /incomplete/],
+        [{ ...valid, done: undefined }, /completion flag/],
+        [{ ...valid, uri: undefined }, /target URI/],
+        [{ ...valid, edits: undefined }, /edit batches/],
+        [{ ...valid, edits: [{}] }, /batch 1 is not an array/],
+        [{ ...valid, edits: [[null]] }, /replacement 1.*replacement text/],
+        [{ ...valid, edits: [[{ range }]] }, /replacement text/],
+        ...[
+            undefined, { ...range, startLineNumber: 0 }, { ...range, endColumn: -1 },
+            { ...range, startColumn: 1.5 }, { ...range, startLineNumber: 3 },
+            { ...range, endLineNumber: 1, startColumn: 3, endColumn: 2 },
+            { ...range, endLineNumber: Number.MAX_SAFE_INTEGER + 1 }
+        ].map(invalid => [{ ...valid, edits: [[{ text: '', range: invalid }]] }, /invalid saved range/])
+    ];
+    for (const [part, pattern] of cases) {
+        assert.throws(() => savedEditMarkdown(part), pattern);
+        assert.throws(() => archivedEdit(part), pattern);
+        const request = { result: {}, message: { text: 'Recorded edits' }, response: [part] };
+        assert.throws(() => validateEditorRecording({ request }), pattern);
+        const source = await fixture(context, request);
+        await assert.rejects(readRecording(source, 0), pattern);
+    }
+    const source = await fixture(context, { result: {}, message: { text: 'Recorded edits' }, response: [valid] });
+    const recording = validateEditorRecording(await readRecording(source, 0));
+    assert.equal(recording.requiresSavedPartsRenderer, false);
+    assert.deepEqual(recording.request.response, [valid]);
+    assert.deepEqual(responseTimeline(recording.request.response).map(event => event.part), [valid]);
 });
 
 test('controller counts the current turn and waits at every response boundary', () => {

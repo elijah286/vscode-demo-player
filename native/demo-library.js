@@ -1,7 +1,9 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { applyTranscriptRecord, extractRecording, validateEditorRecording } = require('./replay');
+const { fileURLToPath } = require('node:url');
+const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf } = require('./replay');
+const { INTERNAL_PARTS, inlineReferenceLabel, savedEditText } = require('./saved-parts');
 
 const FORMAT = 'vscode-demo-recording';
 const MAX_BYTES = 100 * 1024 * 1024;
@@ -69,9 +71,26 @@ async function inspectTranscript(file) {
         let error;
         try { validateEditorRecording(extractRecording(file, snapshot, index)); }
         catch (failure) { error = failure.message; }
-        return { index, prompt: request?.message?.text ?? '', details: JSON.stringify(request, null, 2), error };
+        const prompt = request?.message?.text ?? '';
+        const response = (Array.isArray(request?.response) ? request.response : []).map(part => {
+            const kind = kindOf(part);
+            if (INTERNAL_PARTS.has(kind)) return '';
+            if (kind === 'markdown') return typeof part === 'string' ? part : part.value;
+            if (kind === 'thinking') return '[Thinking]\n' + (Array.isArray(part.value) ? part.value.join('\n') : part.value ?? '');
+            if (kind === 'toolInvocationSerialized') return '[Recorded tool: ' + part.toolId + ']\n' + (part.pastTenseMessage?.value ?? part.pastTenseMessage ?? part.invocationMessage?.value ?? part.invocationMessage ?? '');
+            if (kind === 'inlineReference' && !error) return '[Saved reference: ' + inlineReferenceLabel(part) + ']';
+            if (kind === 'textEditGroup' && !error) return savedEditText(part);
+            return '[Saved ' + kind + ']\n' + JSON.stringify(part, null, 2);
+        }).filter(Boolean).join('\n\n');
+        const archivedEdits = !error && request.response.some(part => kindOf(part) === 'textEditGroup');
+        return {
+            index, prompt, content: 'PROMPT\n' + prompt + '\n\nRESPONSE\n' + response,
+            details: JSON.stringify(request, null, 2), error,
+            status: error ? 'unavailable' : archivedEdits ? 'archived-edits' : 'ready'
+        };
     });
-    return { title: snapshot.customTitle || path.basename(file), sha256, turns, notice: NOTICE };
+    const summary = await sessionSummary(file, snapshot);
+    return { title: summary.title, sha256, turns, notice: [NOTICE, summary.warning].filter(Boolean).join(' ') };
 }
 
 function validatePackage(value) {
@@ -233,24 +252,48 @@ async function exportDemo(root, id, file) {
     return { file };
 }
 
-async function sessionSummary(file) {
-    const handle = await fs.open(file, 'r');
+async function sessionIndex(directory) {
+    const database = path.join(directory, 'state.vscdb');
+    try { await fs.access(database); }
+    catch (error) { if (error.code === 'ENOENT') return { entries: {} }; throw error; }
+    let db;
     try {
-        const buffer = Buffer.alloc(1024 * 1024);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const prefix = buffer.subarray(0, bytesRead).toString('utf8').replace(/^\uFEFF/, '');
-        const newline = prefix.indexOf('\n');
-        if (newline < 0 && (await handle.stat()).size > bytesRead) {
-            return { title: path.basename(file), preview: 'Preview unavailable: initial snapshot exceeds the 1 MiB discovery preview limit. Load to inspect.' };
-        }
-        const record = JSON.parse(newline < 0 ? prefix : prefix.slice(0, newline));
-        if (record.kind !== 0 || !Array.isArray(record.v?.requests)) return { title: path.basename(file), preview: 'Preview unavailable: no initial snapshot. Load to inspect.' };
-        const prompt = record.v.requests.find(request => typeof request?.message?.text === 'string')?.message.text;
-        return { title: record.v.customTitle || prompt?.slice(0, 100) || path.basename(file), preview: prompt?.slice(0, 200) || 'No prompt in the initial snapshot. Load to inspect.' };
-    } finally { await handle.close(); }
+        const { DatabaseSync } = require('node:sqlite');
+        db = new DatabaseSync(database, { readOnly: true });
+        const row = db.prepare('SELECT value FROM ItemTable WHERE key = ?').get('chat.ChatSessionStore.index');
+        if (!row) return { entries: {} };
+        const index = JSON.parse(row.value);
+        if (!index.entries || typeof index.entries !== 'object' || Array.isArray(index.entries)) throw new Error('Invalid saved session index.');
+        return { entries: index.entries };
+    } catch (error) {
+        return { entries: {}, warning: 'VS Code chat titles could not be read: ' + error.message };
+    } finally { if (db) db.close(); }
 }
 
-async function discoverSessions(storageRoot) {
+async function sessionSummary(file, snapshot, index) {
+    index ??= await sessionIndex(path.dirname(path.dirname(file)));
+    const entry = index.entries[path.basename(file, '.jsonl')];
+    if (!snapshot && typeof entry?.title === 'string' && entry.title.trim()) {
+        return { title: entry.title, preview: 'Load to review the saved conversation.', warning: index.warning };
+    }
+    snapshot ??= (await stableSnapshot(file)).snapshot;
+    const prompt = snapshot.requests.find(request => typeof request?.message?.text === 'string' && request.message.text.trim())?.message.text;
+    return {
+        title: entry?.title?.trim() || snapshot.customTitle?.trim() || prompt?.slice(0, 100) || 'Untitled conversation',
+        preview: prompt?.slice(0, 200) || 'No saved opening prompt.',
+        warning: index.warning
+    };
+}
+
+function folderPath(value) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error('Select a project folder before discovering conversations.');
+    const local = value.startsWith('file:') ? fileURLToPath(value) : value;
+    return path.resolve(local).replace(/[\\/]+$/, '').toLowerCase();
+}
+
+async function discoverSessions(storageRoot, folder) {
+    const selectedFolder = folderPath(folder);
+    if (!(await fs.stat(folder)).isDirectory()) throw new Error('Select an existing project directory.');
     if (!storageRoot) {
         if (!process.env.APPDATA) throw new Error('APPDATA is not set. Select a transcript file manually.');
         storageRoot = path.join(process.env.APPDATA, 'Code', 'User', 'workspaceStorage');
@@ -263,11 +306,13 @@ async function discoverSessions(storageRoot) {
     for (const workspace of workspaces) {
         if (!workspace.isDirectory() || !/^[a-f0-9]{32}$/.test(workspace.name)) continue;
         const directory = path.join(storageRoot, workspace.name);
-        let project = workspace.name;
+        let project;
         try {
             const metadata = JSON.parse((await readBounded(path.join(directory, 'workspace.json'))).toString('utf8'));
-            project = metadata.folder || metadata.workspace || project;
+            if (!metadata.folder || folderPath(metadata.folder) !== selectedFolder) continue;
+            project = folder;
         } catch (error) { if (error.code !== 'ENOENT') throw new Error('Cannot read workspace metadata at ' + directory + ': ' + error.message); }
+        if (!project) continue;
         let files;
         try { files = await fs.readdir(path.join(directory, 'chatSessions'), { withFileTypes: true }); }
         catch (error) { if (error.code === 'ENOENT') continue; throw error; }
@@ -281,11 +326,22 @@ async function discoverSessions(storageRoot) {
     }
     sessions.sort((a, b) => b.modified.localeCompare(a.modified));
     const recent = sessions.slice(0, 200);
+    const indices = new Map();
     for (const session of recent) {
-        try { Object.assign(session, await sessionSummary(session.file)); }
-        catch (error) { session.title = session.session; session.preview = 'Preview unavailable: ' + error.message; }
+        const directory = path.dirname(path.dirname(session.file));
+        if (!indices.has(directory)) indices.set(directory, await sessionIndex(directory));
+        try { Object.assign(session, await sessionSummary(session.file, undefined, indices.get(directory))); }
+        catch (error) {
+            session.title = 'Unreadable conversation (' + session.modified.slice(0, 10) + ')';
+            session.preview = 'Preview unavailable: ' + error.message;
+        }
     }
-    return { sessions: recent, notice: 'Up to 200 recent sessions. Titles/opening prompts use the initial snapshot; Load reconstructs the final saved conversation. Other profiles can be opened with Browse.' };
+    const warnings = [...new Set(recent.map(session => session.warning).filter(Boolean))];
+    return { sessions: recent, notice: [
+        recent.length ? 'Up to 200 recent conversations for the selected folder only. Names use the VS Code session index, with final saved titles/opening prompts as fallback.' : 'No saved conversations found for this folder in standard VS Code workspace storage.',
+        'Other profiles and multi-root workspaces can be opened with Browse transcript.',
+        ...warnings
+    ].join(' ') };
 }
 
 module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions };

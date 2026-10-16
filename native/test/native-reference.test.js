@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { recordedReference } = require('../saved-parts');
+const { recordedReference, inlineReferenceLabel, savedEditMarkdown } = require('../saved-parts');
 const { nativeResponsePart } = require('../native-response');
 const { responseTimeline, extractRecording, validateEditorRecording } = require('../replay');
 const library = require('../demo-library');
@@ -14,6 +14,8 @@ const reference = { kind: 'inlineReference', inlineReference: fileUri };
 function nativeStub() {
     const calls = [];
     const vscode = {
+        MarkdownString: class { constructor(value) { this.value = value; } },
+        ChatResponseMarkdownPart: class { constructor(value) { this.value = value; } },
         Uri: {
             from: value => ({ type: 'components', value }),
             parse: (value, strict) => ({ type: 'string', value, strict }),
@@ -44,6 +46,7 @@ test('URI, filesystem, and serialized external reference forms are validated exp
     for (const value of ['https://example.test/docs?q=saved#section', 'C:\\Recorded\\Missing.txt', '\\\\server\\share\\recorded.txt', { fsPath: 'C:\\Recorded\\Missing.txt' }, { external: 'file:///C:/Recorded/Missing.txt' }]) {
         const target = recordedReference({ kind: 'inlineReference', inlineReference: value });
         assert.ok(['string', 'file'].includes(target.uri.kind));
+        assert.equal(typeof inlineReferenceLabel({ kind: 'inlineReference', inlineReference: value }), 'string');
     }
     for (const value of [undefined, {}, 'relative/path', 'command:workbench.action.files.openFile', 'javascript:alert(1)', { scheme: 'command', path: 'run' }]) {
         assert.throws(() => recordedReference({ kind: 'inlineReference', inlineReference: value }), /reference.*(URI|scheme|file path)/i);
@@ -102,6 +105,23 @@ test('capture, import, playback, and history timelines retain inline references 
     assert.deepEqual(timeline.filter(event => event.kind === 'inlineReference').map(event => event.part), [reference]);
     assert.equal(timeline.filter(event => event.kind === 'markdown').map(event => event.value).join(''), 'Original prefix  original suffix.');
     assert.equal(timeline.filter(event => ['toolPending', 'toolComplete'].includes(event.kind)).length, 0);
+});
+
+test('combined native renderer preserves read-only edit formatting without applying edits or replacing reference anchors', () => {
+    const { vscode, calls } = nativeStub();
+    const part = {
+        kind: 'textEditGroup', done: true, uri: { fsPath: 'C:\\Synthetic\\Missing.txt' },
+        edits: [[{ text: '```\n[saved replacement](command:example.run)', range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }]]
+    };
+    const before = structuredClone(part);
+    const displayed = nativeResponsePart(vscode, { kind: 'textEditGroup', part });
+    assert.ok(displayed instanceof vscode.ChatResponseMarkdownPart);
+    assert.equal(displayed.value.value, savedEditMarkdown(part));
+    assert.equal(displayed.value.isTrusted, false);
+    assert.equal(displayed.value.supportHtml, false);
+    assert.deepEqual(part, before);
+    assert.deepEqual(calls, []);
+    assert.throws(() => nativeResponsePart(vscode, { kind: 'textEditGroup', part: { ...part, done: false } }), /incomplete/);
 });
 
 test('unsupported display kinds still fail instead of falling through to a fabricated tool record', () => {

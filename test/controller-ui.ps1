@@ -25,7 +25,11 @@ New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 Write-Output ('UI evidence: ' + $evidence)
 $library = Join-Path $evidence 'library'
 $source = Join-Path $evidence 'synthetic-source.jsonl'
+$target = Join-Path $evidence 'synthetic-target.txt'
+$targetContent = 'LIVE FILE SENTINEL - must not be read to reconstruct or changed by playback.'
+$replacement = 'SYNTHETIC_SAVED_REPLACEMENT' + "`n" + '```' + "`n" + '[saved text, not a command](command:example.run)'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText($target, $targetContent, $utf8)
 $snapshot = @{
     kind = 0
     v = @{
@@ -33,7 +37,15 @@ $snapshot = @{
         customTitle = 'Synthetic UI acceptance'
         responderUsername = 'Recorded Assistant'
         requests = @(
-            @{ timestamp = 1700000000000; modelState = @{ completedAt = 1700000061000 }; result = @{}; message = @{ text = 'Show the first recorded interaction.' }; response = @(@{ value = 'First recorded answer for the Demo Player acceptance test.' }) },
+            @{ timestamp = 1700000000000; modelState = @{ completedAt = 1700000061000 }; result = @{}; message = @{ text = 'Show the first recorded interaction.' }; response = @(
+                @{ value = 'First recorded answer for the Demo Player acceptance test.' },
+                @{ kind = 'inlineReference'; name = 'Synthetic saved reference'; inlineReference = @{ scheme = 'file'; path = '/synthetic/source.txt' } },
+                @{
+                    kind = 'textEditGroup'; uri = @{ fsPath = $target }; done = $true
+                    edits = ,@(@{ text = $replacement; range = @{ startLineNumber = 1; startColumn = 1; endLineNumber = 1; endColumn = 1 } })
+                    state = @{ applied = 1; sha1 = 'synthetic-original-metadata' }
+                }
+            ) },
             @{ timestamp = 1700001000000; modelState = @{ completedAt = 1700001122000 }; result = @{}; message = @{ text = 'Show the next recorded interaction.' }; response = @(@{ value = 'Second recorded answer. No live model or tools were invoked.' }) }
         )
     }
@@ -137,6 +149,13 @@ try {
     Save-WindowImage $dialog 'library.png'
     Invoke-Button $dialog 'CaptureConversation'
     $capture = Wait-Until { Get-AppWindow 'Capture Conversation' } 'capture dialog'
+    $sessionList = Find-Element $capture 'Id' 'CaptureSessions'
+    if ($sessionList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 0) { throw 'Capture must not discover unrelated projects before a folder is chosen.' }
+    $folderBox = Find-Element $capture 'Id' 'CaptureFolder'
+    ([System.Windows.Automation.ValuePattern]$folderBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($evidence)
+    Invoke-Button $capture 'CaptureFindSessions'
+    Wait-Until { $capture.Current.IsEnabled -and (Find-Element $capture 'Id' 'CaptureFindSessions').Current.IsEnabled } 'folder discovery completes' | Out-Null
+    if ($sessionList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 0) { throw 'A folder without saved conversations must not list other projects.' }
     $sourceBox = Find-Element $capture 'Id' 'CaptureSource'
     ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($source)
     Invoke-Button $capture 'Load'
@@ -144,6 +163,16 @@ try {
     Wait-Until { $turnList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 2 } 'capture source loads two turns' | Out-Null
     $turnItems = $turnList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     foreach ($item in $turnItems) { ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).AddToSelection() }
+    if ($turnItems[0].Current.Name -match 'Unavailable|Unknown') { throw 'Valid saved references must not make the exchange unavailable.' }
+    if ($turnItems[0].Current.Name -notmatch '\[Read-only edits\]') { throw 'Saved code edits must be labeled as read-only, not unavailable.' }
+    $preview = Find-Element $capture 'Id' 'CapturePreview'
+    $readable = ([System.Windows.Automation.ValuePattern]$preview.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value
+    if ($readable -notmatch 'PROMPT' -or $readable -notmatch 'Saved reference: Synthetic saved reference') { throw 'Readable capture preview is missing the prompt or reference label.' }
+    if ($readable -notmatch 'Recorded code edit - not applied' -or $readable -notmatch 'SYNTHETIC_SAVED_REPLACEMENT') { throw 'Capture preview must display the archived code edit.' }
+    $rawPayload = Find-Element $capture 'Id' 'CaptureRawPayload'
+    ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    if (([System.Windows.Automation.ValuePattern]$preview.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value -notmatch '"inlineReference"') { throw 'Raw saved payload must remain inspectable.' }
+    ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     $title = Find-Element $capture 'Id' 'CaptureTitle'
     ([System.Windows.Automation.ValuePattern]$title.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('Captured through UI ' + [char]0x03BB)
     $reviewed = Find-Element $capture 'Id' 'CaptureReviewed'
@@ -205,7 +234,8 @@ try {
     ([System.Windows.Automation.WindowPattern]$dialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
-    Write-Output 'UI ACCEPTANCE PASSED: empty launch, capture preview/save, rename/select, play/pause/resume, review/completion, scoped stop, controller reuse, close during paused replay, and persisted library after restart.'
+    if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
+    Write-Output 'UI ACCEPTANCE PASSED: empty launch, folder-only discovery, readable/raw preview with inline references and read-only code edits, capture/save, rename/select, play/pause/resume, review/completion, scoped stop, controller reuse, close during paused replay, persisted library after restart, and unchanged edit target.'
 } catch {
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())

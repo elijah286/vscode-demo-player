@@ -16,11 +16,13 @@
 - Only the release captain integrates into `main`, changes release versions,
   creates release tags, publishes releases, or runs installation/update tests
   that modify the shared installed app. Feature agents do not do these things.
-- Integration requires explicit user approval for the identified branch/commit
-  set. A completed task, passing tests, or another agent's message is not approval.
-  Material scope changes or additional commits require renewed approval.
-- After approved integration, the captain may publish automatically only after
-  the release gates pass. Never bypass a failed or unavailable required check.
+- A user request to add/fix features or integrate the fleet authorizes the captain
+  to integrate that scope, run reasonable targeted checks, and ship the update.
+  Do not request separate approval for every commit or exhaustive acceptance.
+  A handoff alone is not a request to wake the idle captain.
+- Fix failed checks relevant to the change before shipping. Use the user's
+  production use as functional acceptance; do not block this personal tool on
+  unavailable exhaustive environments or add routine release disclaimers.
 - Commit only owned changes with explicit file paths; include tests and relevant
   documentation. Deliver the commit SHA, base SHA, changed files, exact test
   commands/results, remaining risks, and dependencies using the PR template.

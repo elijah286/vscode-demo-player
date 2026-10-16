@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
+const { inlineReferenceLabel, savedEditMarkdown } = require('../saved-parts');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -55,8 +56,8 @@ async function run() {
     if (process.env.HISTORY_REPLAY_AGENTS === '1') {
         console.log('NATIVE AGENTS WINDOW', JSON.stringify({ url: page.url(), title: await page.title(), bodyClass: await page.locator('body').getAttribute('class') }));
     }
-    const screenshots = path.join(os.tmpdir(), 'VSCode-Demo-Player', 'visual');
-    fs.mkdirSync(screenshots, { recursive: true });
+    const screenshots = fs.mkdtempSync(path.join(os.tmpdir(), 'native-replay-visual-'));
+    console.log('NATIVE TEST SCREENSHOTS', screenshots);
     if (process.env.HISTORY_REPLAY_AGENTS === '1') {
         const commands = await vscode.commands.getCommands(true);
         console.log('NATIVE AGENTS COMMANDS', JSON.stringify(commands.filter(command => /^(sessions|agentSessions)\./.test(command) && /open|new|create|reveal|show/i.test(command))));
@@ -99,6 +100,18 @@ async function run() {
     const expected = recording.request.response.filter(part => kindOf(part) === 'markdown').map(part => typeof part === 'string' ? part : part.value).join('');
     const actual = api.state.emitted.filter(part => part.kind === 'markdown').map(part => part.value).join('');
     assert.equal(actual, expected, 'Original assistant text replayed verbatim');
+    const references = recording.request.response.filter(part => kindOf(part) === 'inlineReference');
+    assert.deepEqual(api.state.emitted.filter(part => part.kind === 'inlineReference').map(part => part.original), references, 'Saved reference payloads are preserved');
+    for (const reference of references) {
+        await page.locator('.interactive-response').filter({ hasText: inlineReferenceLabel(reference) }).last().waitFor({ state: 'visible', timeout: 5000 });
+    }
+    const edits = recording.request.response.filter(part => kindOf(part) === 'textEditGroup');
+    assert.deepEqual(api.state.emitted.filter(part => part.kind === 'textEditGroup').map(part => part.original), edits, 'Saved code edit payloads are preserved');
+    for (const edit of edits) {
+        await page.locator('.interactive-response strong').filter({ hasText: 'Recorded code edit - not applied' }).last().waitFor({ state: 'visible', timeout: 5000 });
+        assert.ok(api.state.history[1].response.some(part => part.value?.value === savedEditMarkdown(edit)), 'Retained history uses the same read-only edit renderer');
+    }
+    if (edits.length) assert.equal(await page.locator('.interactive-response a[href^="command:example.run"]').count(), 0, 'Recorded replacement text never becomes a command link');
     const typingTime = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const responseTime = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
     assert.ok(Math.abs(typingTime - 2000) < 400, 'Prompt entry follows the two-second timeline: ' + typingTime);
@@ -128,6 +141,9 @@ async function run() {
     assert.equal(api.state.phase, 'complete');
     assert.equal(api.state.turnIndex, 2);
     assert.equal(api.state.history.length, 4);
+    if (edits.length) {
+        await page.locator('.interactive-response').filter({ hasText: 'Recorded code edit - not applied' }).first().waitFor({ state: 'visible', timeout: 5000 });
+    }
     assert.equal(controlView(api.state).enabled, false);
     const secondTyping = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const secondResponse = api.state.metrics.responseFinished - api.state.metrics.promptFinished;

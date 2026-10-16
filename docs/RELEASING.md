@@ -3,10 +3,11 @@
 ## Authority and scope
 
 This policy applies to `elijah286/vscode-demo-player`, not the original LabVIEW
-workspace. The user appoints one release captain. Feature agents prepare work;
-the captain integrates it only after explicit user approval. Publishing is
-authorized automatically after that approved integration passes all release
-gates. Publishing a new release does not authorize silently installing it on a
+workspace. The user appoints one release captain. A user request to add/fix a
+feature or integrate the fleet authorizes integration and shipment of that
+scope after reasonable targeted checks. The user's production use is functional
+acceptance for this personal tool; do not add per-commit approval or exhaustive
+environment gates. Publishing a new release does not authorize silently installing it on a
 user's computer; preserve the updater's consent behavior.
 
 The captain is an on-demand role. Between user requests, remain idle: no
@@ -86,20 +87,20 @@ Never mark a workstream integrated from a verbal completion report. Verify its
 changes in Git. Do not mark it released until the published installer actually
 contains it.
 
-The captain presents the branch/commit set and risks to the user. After explicit
-approval, integrate serially in a clean captain-owned integration worktree.
+The captain identifies the branches/commits covered by the user's request and
+integrates serially in a clean captain-owned integration worktree.
 Merge the delivered branch (or cherry-pick the explicitly agreed commits, not
 both). Resolve conflicts with the owners; do not blindly prefer either side.
-Rerun checks on the combined result, including tests from each included
-workstream. Changes beyond the approved scope return to the approval queue.
+Rerun targeted checks on the combined result, including tests from each included
+workstream. Unrelated scope still requires a user request.
 
-## Required integration checks
+## Reasonable integration checks
 
 The `Windows checks` CI job runs the existing automated baseline on PRs and
 `main`: unit tests, lint, and PowerShell packaging/syntax/dependency checks.
 It does not claim native UI, installer, or update acceptance.
 
-For the exact integrated SHA, the captain must also:
+For the exact integrated SHA, choose checks relevant to the change:
 
 1. Verify all new regression tests are actually selected by the test commands.
    A test file existing on disk does not mean it ran.
@@ -116,8 +117,10 @@ For the exact integrated SHA, the captain must also:
    consent, cancellation and visible failure behavior.
 
 Record exact commands, SHA, environment/version, results and evidence location.
-A stale screenshot or an earlier branch's green tests are not acceptance of
-the integrated result. Unavailable required tests block release.
+A stale screenshot or an earlier branch's green tests are not a fresh test of
+the integrated result. Fix relevant failures. An unavailable exhaustive test
+environment does not block this personal-tool release; record what actually
+ran in the handoff without claiming unperformed tests passed.
 
 ## Release and update delivery
 

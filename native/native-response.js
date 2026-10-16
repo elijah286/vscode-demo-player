@@ -1,4 +1,4 @@
-const { recordedReference } = require('./saved-parts');
+const { recordedReference, savedEditMarkdown } = require('./saved-parts');
 
 function markdown(vscode, value) {
     const result = new vscode.MarkdownString(typeof value === 'string' ? value : value?.value ?? '');
@@ -11,6 +11,7 @@ function nativeResponsePart(vscode, event) {
     const part = event.part;
     if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(vscode, event.value));
     if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
+    if (event.kind === 'textEditGroup') return new vscode.ChatResponseMarkdownPart(markdown(vscode, savedEditMarkdown(part)));
     if (event.kind === 'inlineReference') {
         const reference = recordedReference(part);
         let uri;
@@ -20,7 +21,7 @@ function nativeResponsePart(vscode, event) {
         const target = reference.range ? new vscode.Location(uri, new vscode.Range(...reference.range)) : uri;
         return new vscode.ChatResponseAnchorPart(target, reference.title);
     }
-    if (['questionCarousel', 'textEditGroup', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(event.kind)) {
+    if (['questionCarousel', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(event.kind)) {
         const content = markdown(vscode, '');
         content.appendCodeblock(JSON.stringify(part, null, 2), 'json');
         return new vscode.ChatResponseMarkdownPart(content);

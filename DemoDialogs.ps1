@@ -1,4 +1,4 @@
-function Invoke-DemoLibrary([hashtable]$Request) {
+function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
     if (-not $script:NodePath) {
         $script:NodePath = Resolve-PlayerNode
     }
@@ -22,7 +22,31 @@ function Invoke-DemoLibrary([hashtable]$Request) {
         try { $writer.Write(($Request | ConvertTo-Json -Depth 10 -Compress)); $writer.Flush() }
         finally { $writer.Dispose() }
         $process.StandardInput.Close()
-        if (-not $process.WaitForExit(30000)) {
+        $exited = $false
+        if ($Owner) {
+            $enabled = $Owner.IsEnabled
+            $cursor = $Owner.Cursor
+            $frame = [System.Windows.Threading.DispatcherFrame]::new()
+            $timer = [System.Windows.Threading.DispatcherTimer]::new()
+            $timer.Interval = [TimeSpan]::FromMilliseconds(50)
+            $elapsed = [Diagnostics.Stopwatch]::StartNew()
+            $timer.Add_Tick({
+                if ($process.HasExited -or $elapsed.ElapsedMilliseconds -ge 30000) { $frame.Continue = $false }
+            })
+            try {
+                $Owner.IsEnabled = $false
+                $Owner.Cursor = [System.Windows.Input.Cursors]::Wait
+                $timer.Start()
+                [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+                $exited = $process.HasExited
+            } finally {
+                $timer.Stop()
+                $elapsed.Stop()
+                $Owner.IsEnabled = $enabled
+                $Owner.Cursor = $cursor
+            }
+        } else { $exited = $process.WaitForExit(30000) }
+        if (-not $exited) {
             $process.Kill()
             throw 'The demo library operation exceeded 30 seconds. No success was confirmed. Refresh the library before retrying.'
         }
@@ -53,6 +77,19 @@ function Select-DemoFile($Owner, [string]$Filter) {
     return $null
 }
 
+function Select-DemoFolder($Owner) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $picker = [System.Windows.Forms.FolderBrowserDialog]::new()
+    $picker.Description = 'Select the project folder whose VS Code conversations you want to import.'
+    $picker.ShowNewFolderButton = $false
+    $nativeOwner = [System.Windows.Forms.NativeWindow]::new()
+    try {
+        $nativeOwner.AssignHandle(([System.Windows.Interop.WindowInteropHelper]::new($Owner)).Handle)
+        if ($picker.ShowDialog($nativeOwner) -eq [System.Windows.Forms.DialogResult]::OK) { return $picker.SelectedPath }
+        return $null
+    } finally { $nativeOwner.ReleaseHandle(); $picker.Dispose() }
+}
+
 function Show-CaptureDialog($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -63,10 +100,17 @@ function Show-CaptureDialog($Owner) {
    <RowDefinition Height="Auto"/><RowDefinition Height="110"/><RowDefinition Height="Auto"/>
    <RowDefinition Height="140"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
-  <DockPanel Margin="0,0,0,8">
+  <StackPanel Margin="0,0,0,8">
+  <DockPanel>
    <Button x:Name="Browse" DockPanel.Dock="Right" Content="Browse transcript..." Padding="12,5"/>
-   <TextBlock x:Name="DiscoveryNote" Text="Discovering saved conversations..." TextWrapping="Wrap" Margin="0,0,12,0"/>
+   <TextBlock x:Name="DiscoveryNote" Text="Choose a project folder to list only its saved VS Code conversations, or browse to a transcript." TextWrapping="Wrap" Margin="0,0,12,0"/>
   </DockPanel>
+  <DockPanel Margin="0,8,0,0">
+   <Button x:Name="ChooseFolder" Content="Choose folder..." DockPanel.Dock="Right" Padding="12,5" AutomationProperties.AutomationId="CaptureChooseFolder"/>
+   <Button x:Name="FindSessions" Content="Find conversations" DockPanel.Dock="Right" Padding="12,5" Margin="8,0" AutomationProperties.AutomationId="CaptureFindSessions"/>
+   <TextBox x:Name="Folder" ToolTip="Project directory (not the VS Code storage directory)" VerticalContentAlignment="Center" AutomationProperties.AutomationId="CaptureFolder"/>
+  </DockPanel>
+  </StackPanel>
   <ListBox x:Name="Sessions" Grid.Row="1" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureSessions"/>
   <DockPanel Grid.Row="2" Margin="0,10,0,6">
    <Button x:Name="Load" Content="Load conversation" DockPanel.Dock="Right" Padding="12,5"/>
@@ -75,6 +119,7 @@ function Show-CaptureDialog($Owner) {
   <ListBox x:Name="Turns" Grid.Row="3" SelectionMode="Extended" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureTurns"/>
   <TextBox x:Name="Preview" Grid.Row="4" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
   <StackPanel Grid.Row="5">
+   <CheckBox x:Name="RawPayload" Content="Show full saved payload (tools and metadata)" Margin="0,0,0,6" AutomationProperties.AutomationId="CaptureRawPayload"/>
    <TextBlock Text="Demo title (1-160 characters). Select up to 100 exchanges with Ctrl/Shift; playback follows source order." TextWrapping="Wrap"/>
    <TextBox x:Name="Title" Margin="0,5,0,8" MaxLength="160" AutomationProperties.AutomationId="CaptureTitle"/>
    <CheckBox x:Name="Reviewed" Content="I reviewed the selected content for secrets. External assets are not bundled; playback uses saved payloads only." AutomationProperties.AutomationId="CaptureReviewed"/>
@@ -86,7 +131,7 @@ function Show-CaptureDialog($Owner) {
  </Grid>
 </Window>
 '@ $Owner
-    $dialog.Tag = @{ File = $null; Inspection = $null; Result = $null }
+    $dialog.Tag = @{ File = $null; Inspection = $null; Result = $null; Folder = $null }
     $sessions = $dialog.FindName('Sessions')
     $turns = $dialog.FindName('Turns')
     $preview = $dialog.FindName('Preview')
@@ -94,6 +139,38 @@ function Show-CaptureDialog($Owner) {
     $reviewed = $dialog.FindName('Reviewed')
     $captureStatus = $dialog.FindName('CaptureStatus')
     $sourceBox = $dialog.FindName('Source')
+    $folderBox = $dialog.FindName('Folder')
+    $discover = {
+        $sessions.Items.Clear()
+        $sourceBox.Text = ''
+        $dialog.FindName('DiscoveryNote').Text = 'Finding conversations for the selected folder...'
+        $discovery = Invoke-DemoLibrary @{ command = 'discover'; folder = $folderBox.Text } $dialog
+        $dialog.Tag.Folder = $folderBox.Text
+        $dialog.FindName('DiscoveryNote').Text = $discovery.notice
+        foreach ($session in $discovery.sessions) {
+            $sessions.Items.Add([pscustomobject]@{
+                Label = $session.title + ' | ' + $session.modified
+                File = $session.file
+            }) | Out-Null
+        }
+    }
+    $folderBox.Add_TextChanged({
+        if ($folderBox.Text -ne $dialog.Tag.Folder) {
+            $sessions.Items.Clear()
+            $sourceBox.Text = ''
+            $dialog.FindName('DiscoveryNote').Text = 'Find conversations to refresh the list for this folder.'
+        }
+    })
+    $dialog.FindName('FindSessions').Add_Click({
+        try { & $discover }
+        catch { $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message }
+    })
+    $dialog.FindName('ChooseFolder').Add_Click({
+        try {
+            $folder = Select-DemoFolder $dialog
+            if ($folder) { $folderBox.Text = $folder; & $discover }
+        } catch { $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message }
+    })
     $sourceBox.Add_TextChanged({
         if ($sourceBox.Text -ne $dialog.Tag.File) {
             $dialog.Tag.Inspection = $null
@@ -108,7 +185,8 @@ function Show-CaptureDialog($Owner) {
     })
     $loadSource = {
         param([string]$File)
-        $inspection = Invoke-DemoLibrary @{ command = 'inspect'; file = $File }
+        $captureStatus.Text = 'Loading the saved conversation...'
+        $inspection = Invoke-DemoLibrary @{ command = 'inspect'; file = $File } $dialog
         $dialog.Tag.File = $File
         $dialog.Tag.Inspection = $inspection
         $dialog.FindName('Source').Text = $File
@@ -116,6 +194,7 @@ function Show-CaptureDialog($Owner) {
         foreach ($turn in $inspection.turns) {
             $label = ($turn.index + 1).ToString() + '. ' + ($turn.prompt -replace '\s+', ' ')
             if ($turn.error) { $label = '[Unavailable] ' + $label }
+            elseif ($turn.status -eq 'archived-edits') { $label = '[Read-only edits] ' + $label }
             $turns.Items.Add([pscustomobject]@{ Label = $label; Turn = $turn }) | Out-Null
         }
         $title.Text = if ($inspection.title.Length -gt 160) { $inspection.title.Substring(0,160) } else { $inspection.title }
@@ -135,15 +214,21 @@ function Show-CaptureDialog($Owner) {
             if ($file) { & $loadSource $file }
         } catch { Show-DemoError $dialog $_ }
     })
-    $turns.Add_SelectionChanged({
+    $updatePreview = {
         $reviewed.IsChecked = $false
         $parts = @($turns.SelectedItems | Sort-Object { $_.Turn.index } | ForEach-Object {
             $turn = $_.Turn
             $problem = if ($turn.error) { "`r`nUNAVAILABLE: " + $turn.error } else { '' }
-            'EXCHANGE ' + ($turn.index + 1) + $problem + "`r`nFULL SAVED PAYLOAD (includes prompt, response, tools, and metadata):`r`n" + $turn.details
+            $content = if ($dialog.FindName('RawPayload').IsChecked) {
+                "FULL SAVED PAYLOAD (includes prompt, response, tools, and metadata):`r`n" + $turn.details
+            } else { $turn.content }
+            'EXCHANGE ' + ($turn.index + 1) + $problem + "`r`n" + $content
         })
         $preview.Text = $parts -join "`r`n`r`n----------------`r`n`r`n"
-    })
+    }
+    $turns.Add_SelectionChanged($updatePreview)
+    $dialog.FindName('RawPayload').Add_Checked($updatePreview)
+    $dialog.FindName('RawPayload').Add_Unchecked($updatePreview)
     $dialog.FindName('Save').Add_Click({
         try {
             if (-not $dialog.Tag.Inspection) { throw 'Load a conversation first.' }
@@ -152,17 +237,10 @@ function Show-CaptureDialog($Owner) {
             if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 exchanges.' }
             if (@($selected | Where-Object { $_.Turn.error }).Count) { throw 'The selection contains incomplete or unsupported exchanges. Their exact errors are shown in the preview.' }
             $indices = @($selected | ForEach-Object { [int]$_.Turn.index })
-            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'capture'; file = $dialog.Tag.File; sha256 = $dialog.Tag.Inspection.sha256; title = $title.Text; indices = $indices }
+            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'capture'; file = $dialog.Tag.File; sha256 = $dialog.Tag.Inspection.sha256; title = $title.Text; indices = $indices } $dialog
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
-    try {
-        $discovery = Invoke-DemoLibrary @{ command = 'discover' }
-        $dialog.FindName('DiscoveryNote').Text = $discovery.notice
-        foreach ($session in $discovery.sessions) {
-            $sessions.Items.Add([pscustomobject]@{ Label = $session.title + ' | ' + $session.modified + ' | ' + $session.project + ' | ' + ($session.preview -replace '\s+', ' '); File = $session.file }) | Out-Null
-        }
-    } catch { $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message + ' You can still browse to a transcript.' }
     if ($dialog.ShowDialog()) { return $dialog.Tag.Result }
     return $null
 }
