@@ -56,8 +56,13 @@ test('capture refuses incomplete, unsupported, duplicate, empty, out-of-range, a
     await assert.rejects(library.createPackage(source, [99], 'Demo', inspection.sha256), /incomplete/);
     await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 0, 'response'], v: [{ kind: 'workspaceEdit' }] }) + '\n');
     const updated = await library.inspectTranscript(source);
-    assert.match(updated.turns[0].error, /cannot render/);
-    await assert.rejects(library.createPackage(source, [0], 'Demo', updated.sha256), /No content was discarded/);
+    assert.equal(updated.turns[0].error, undefined);
+    const captured = await library.createPackage(source, [0], 'Demo', updated.sha256);
+    assert.deepEqual(captured.turns[0].snapshot.requests[0].response.at(-1), { kind: 'workspaceEdit' });
+    await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 0, 'response'], v: [{ kind: 'unknownRecordedPart' }] }) + '\n');
+    const unsupported = await library.inspectTranscript(source);
+    assert.match(unsupported.turns[0].error, /not implemented/);
+    await assert.rejects(library.createPackage(source, [0], 'Demo', unsupported.sha256), /not implemented/);
 });
 
 test('packages play after source removal, survive export/import, and preserve renamed metadata separately', async context => {

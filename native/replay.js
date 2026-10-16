@@ -69,7 +69,7 @@ async function readRecordings(file, requestIndex, requestCount = 1) {
 }
 
 function validateEditorRecording(recording) {
-    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', ...INTERNAL_PARTS]);
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(recording.request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Editor playback cannot render these saved parts: ' + unsupported.join(', ') + '. No content was discarded.');
     if (!recording.request.message.text.trim()) throw new Error('Editor playback requires a nonempty recorded prompt.');
@@ -97,6 +97,10 @@ async function readPlaylist(file) {
         recordings.push(...selected);
     }
     if (manifest.expectedTurns !== undefined && recordings.length !== manifest.expectedTurns) throw new Error('Playlist turn count does not match its expected source range.');
+    if (manifest.promptSummaries !== undefined) {
+        if (!Array.isArray(manifest.promptSummaries) || manifest.promptSummaries.length !== recordings.length || manifest.promptSummaries.some(summary => typeof summary !== 'string' || !summary.trim() || summary.length > 200 || /[\r\n]/.test(summary))) throw new Error('Expected one concise prompt summary per playlist turn.');
+        recordings.forEach((recording, index) => { recording.promptSummary = manifest.promptSummaries[index]; });
+    }
     return recordings;
 }
 
@@ -113,6 +117,7 @@ function extractRecording(file, snapshot, requestIndex) {
     return {
         file,
         requestIndex,
+        promptSummary: request.message.text.replace(/\s+/g, ' ').trim().slice(0, 177) + (request.message.text.replace(/\s+/g, ' ').trim().length > 177 ? '...' : ''),
         sessionId: snapshot.sessionId,
         title: snapshot.customTitle,
         responderName: request.agent?.fullName || snapshot.responderUsername,

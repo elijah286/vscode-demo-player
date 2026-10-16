@@ -33,8 +33,8 @@ $snapshot = @{
         customTitle = 'Synthetic UI acceptance'
         responderUsername = 'Recorded Assistant'
         requests = @(
-            @{ result = @{}; message = @{ text = 'Show the first recorded interaction.' }; response = @(@{ value = 'First recorded answer for the Demo Player acceptance test.' }) },
-            @{ result = @{}; message = @{ text = 'Show the next recorded interaction.' }; response = @(@{ value = 'Second recorded answer. No live model or tools were invoked.' }) }
+            @{ timestamp = 1700000000000; modelState = @{ completedAt = 1700000061000 }; result = @{}; message = @{ text = 'Show the first recorded interaction.' }; response = @(@{ value = 'First recorded answer for the Demo Player acceptance test.' }) },
+            @{ timestamp = 1700001000000; modelState = @{ completedAt = 1700001122000 }; result = @{}; message = @{ text = 'Show the next recorded interaction.' }; response = @(@{ value = 'Second recorded answer. No live model or tools were invoked.' }) }
         )
     }
 }
@@ -59,7 +59,6 @@ function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 1
     do {
         $value = & $Check
         if ($value) { return $value }
-        Start-Sleep -Milliseconds 150
     } while ([DateTime]::UtcNow -lt $deadline)
     throw ('UI acceptance timed out: ' + $Description)
 }
@@ -81,7 +80,6 @@ function Invoke-Button($Parent, [string]$Id) {
 
 function Save-WindowImage($Element, [string]$Name) {
     $Element.SetFocus()
-    Start-Sleep -Milliseconds 400
     $bounds = $Element.Current.BoundingRectangle
     $image = [System.Drawing.Bitmap]::new([int]$bounds.Width, [int]$bounds.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($image)
@@ -92,7 +90,19 @@ function Save-WindowImage($Element, [string]$Name) {
 }
 
 function Start-TestPlayer {
-    if (-not $Installed) { return & (Join-Path $root 'Start-DemoPlayer.ps1') -LibraryRoot $library -NodePath $NodePath }
+    if (-not $Installed) {
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $start.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + (Join-Path $root 'Show-ReplayController.ps1') + '" -LibraryRoot "' + $library + '" -NodePath "' + $NodePath + '"'
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        $script:controllerProcess = [Diagnostics.Process]::Start($start)
+        $script:controllerOutput = $script:controllerProcess.StandardOutput.ReadToEndAsync()
+        $script:controllerErrors = $script:controllerProcess.StandardError.ReadToEndAsync()
+        return [pscustomobject]@{ ProcessId = $script:controllerProcess.Id }
+    }
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = Join-Path $root 'VSCodeDemoPlayer.exe'
     $start.Arguments = '-LibraryRoot "' + $library + '"'
@@ -197,6 +207,16 @@ try {
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     Write-Output 'UI ACCEPTANCE PASSED: empty launch, capture preview/save, rename/select, play/pause/resume, review/completion, scoped stop, controller reuse, close during paused replay, and persisted library after restart.'
 } catch {
+    if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
+        Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())
+        Write-Output ('Controller error: ' + $script:controllerErrors.GetAwaiter().GetResult())
+    }
+    $failedWindow = Get-AppWindow 'Demo Player'
+    if ($failedWindow) {
+        $failedStatus = Find-Element $failedWindow 'Id' 'Status'
+        Write-Output ('Controller status: ' + $failedStatus.Current.Name + ' | ' + $failedStatus.Current.HelpText)
+        Save-WindowImage $failedWindow 'failure.png'
+    }
     Write-Output $_.ScriptStackTrace
     throw
 } finally {

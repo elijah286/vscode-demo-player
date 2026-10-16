@@ -101,6 +101,39 @@ the current timeline. **Stop** closes only the isolated replay window and leaves
 Demo Player ready to run again. Closing Demo Player stops its paired window
 before exiting. A completed demo stays visible until Stop.
 
+### Replay presentation controls
+
+The **VS Code / Agents (experimental)** selector chooses the native playback UI.
+During playback, switching is allowed only between complete responses. It closes
+and reopens only the dedicated replay window, retaining the selected portable
+package or transcript range, completed history, progress, and working-time total.
+It is disabled during typing/output, including a paused response. No model request
+or recorded tool execution is submitted. Agents requires a compatible, signed-in
+dedicated window; its authentication/native UI gate remains experimental.
+
+**Show prompt summary** and **Show elapsed time** are off by default. Either or
+both appear in one movable, rounded overlay with an orange-yellow frame. Click
+the **Overlay frame** swatch to use the native Windows color picker. Overlay
+choices and color survive mode switches within that controller session; they
+are not saved as global settings.
+
+The summary falls back to a bounded, whitespace-normalized excerpt of the exact
+original prompt. It is not an AI-authored summary. Local playlists can supply
+one reviewed `promptSummaries` entry per turn. Original messages, package hashes,
+and source bytes are unchanged, and no recording-specific summaries are shipped.
+
+The **HH:MM:SS** stopwatch sums recorded prompt-to-response-completion intervals
+and interpolates each interval during the accelerated output. It holds during
+typing, Pause, and review, excluding idle gaps between responses and later user
+prompts. It is presentation timing, not recovered token timing or model compute
+time. Missing, invalid, overlapping, or out-of-order endpoints disable the timer
+instead of guessing. Hours do not wrap at 24. Capture a screen region containing
+the overlay; a window-only recorder may omit it.
+
+The release-captain handoff and remaining acceptance gates are documented in
+[docs/replay-controls-handoff.md](docs/replay-controls-handoff.md). A source branch
+passing tests does not mean these controls are in the downloadable installer.
+
 For a portable Node runtime outside PATH, pass its executable explicitly:
 
 ```powershell
@@ -160,10 +193,12 @@ redaction, or proof that the source recorded every action. Only one supported
 native VS Code JSONL source is captured per demo. Other agents need a future
 format adapter, not a prompt asking a model to invent the package.
 
-The current Editor package renderer accepts Markdown, thinking, completed tool
-records with identifiers, and known internal metadata. Saved question/edit and
-other richer parts are refused explicitly, not converted to approximate tools
-or silently omitted. External images, links, files, and workspace state are
+The Editor package renderer accepts Markdown, thinking, completed tool records
+with identifiers, known internal metadata, and supported saved questions/edits
+and other archived parts. Those richer parts are displayed as untrusted read-only
+JSON code blocks, not editable or live widgets; Agents uses its supported saved
+displays. Unknown kinds and incomplete tool records are refused explicitly.
+External images, links, files, and workspace state are
 **not bundled**. The capture tool does not retrieve their contents. Native
 Markdown may retain links; do not activate external links during a recording.
 This is portable conversation-payload playback,

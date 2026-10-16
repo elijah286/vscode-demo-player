@@ -1,17 +1,18 @@
 const { chromium } = require('playwright');
 
 class NativeComposer {
-    async connect(port) {
+    async connect(port, mode = 'Agents') {
         if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Native composer requires the isolated window debugging port.');
         this.browser = await chromium.connectOverCDP('http://127.0.0.1:' + port, { timeout: 10000 });
-        this.page = this.browser.contexts()[0].pages().find(page => page.url().includes('/sessions/'));
-        if (!this.page) throw new Error('The native Agents window is not available.');
+        this.agents = mode === 'Agents';
+        this.page = this.browser.contexts()[0].pages().find(page => page.url().includes(this.agents ? '/sessions/' : 'workbench'));
+        if (!this.page) throw new Error('The selected native playback window is not available.');
     }
 
     async focus() {
-        const editor = this.page.locator('.chat-view-chat .interactive-input-part .monaco-editor:visible').first();
+        const editor = this.page.locator(this.agents ? '.chat-view-chat .interactive-input-part .monaco-editor:visible' : '.interactive-input-part .monaco-editor:visible').first();
         await editor.waitFor({ state: 'visible', timeout: 5000 });
-        if (await editor.evaluate(element => !!element.closest('.part.editor'))) throw new Error('Refusing to type into the right-hand editor.');
+        if (this.agents && await editor.evaluate(element => !!element.closest('.part.editor'))) throw new Error('Refusing to type into the right-hand editor.');
         await this.page.bringToFront();
         await editor.scrollIntoViewIfNeeded();
         await editor.click();

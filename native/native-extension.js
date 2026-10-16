@@ -13,7 +13,7 @@ function activate(context) {
         nativeSessionController: typeof vscode.chat.createChatSessionItemController === 'function'
     };
     context.subscriptions.push(vscode.commands.registerCommand('historyReplay.probe', () => capabilities));
-    const state = { phase: 'idle', recording: undefined, recordings: [], turnIndex: 0, history: [], clock: undefined, typed: [], emitted: [], loaded: [] };
+    const state = { phase: 'idle', windowMode: process.env.HISTORY_REPLAY_AGENTS === '1' ? 'Agents' : 'Editor', recording: undefined, recordings: [], turnIndex: 0, history: [], clock: undefined, typed: [], emitted: [], loaded: [] };
     let controlServer;
     let controlReady;
     let recordingHost;
@@ -49,6 +49,11 @@ function activate(context) {
         const part = event.part;
         if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(event.value));
         if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
+        if (['questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(event.kind)) {
+            const content = markdown('');
+            content.appendCodeblock(JSON.stringify(part, null, 2), 'json');
+            return new vscode.ChatResponseMarkdownPart(content);
+        }
         const result = new vscode.ChatToolInvocationPart(part.toolId, part.toolCallId);
         result.invocationMessage = markdown(part.invocationMessage);
         result.isConfirmed = true;
@@ -63,12 +68,12 @@ function activate(context) {
         return result;
     }
 
-    function savedHistory() {
-        const parts = responseTimeline(state.recording.request.response)
+    function savedHistory(recording = state.recording) {
+        const parts = responseTimeline(recording.request.response)
             .filter(event => event.kind !== 'toolPending')
             .map(nativeEvent);
         return [
-            new vscode.ChatRequestTurn(state.recording.request.message.text, undefined, [], 'history-replay.player', []),
+            new vscode.ChatRequestTurn(recording.request.message.text, undefined, [], 'history-replay.player', []),
             new vscode.ChatResponseTurn2(parts, {}, 'history-replay.player')
         ];
     }
@@ -82,6 +87,7 @@ function activate(context) {
                 if (event.kind === 'markdown') state.emitted.push({ kind: 'markdown', value: event.value });
                 else if (event.kind === 'thinking') state.emitted.push({ kind: 'thinking', value: event.part.value });
                 else if (event.kind === 'toolComplete') state.emitted.push({ kind: 'toolInvocationSerialized', toolCallId: event.part.toolCallId });
+                else if (event.kind !== 'toolPending') state.emitted.push({ kind: event.kind, original: event.part });
             }
             await state.clock.waitUntil(state.responseOrigin + RESPONSE_DURATION);
             state.metrics.responseFinished = performance.now();
@@ -124,12 +130,14 @@ function activate(context) {
                 recordingEndpoint = undefined;
                 recordingHost = undefined;
             }
-            if (process.env.HISTORY_REPLAY_AGENTS !== '1' && state.recordings.some(recording => recording.requiresSavedPartsRenderer)) {
-                throw new Error('This complete exchange requires the native Agents saved-question/edit renderer.');
-            }
-            state.turnIndex = 0;
-            state.history = [];
-            state.phase = 'ready';
+            const resumeTurn = Number(process.env.HISTORY_REPLAY_RESUME_TURN ?? '0');
+            if (!Number.isInteger(resumeTurn) || resumeTurn < 0 || resumeTurn > state.recordings.length) throw new Error('Resume turn is outside the selected recording.');
+            state.selection = { file, requestIndex, requestCount, playlistPath: process.env.HISTORY_REPLAY_PLAYLIST, demoPath: process.env.HISTORY_REPLAY_DEMO };
+            state.turnIndex = resumeTurn;
+            state.history = state.windowMode === 'Editor'
+                ? state.recordings.slice(0, resumeTurn).flatMap(savedHistory)
+                : state.recordings.slice(0, resumeTurn).flatMap(recording => [recording.request.message, { originalResponse: recording.request.response }]);
+            state.phase = resumeTurn === state.recordings.length ? 'complete' : resumeTurn ? 'review' : 'ready';
         } catch (error) {
             state.phase = 'error';
             throw error;
@@ -150,13 +158,16 @@ function activate(context) {
             await openReplaySession();
             await vscode.commands.executeCommand('notifications.clearAll');
             const prompt = state.recording.request.message.text;
-            const typingOrigin = state.clock.now();
-            for (const event of promptTimeline(prompt)) {
-                await state.clock.waitUntil(typingOrigin + event.at);
-                await vscode.commands.executeCommand('workbench.action.chat.open', { query: event.text, isPartialQuery: true });
-                state.typed.push(event.text);
-                state.metrics.typingUpdates.push(performance.now());
+            if (!nativeComposer) {
+                nativeComposer = new NativeComposer();
+                await nativeComposer.connect(Number(process.env.HISTORY_REPLAY_CDP_PORT), 'Editor');
+                context.subscriptions.push({ dispose: () => { nativeComposer.close().catch(console.error); } });
             }
+            await nativeComposer.focus();
+            const typingOrigin = state.clock.now();
+            state.metrics.typing = await nativeComposer.typePrompt(prompt, PROMPT_DURATION, state.clock);
+            state.typed = [...promptTimeline(prompt)].map(event => event.text);
+            state.metrics.typingUpdates = state.metrics.typing.frames.map(frame => frame.elapsed);
             await state.clock.waitUntil(typingOrigin + PROMPT_DURATION);
             state.responseOrigin = state.clock.now();
             state.metrics.promptFinished = performance.now();
@@ -201,9 +212,39 @@ function activate(context) {
         }
     }
 
+    function publishHostEvent(event, identities, turnIndex) {
+        if (!identities.has(event.part)) identities.set(event.part, 'recorded-' + turnIndex + '-' + identities.size);
+        const id = identities.get(event.part);
+        if (event.kind === 'markdown') {
+            recordingHost.appendDelta(id, event.value);
+            return { kind: 'markdown', value: event.value };
+        }
+        if (event.kind === 'thinking') {
+            recordingHost.appendPart({ kind: 'reasoning', id, content: Array.isArray(event.part.value) ? event.part.value.join('') : event.part.value });
+            return { kind: 'thinking', value: event.part.value };
+        }
+        if (event.kind === 'toolPending') {
+            const part = event.part;
+            recordingHost.appendPart({ kind: 'toolCall', toolCall: { toolCallId: part.toolCallId, toolName: part.toolId, displayName: part.toolId, status: 'running', invocationMessage: typeof part.invocationMessage === 'string' ? part.invocationMessage : { markdown: part.invocationMessage?.value ?? '' } } });
+        } else if (event.kind === 'toolComplete') {
+            const part = event.part;
+            recordingHost.completeTool(part.toolCallId, { success: !part.isError, pastTenseMessage: typeof part.pastTenseMessage === 'string' ? part.pastTenseMessage : { markdown: part.pastTenseMessage?.value ?? '' } });
+            return { kind: 'toolInvocationSerialized', toolCallId: part.toolCallId };
+        } else {
+            recordingHost.appendSavedPart(event.part);
+            return { kind: event.kind, original: event.part };
+        }
+    }
+
     async function connectMiddlePane() {
         if (!recordingHost) {
             recordingHost = new RecordingAgentHost(state.recordings);
+            for (const [index, recording] of state.recordings.slice(0, state.turnIndex).entries()) {
+                recordingHost.beginTurn(recording.request);
+                const identities = new Map();
+                for (const event of responseTimeline(recording.request.response)) publishHostEvent(event, identities, index);
+                recordingHost.finishTurn(RESPONSE_DURATION);
+            }
             const endpoint = await recordingHost.start();
             recordingEndpoint = endpoint;
             context.subscriptions.push({ dispose: () => { endpoint.close().catch(console.error); } });
@@ -249,25 +290,8 @@ function activate(context) {
             const identities = new Map();
             for (const event of responseTimeline(state.recording.request.response)) {
                 await state.clock.waitUntil(state.responseOrigin + event.at);
-                if (!identities.has(event.part)) identities.set(event.part, 'recorded-' + state.turnIndex + '-' + identities.size);
-                const id = identities.get(event.part);
-                if (event.kind === 'markdown') {
-                    recordingHost.appendDelta(id, event.value);
-                    state.emitted.push({ kind: 'markdown', value: event.value });
-                } else if (event.kind === 'thinking') {
-                    recordingHost.appendPart({ kind: 'reasoning', id, content: Array.isArray(event.part.value) ? event.part.value.join('') : event.part.value });
-                    state.emitted.push({ kind: 'thinking', value: event.part.value });
-                } else if (event.kind === 'toolPending') {
-                    const part = event.part;
-                    recordingHost.appendPart({ kind: 'toolCall', toolCall: { toolCallId: part.toolCallId, toolName: part.toolId, displayName: part.toolId, status: 'running', invocationMessage: typeof part.invocationMessage === 'string' ? part.invocationMessage : { markdown: part.invocationMessage?.value ?? '' } } });
-                } else if (event.kind === 'toolComplete') {
-                    const part = event.part;
-                    recordingHost.completeTool(part.toolCallId, { success: !part.isError, pastTenseMessage: typeof part.pastTenseMessage === 'string' ? part.pastTenseMessage : { markdown: part.pastTenseMessage?.value ?? '' } });
-                    state.emitted.push({ kind: 'toolInvocationSerialized', toolCallId: part.toolCallId });
-                } else if (['questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(event.kind)) {
-                    recordingHost.appendSavedPart(event.part);
-                    state.emitted.push({ kind: event.kind, original: event.part });
-                }
+                const emitted = publishHostEvent(event, identities, state.turnIndex);
+                if (emitted) state.emitted.push(emitted);
             }
             await state.clock.waitUntil(state.responseOrigin + RESPONSE_DURATION);
             recordingHost.finishTurn(RESPONSE_DURATION);

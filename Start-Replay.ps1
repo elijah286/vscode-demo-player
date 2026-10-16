@@ -12,6 +12,8 @@ param(
     [ValidateSet('Editor', 'Agents')]
     [string]$WindowMode = 'Editor',
     [string]$UserDataPath,
+    [ValidateRange(0, 100)]
+    [int]$ResumeTurn = 0,
     [ValidateRange(0, 65535)]
     [int]$RemoteDebuggingPort = 0
 )
@@ -62,7 +64,7 @@ $arguments = @(
     '--skip-release-notes',
     '--disable-telemetry'
 )
-if ($WindowMode -eq 'Agents' -and -not $RemoteDebuggingPort) {
+if (-not $RemoteDebuggingPort) {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
     $listener.Start()
     try { $RemoteDebuggingPort = $listener.LocalEndpoint.Port } finally { $listener.Stop() }
@@ -78,6 +80,7 @@ $start.EnvironmentVariables['HISTORY_REPLAY_REQUEST_COUNT'] = [string]$RequestCo
 $start.EnvironmentVariables['HISTORY_REPLAY_CONTROL_PATH'] = $controlPath
 $start.EnvironmentVariables['HISTORY_REPLAY_AGENTS'] = if ($WindowMode -eq 'Agents') { '1' } else { '0' }
 $start.EnvironmentVariables['HISTORY_REPLAY_CDP_PORT'] = [string]$RemoteDebuggingPort
+$start.EnvironmentVariables['HISTORY_REPLAY_RESUME_TURN'] = [string]$ResumeTurn
 if ($PlaylistPath) { $start.EnvironmentVariables['HISTORY_REPLAY_PLAYLIST'] = $PlaylistPath }
 else { $start.EnvironmentVariables.Remove('HISTORY_REPLAY_PLAYLIST') }
 if ($DemoPath) { $start.EnvironmentVariables['HISTORY_REPLAY_DEMO'] = $DemoPath }
