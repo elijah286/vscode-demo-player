@@ -145,6 +145,7 @@ $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
 function Set-IdleView {
+    $script:lastView = $script:selectedDemo.presentation
     $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Select or capture a conversation' }
     $status.ToolTip = $status.Text
     $chooseDemo.Content = if ($script:selectedDemo) { $script:selectedDemo.title } else { 'Select a demo...' }
@@ -452,7 +453,6 @@ $timer.Add_Tick({
             $script:modeUpdating = $true
             try { $windowMode.SelectedIndex = if ($view.windowMode -eq 'Agents') { 1 } else { 0 } } finally { $script:modeUpdating = $false }
             $windowMode.IsEnabled = [bool]$view.modeSwitchEnabled -and -not $script:actionTask
-            $script:overlayWindow.Owner = $window
             Update-ReplayOverlays
         }
         if ($script:client -and -not $script:stateTask) { $script:stateTask = $script:client.GetAsync('state') }

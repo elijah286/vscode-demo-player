@@ -312,6 +312,17 @@ try {
     Invoke-Button $dialog 'SelectDemo'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'selected demo ready' | Out-Null
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
+    $showPrompt = Find-Element $window 'Id' 'ShowPrompt'
+    $showElapsed = Find-Element $window 'Id' 'ShowElapsed'
+    if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) { throw 'Selected demo presentation options must be enabled before Open.' }
+    if (Get-AppWindow 'Playback overlay') { throw 'Presentation must default to hidden.' }
+    ([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay before Open'
+    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -ne 'Show the first recorded interaction.') { throw 'Selected demo prompt preview is incorrect.' }
+    if ((Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:00:00') { throw 'Selected demo timer must start at zero.' }
+    if ((Find-Element $overlay 'Id' 'PromptProgress').Current.Name -ne '1/2') { throw 'Selected demo progress preview is incorrect.' }
+    Save-WindowImage $overlay 'overlay-before-open.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
@@ -319,6 +330,8 @@ try {
     $replayId = [int]$replay.ProcessId
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' -and (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'Open prepares target without starting playback' 50 | Out-Null
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable before the first exchange.' }
+    if (([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On -or
+        ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { throw 'Open must preserve presentation choices.' }
     Save-WindowImage $window 'controller-open-ready.png'
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Play') { throw 'Open started playback without a second click.' }
     Invoke-Button $window 'PlayPause'
@@ -340,6 +353,10 @@ try {
     Wait-Until { (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'controller remains available after stop' | Out-Null
     if (-not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue)) { throw 'Stop closed the standalone controller.' }
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'Stopped targets must return the primary control to Open.' }
+    if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) { throw 'Presentation options must remain available after Stop.' }
+    $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay after Stop'
+    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -ne 'Show the first recorded interaction.' -or
+        (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:00:00') { throw 'Stop must restore the selected demo presentation, not stale playback progress.' }
     Save-WindowImage $window 'controller-after-stop.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {

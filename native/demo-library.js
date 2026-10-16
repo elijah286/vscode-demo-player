@@ -5,6 +5,7 @@ const { fileURLToPath } = require('node:url');
 const { sdkSnapshot } = require('./sdk-transcript');
 const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf } = require('./replay');
 const { INTERNAL_PARTS, inlineReferenceLabel, savedEditText } = require('./saved-parts');
+const { controlView } = require('./control-server');
 
 const FORMAT = 'vscode-demo-recording';
 const MAX_BYTES = 100 * 1024 * 1024;
@@ -183,7 +184,9 @@ async function libraryIds(root) {
 }
 
 function summarize(entry) {
-    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice };
+    const recordings = entry.recording.turns.map(turn => extractRecording('', turn.snapshot, 0));
+    const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
+    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
 }
 
 async function listDemos(root) {

@@ -58,6 +58,7 @@ function Update-ReplayOverlays {
     $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
     $script:overlayWindow.MinHeight = if ($promptVisible) { 132 } else { 104 }
     if ($promptVisible -or $timerVisible) {
+        $script:overlayWindow.Owner = $window
         if (-not $script:overlayWindow.IsVisible) { $script:overlayWindow.Show() }
     } else { $script:overlayWindow.Hide() }
 }

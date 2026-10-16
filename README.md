@@ -324,8 +324,12 @@ or recorded tool execution is submitted. Agents requires a compatible, signed-in
 dedicated window; its authentication/native UI gate remains experimental.
 
 **Show prompt summary** and **Show elapsed time** are off by default. Either or
-both appear in one movable, rounded overlay with an orange-yellow frame. Click
-the **Overlay frame** swatch to use the native Windows color picker. Overlay
+both appear in one movable, rounded overlay with an orange-yellow frame. Use
+either checkbox as soon as a demo is selected, before **Open**: the overlay
+previews its first prompt and starts valid recorded timing at **00:00:00**.
+Opening playback preserves these choices; Stop restores the selected-demo preview.
+The timer remains disabled when the saved recording lacks valid timing endpoints.
+Click the **Overlay frame** swatch to use the native Windows color picker. Overlay
 choices and color survive mode switches within that controller session; they
 are not saved as global settings.
 

@@ -49,6 +49,58 @@ test('preview fingerprint prevents capturing a changed conversation', async cont
     await assert.rejects(library.createPackage(source, [0], 'Demo'), /Inspect/);
 });
 
+test('selected demo presentation is ready before opening playback and survives missing sources', async context => {
+    const { source, root } = await fixture(context);
+    await fs.appendFile(source, [
+        { kind: 1, k: ['requests', 0, 'timestamp'], v: 1000 },
+        { kind: 1, k: ['requests', 0, 'modelState'], v: { completedAt: 61000 } },
+        { kind: 1, k: ['requests', 1, 'timestamp'], v: 100000 },
+        { kind: 1, k: ['requests', 1, 'modelState'], v: { completedAt: 222000 } }
+    ].map(record => JSON.stringify(record)).join('\n') + '\n');
+    const inspection = await library.inspectTranscript(source);
+    const recording = await library.createPackage(source, [0, 1], 'Presentation demo', inspection.sha256);
+    const added = await library.addPackage(root, recording);
+    const before = await fs.readFile(path.join(root, added.id + '.demo.json'));
+    await fs.unlink(source);
+    const [selected] = await library.listDemos(root);
+    const recordings = await library.packageRecordings(path.join(root, selected.id + '.demo.json'));
+    const { overlay, progress } = require('../control-server').controlView({ phase: 'ready', turnIndex: 0, recordings });
+    assert.deepEqual(selected.presentation, { overlay, progress });
+    assert.deepEqual(added.presentation, selected.presentation);
+    assert.equal(selected.presentation.overlay.promptSummary, 'First original prompt \u03bb');
+    assert.equal(selected.presentation.overlay.elapsed, '00:00:00');
+    assert.equal(selected.presentation.progress, '1/2');
+    assert.deepEqual(await fs.readFile(path.join(root, added.id + '.demo.json')), before);
+    await library.renameDemo(root, selected.id, 'Renamed presentation');
+    assert.deepEqual((await library.listDemos(root))[0].presentation, selected.presentation);
+    const cli = spawnSync(process.execPath, [path.join(__dirname, '..', 'library-cli.js')], {
+        input: JSON.stringify({ command: 'list', root }), encoding: 'utf8'
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.deepEqual(JSON.parse(cli.stdout).result[0].presentation, selected.presentation);
+});
+
+test('selected demo presentation keeps the prompt but does not invent missing or invalid timing', async context => {
+    const { source, root, inspection } = await fixture(context);
+    const recording = await library.createPackage(source, [0, 1], 'Untimed demo', inspection.sha256);
+    for (const [index, timings] of [
+        [undefined, undefined],
+        [{ timestamp: 1000, modelState: { completedAt: 61000 } }, undefined],
+        [{ timestamp: 1000, modelState: { completedAt: 61000 } }, { timestamp: 60000, modelState: { completedAt: 70000 } }],
+        [{ timestamp: 1000, modelState: { completedAt: 0 } }, { timestamp: 60000, modelState: { completedAt: 70000 } }]
+    ].entries()) {
+        const value = structuredClone(recording);
+        value.turns.forEach((turn, index) => {
+            Object.assign(turn.snapshot.requests[0], timings[index]);
+            turn.sha256 = require('node:crypto').createHash('sha256').update(JSON.stringify(turn.snapshot)).digest('hex');
+        });
+        const added = await library.addPackage(path.join(root, String(index)), value);
+        assert.equal(added.presentation.overlay.promptSummary, 'First original prompt \u03bb');
+        assert.equal(added.presentation.overlay.elapsed, null);
+        assert.equal(added.presentation.overlay.elapsedMs, null);
+    }
+});
+
 test('available selections capture successfully while incomplete exchanges remain inspectable and unchanged', async context => {
     const { source, root, inspection } = await fixture(context);
     const before = await fs.readFile(source);
