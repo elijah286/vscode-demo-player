@@ -53,7 +53,7 @@ try {
     $turns = $dialog.FindName('Turns')
     Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($turns)) $true 'Exchange rows are virtualized'
     Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetVirtualizationMode($turns)) 'Recycling' 'Exchange containers are recycled'
-    $dialog.Tag = [pscustomobject]@{ UpdatingTurns = $false }
+    $dialog.Tag = @{ UpdatingTurns = $false }
     $turns.ItemsSource = @(
         [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; error = $null } },
         [pscustomobject]@{ Turn = [pscustomobject]@{ index = 1; error = 'Malformed prompt' } },
@@ -74,6 +74,105 @@ try {
     Assert-Equal $turns.SelectedItems[1].Turn.index 2 'A partial SDK exchange remains selected'
     Assert-Equal $dialog.Tag.UpdatingTurns $false 'Bulk selection guard is restored'
     Assert-Equal $script:selectionUpdates 1 'Bulk selection triggers exactly one preview update'
+    function Get-CaptureBlock([string]$Variable) {
+        $assignment = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq ('$' + $Variable)
+        }.GetNewClosure(), $true)
+        if (-not $assignment) { throw ('Production block not found: ' + $Variable) }
+        return $assignment.Right.Expression.ScriptBlock.GetScriptBlock()
+    }
+    $sessions = $dialog.FindName('Sessions')
+    $sourceBox = $dialog.FindName('Source')
+    $captureStatus = $dialog.FindName('CaptureStatus')
+    $title = $dialog.FindName('Title')
+    $reviewed = $dialog.FindName('Reviewed')
+    $preview = $dialog.FindName('Preview')
+    $save = $dialog.FindName('Save')
+    Assert-Equal $save.IsEnabled $false 'Save is disabled before loading'
+    $script:testInspection = [pscustomobject]@{
+        title = 'Mixed conversation'
+        turns = @(
+            [pscustomobject]@{ index = 0; prompt = 'Available'; content = 'Saved answer' },
+            [pscustomobject]@{ index = 1; prompt = 'Incomplete'; error = 'Missing: completion result.' },
+            [pscustomobject]@{ index = 2; prompt = 'Partial SDK'; sdkCompletion = 'partial' }
+        )
+    }
+    function Invoke-DemoLibrary { param($Request, $Owner) return $script:testInspection }
+    $loadSource = Get-CaptureBlock 'loadSource'
+    & $loadSource 'synthetic.jsonl'
+    Assert-Equal $turns.Items.Count 3 'Loading keeps unavailable exchanges visible'
+    Assert-Equal $turns.SelectedItems.Count 2 'Loading selects only available exchanges'
+    Assert-Equal $turns.SelectedItems[1].Turn.index 2 'Loading includes supported partial SDK exchanges'
+    Assert-Equal $dialog.Tag.UpdatingTurns $false 'Loading restores bulk selection guard'
+    $updateSaveState = Get-CaptureBlock 'updateSaveState'
+    $updatePreview = Get-CaptureBlock 'updatePreview'
+    $previewTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $previewTimer.Interval = [TimeSpan]::FromMinutes(1)
+    $previewTick = $ast.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Member.Value -eq 'Add_Tick' -and $node.Expression.Extent.Text -eq '$previewTimer'
+    }, $true).Arguments[0].ScriptBlock.GetScriptBlock()
+    foreach ($event in @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Arguments.Count -eq 1 -and $node.Arguments[0].Extent.Text -eq '$updateSaveState'
+    }, $true))) { & ([scriptblock]::Create($event.Extent.Text)) }
+    & $updatePreview
+    Assert-Equal ($captureStatus.Text -match '1 unavailable exchanges excluded.*Exchange 2: Missing: completion result') $true 'Excluded count and exact reason are explicit'
+    Assert-Equal $save.IsEnabled $false 'Save stays disabled until preview and review'
+    & $previewTick
+    $reviewed.IsChecked = $true
+    Assert-Equal $save.IsEnabled $true 'Valid reviewed available selection enables Save'
+    $title.Text = ' '
+    Assert-Equal $save.IsEnabled $false 'Blank title disables Save'
+    $title.Text = 'Valid title'
+    Assert-Equal $save.IsEnabled $true 'Corrected title enables Save'
+    $reviewed.IsChecked = $false
+    Assert-Equal $save.IsEnabled $false 'Revoking review disables Save'
+    $reviewed.IsChecked = $true
+    $turns.SelectAll()
+    & $updatePreview
+    & $previewTick
+    $reviewed.IsChecked = $true
+    Assert-Equal $save.IsEnabled $false 'Review cannot enable Save with unavailable selections'
+    Assert-Equal ($captureStatus.Text -match 'Use Select available') $true 'Invalid selection explains recovery'
+    & ($selectAvailable.Arguments[0].ScriptBlock.GetScriptBlock())
+    Assert-Equal $reviewed.IsChecked $false 'Changing selection invalidates prior review'
+    Assert-Equal $save.IsEnabled $false 'Selection changes disable Save while preview is pending'
+    & $previewTick
+    $reviewed.IsChecked = $true
+    Assert-Equal $save.IsEnabled $true 'Select available recovers the valid capture workflow'
+    $turns.UnselectAll()
+    & $updatePreview
+    & $previewTick
+    Assert-Equal $save.IsEnabled $false 'Empty selection disables Save'
+    Assert-Equal $reviewed.IsEnabled $false 'Empty preview cannot be acknowledged'
+    Assert-Equal ($captureStatus.Text -match 'Select 1 to 100') $true 'Empty selection explains required action'
+    foreach ($case in @(
+        @{ Turns = @(); Selected = 0; Status = 'no saved exchanges' },
+        @{ Turns = @($script:testInspection.turns[1]); Selected = 0; Status = 'No available exchanges' },
+        @{ Turns = @(0..100 | ForEach-Object { [pscustomobject]@{ index = $_; prompt = 'Available' } }); Selected = 101; Status = 'at most 100' }
+    )) {
+        $script:testInspection = [pscustomobject]@{ title = 'Boundary conversation'; turns = $case.Turns }
+        & $loadSource 'boundary.jsonl'
+        Assert-Equal $turns.SelectedItems.Count $case.Selected 'Default selection is not silently capped'
+        Assert-Equal ($captureStatus.Text -match $case.Status) $true ('Boundary status: ' + $case.Status)
+        & $previewTick
+        $reviewed.IsChecked = $true
+        & $updateSaveState
+        Assert-Equal $save.IsEnabled $false 'Invalid boundaries cannot be saved even with review'
+    }
+    $turns.SelectedItems.RemoveAt(100)
+    & $updatePreview
+    & $previewTick
+    $reviewed.IsChecked = $true
+    Assert-Equal $save.IsEnabled $true 'Exactly 100 available reviewed exchanges can be saved'
+    $dialog.Tag.Inspection = $null
+    & $updateSaveState
+    Assert-Equal $save.IsEnabled $false 'Save requires a loaded inspection'
+    $previewTimer.Stop()
 } finally { $dialog.Close() }
 $first = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; prompt = ('x' * 100000); content = 'FIRST CONTENT'; details = 'FIRST RAW'; error = 'Explicit unavailable reason' } }
 $second = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 1; prompt = 'Second'; content = 'SECOND CONTENT'; details = 'SECOND RAW' } }

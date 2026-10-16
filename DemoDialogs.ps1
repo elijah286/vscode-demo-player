@@ -123,6 +123,13 @@ function Get-DemoTurnLabel($Turn) {
     return $label
 }
 
+function Select-DemoAvailableTurns($Turns) {
+    $Turns.UnselectAll()
+    foreach ($item in $Turns.Items) {
+        if (-not $item.Turn.error) { $Turns.SelectedItems.Add($item) | Out-Null }
+    }
+}
+
 function Get-DemoSelectionPreview([object[]]$Items, [bool]$RawPayload) {
     $text = [Text.StringBuilder]::new()
     $truncated = $false
@@ -226,12 +233,12 @@ function Show-CaptureDialog($Owner) {
   <TextBox x:Name="Preview" Grid.Row="4" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
   <StackPanel Grid.Row="5">
    <CheckBox x:Name="RawPayload" Content="Show full saved payload (tools and metadata)" Margin="0,0,0,6" AutomationProperties.AutomationId="CaptureRawPayload"/>
-   <TextBlock Text="All exchanges are selected on load. Use Ctrl+A or Ctrl/Shift to adjust; save up to 100 in source order. Large previews are limited; captured content is unchanged." TextWrapping="Wrap"/>
+   <TextBlock Text="Available exchanges are selected on load; unavailable entries remain visible for inspection. Use Ctrl+A or Ctrl/Shift to adjust; save up to 100 in source order. Large previews are limited; captured content is unchanged." TextWrapping="Wrap"/>
    <TextBox x:Name="Title" Margin="0,5,0,8" MaxLength="160" AutomationProperties.AutomationId="CaptureTitle"/>
    <CheckBox x:Name="Reviewed" Content="I reviewed the selected content for secrets. External assets are not bundled; playback uses saved payloads only." AutomationProperties.AutomationId="CaptureReviewed"/>
   </StackPanel>
   <DockPanel Grid.Row="6" Margin="0,12,0,0">
-   <Button x:Name="Save" Content="Save Demo" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
+   <Button x:Name="Save" Content="Save Demo" IsEnabled="False" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
    <TextBlock x:Name="CaptureStatus" TextWrapping="Wrap" Margin="0,0,12,0"/>
   </DockPanel>
  </Grid>
@@ -459,7 +466,7 @@ function Show-CaptureDialog($Owner) {
             $turns.ItemsSource = @($inspection.turns | ForEach-Object {
                 [pscustomobject]@{ Label = Get-DemoTurnLabel $_; Turn = $_ }
             })
-            $turns.SelectAll()
+            Select-DemoAvailableTurns $turns
         } finally { $dialog.Tag.UpdatingTurns = $false }
         $displayTitle = if ($sessions.SelectedItem -and $sessions.SelectedItem.File -eq $File) { $sessions.SelectedItem.Title } else { $inspection.title }
         $title.Text = if ($displayTitle.Length -gt 160) { $displayTitle.Substring(0,160) } else { $displayTitle }
@@ -481,13 +488,26 @@ function Show-CaptureDialog($Owner) {
             if ($file) { & $loadSource $file }
         } catch { Show-DemoError $dialog $_ }
     })
+    $updateSaveState = {
+        $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
+        $dialog.FindName('Save').IsEnabled = (
+            $null -ne $dialog.Tag.Inspection -and
+            $turns.SelectedItems.Count -ge 1 -and $turns.SelectedItems.Count -le 100 -and
+            $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true -and
+            -not [string]::IsNullOrWhiteSpace($title.Text)
+        )
+    }
+    $reviewed.Add_Checked($updateSaveState)
+    $reviewed.Add_Unchecked($updateSaveState)
+    $title.Add_TextChanged($updateSaveState)
     $previewTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
     $previewTimer.Interval = [TimeSpan]::FromMilliseconds(75)
     $previewTimer.Add_Tick({
         $previewTimer.Stop()
         if ($dialog.Tag.Inspection) {
             $preview.Text = Get-DemoSelectionPreview @($turns.SelectedItems) ([bool]$dialog.FindName('RawPayload').IsChecked)
-            $reviewed.IsEnabled = $true
+            $reviewed.IsEnabled = $turns.SelectedItems.Count -gt 0
+            & $updateSaveState
         }
     })
     $dialog.Add_Closed({ $previewTimer.Stop() })
@@ -498,12 +518,22 @@ function Show-CaptureDialog($Owner) {
         $preview.Text = ''
         $dialog.FindName('SelectionCount').Text = $turns.SelectedItems.Count.ToString() + ' of ' + $turns.Items.Count + ' exchanges selected'
         $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
+        $sourceUnavailable = @($turns.Items | Where-Object { $_.Turn.error })
         $captureStatus.Text = if ($turns.SelectedItems.Count -gt 100) {
             'A demo supports at most 100 exchanges. Reduce the selection before saving.'
         } elseif ($unavailable.Count) {
             $first = $unavailable[0].Turn
             $unavailable.Count.ToString() + ' selected exchanges cannot be captured. Use Select available. Exchange ' + ($first.index + 1) + ': ' + $first.error
+        } elseif (-not $turns.SelectedItems.Count) {
+            if (-not $turns.Items.Count) { 'This conversation has no saved exchanges.' }
+            elseif ($sourceUnavailable.Count -eq $turns.Items.Count) { 'No available exchanges can be captured from this saved conversation.' }
+            else { 'Select 1 to 100 available exchanges.' }
         } else { 'Review the selected saved content, then Save Demo.' }
+        if ($sourceUnavailable.Count -and -not $unavailable.Count) {
+            $first = $sourceUnavailable[0].Turn
+            $captureStatus.Text += ' ' + $sourceUnavailable.Count + ' unavailable exchanges excluded; still visible for inspection. Exchange ' + ($first.index + 1) + ': ' + $first.error
+        }
+        & $updateSaveState
         $previewTimer.Stop()
         $previewTimer.Start()
     }
@@ -511,10 +541,7 @@ function Show-CaptureDialog($Owner) {
     $dialog.FindName('SelectAvailable').Add_Click({
         $dialog.Tag.UpdatingTurns = $true
         try {
-            $turns.UnselectAll()
-            foreach ($item in $turns.Items) {
-                if (-not $item.Turn.error) { $turns.SelectedItems.Add($item) | Out-Null }
-            }
+            Select-DemoAvailableTurns $turns
         } finally { $dialog.Tag.UpdatingTurns = $false }
         & $updatePreview
     })

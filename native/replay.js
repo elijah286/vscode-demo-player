@@ -126,7 +126,14 @@ function extractRecording(file, snapshot, requestIndex) {
     const partialSdk = request?.sdkCompletion === 'partial' && request.sdkSessionStart?.type === 'session.start' &&
         request.sdkSessionStart.data?.version === 1 && Array.isArray(request.sdkEvents);
     if ((!request?.result && !partialSdk) || typeof request.message?.text !== 'string' || !Array.isArray(request.response)) {
-        throw new Error('The selected request is absent or incomplete in the saved transcript.');
+        const missing = [];
+        if (!request) missing.push('request record');
+        else {
+            if (!request.result && !partialSdk) missing.push('completion result');
+            if (typeof request.message?.text !== 'string') missing.push('prompt text');
+            if (!Array.isArray(request.response)) missing.push('response array');
+        }
+        throw new Error('The selected request is absent or incomplete in the saved transcript. Missing: ' + missing.join(', ') + '. Reload after the conversation finishes saving; missing content cannot be reconstructed.');
     }
     const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(request.response.map(kindOf).filter(kind => !supported.has(kind)))];

@@ -259,10 +259,14 @@ package; older players that only support native recordings will reject them.
 Captures containing unfinished SDK exchanges require this player update; earlier
 SDK-capable builds still reject exchanges without a completed final answer.
 
-All exchanges are selected when a conversation loads. Use **Select all** or
+Available exchanges are selected when a conversation loads. Unavailable entries
+remain visible for inspection; the status reports how many were excluded and
+the first reason. Use **Select all** or
 **Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
 to adjust the selection. **Select available** excludes genuinely unreadable
-exchanges; the status names the first error before saving. A demo can contain up to 100 exchanges; larger
+exchanges, including after using Select all. Save Demo stays disabled for empty,
+unavailable, or oversized selections, until the current preview is ready and
+reviewed and the title is nonblank. A demo can contain up to 100 exchanges; larger
 selections show an explicit warning rather than being silently reduced.
 Review the readable prompt/response preview. Exchange rows use short labels and
 recycled containers; preview updates are coalesced over 75 ms and limited to
@@ -274,7 +278,12 @@ Capture always preserves the full selected content, not the shortened preview.
 Give the demo a title, acknowledge the privacy/asset
 notice, and Save Demo. UI capture follows source order; the underlying capture
 API also accepts explicitly ordered distinct indices. Partial or unsupported
-exchanges are marked unavailable with a reason; nothing is silently dropped.
+native exchanges are marked unavailable with a reason; nothing is silently dropped.
+An absent/incomplete request error identifies missing saved fields (request
+record, completion result, prompt text, or response array). It does not
+necessarily mean the entire exchange disappeared: interrupted or still-saving
+native requests may lack a completion result even when some text is present.
+Reload after saving completes; the player cannot reconstruct missing content.
 If the source changes after preview, reload and review it before capture.
 Saved inline file/symbol references are supported in Editor playback as inert,
 escaped labels; linked external content is not fetched or bundled. Completed

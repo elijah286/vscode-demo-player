@@ -37,6 +37,29 @@ test('refuses incomplete requests and unsupported edit records', async context =
     await assert.rejects(readRecording(unsupported, -1), /nonnegative/);
 });
 
+test('incomplete request diagnostics identify missing saved fields without changing the source', async context => {
+    const complete = { result: {}, message: { text: 'Saved prompt' }, response: [{ value: 'Saved answer' }] };
+    const cases = [
+        [null, 'request record'],
+        [{ ...complete, result: undefined }, 'completion result'],
+        [{ ...complete, message: {} }, 'prompt text'],
+        [{ ...complete, response: undefined }, 'response array'],
+        [{}, 'completion result, prompt text, response array']
+    ];
+    for (const [request, missing] of cases) {
+        const file = await fixture(context, request);
+        const before = await fs.readFile(file);
+        await assert.rejects(readRecording(file, 0), error => {
+            assert.ok(error.message.includes('Missing: ' + missing + '.'));
+            assert.match(error.message, /missing content cannot be reconstructed/);
+            return true;
+        });
+        assert.deepEqual(await fs.readFile(file), before);
+    }
+    const file = await fixture(context, complete);
+    await assert.rejects(readRecording(file, 1), /Missing: request record\./);
+});
+
 test('a paused clock advances exactly one wait when stepped', { timeout: 1000 }, async () => {
     const clock = new PlaybackClock(8);
     clock.setPaused(true);

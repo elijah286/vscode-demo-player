@@ -49,6 +49,23 @@ test('preview fingerprint prevents capturing a changed conversation', async cont
     await assert.rejects(library.createPackage(source, [0], 'Demo'), /Inspect/);
 });
 
+test('available selections capture successfully while incomplete exchanges remain inspectable and unchanged', async context => {
+    const { source, root, inspection } = await fixture(context);
+    const before = await fs.readFile(source);
+    assert.equal(inspection.turns.length, 3);
+    assert.match(inspection.turns[2].error, /Missing: completion result\./);
+    assert.match(inspection.turns[2].details, /Incomplete/);
+    const indices = inspection.turns.filter(turn => !turn.error).map(turn => turn.index);
+    assert.deepEqual(indices, [0, 1]);
+    const recording = await library.createPackage(source, indices, 'Available exchanges', inspection.sha256);
+    const added = await library.addPackage(root, recording);
+    const playback = await library.packageRecordings(path.join(root, added.id + '.demo.json'));
+    assert.equal(playback.length, 2);
+    assert.equal(playback[1].request.message.text, 'Second original prompt');
+    assert.deepEqual(await fs.readFile(source), before);
+    assert.deepEqual(await library.inspectTranscript(source), inspection);
+});
+
 test('completed code edits survive capture, library storage, export/import and missing original files', async context => {
     const { directory, source, root } = await fixture(context);
     const target = path.join(directory, 'original-source.js');

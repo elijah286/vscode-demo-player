@@ -47,11 +47,13 @@ $snapshot = @{
                     state = @{ applied = 1; sha1 = 'synthetic-original-metadata' }
                 }
             ) },
-            @{ timestamp = 1700001000000; modelState = @{ completedAt = 1700001122000 }; result = @{}; message = @{ text = 'Show the next recorded interaction.' }; response = @(@{ value = 'Second recorded answer. No live model or tools were invoked.' }) }
+            @{ timestamp = 1700001000000; modelState = @{ completedAt = 1700001122000 }; result = @{}; message = @{ text = 'Show the next recorded interaction.' }; response = @(@{ value = 'Second recorded answer. No live model or tools were invoked.' }) },
+            @{ message = @{ text = 'Interrupted native request without a completion result.' }; response = @(@{ value = 'Some text was saved, but completion was not.' }) }
         )
     }
 }
 [System.IO.File]::WriteAllText($source, ($snapshot | ConvertTo-Json -Depth 20 -Compress) + "`n", $utf8)
+$sourceBeforeCapture = [IO.File]::ReadAllText($source)
 . (Join-Path $root 'DemoDialogs.ps1')
 $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
 $script:LibraryRoot = $library
@@ -259,7 +261,9 @@ try {
     ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($source)
     Invoke-Button $capture 'Load'
     $turnList = Find-Element $capture 'Id' 'CaptureTurns'
-    Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 2 exchanges selected' } 'replacement conversation selects both exchanges by default' | Out-Null
+    Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 3 exchanges selected' } 'replacement conversation selects only available exchanges by default' | Out-Null
+    if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Save must remain disabled before reviewing the replacement selection.' }
+    if ((Find-Element $capture 'Id' 'CaptureStatus').Current.Name -notmatch '1 unavailable exchanges excluded.*Missing: completion result') { throw 'Excluded exchange count and missing saved field must be explicit.' }
     $turnItems = $turnList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     if ($turnItems[0].Current.Name -match 'Unavailable|Unknown') { throw 'Valid saved references must not make the exchange unavailable.' }
     if ($turnItems[0].Current.Name -notmatch '\[Read-only edits\]') { throw 'Saved code edits must be labeled as read-only, not unavailable.' }
@@ -277,14 +281,25 @@ try {
     $reviewed = Find-Element $capture 'Id' 'CaptureReviewed'
     Wait-Until { $reviewed.Current.IsEnabled } 'latest preview is ready for privacy review' | Out-Null
     ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Wait-Until { (Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled } 'reviewed valid selection can be saved' | Out-Null
+    Invoke-Button $capture 'CaptureSelectAll'
+    Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '3 of 3 exchanges selected' } 'Select all includes unavailable entries for inspection' | Out-Null
+    Wait-Until { $reviewed.Current.IsEnabled } 'unavailable selection preview is ready' | Out-Null
+    ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Acknowledging an unavailable selection must not enable Save.' }
+    Invoke-Button $capture 'CaptureSelectAvailable'
+    Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 3 exchanges selected' -and $reviewed.Current.IsEnabled } 'Select available restores the valid preview' | Out-Null
+    if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Selection changes must invalidate the prior review.' }
+    ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Save-WindowImage $capture 'capture.png'
-    if ((Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -ne '2 of 2 exchanges selected') { throw 'Preview controls or focus changes altered the selected exchanges.' }
+    if ((Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -ne '2 of 3 exchanges selected') { throw 'Preview controls or focus changes altered the selected exchanges.' }
     Invoke-Button $capture 'SaveDemo'
     Wait-Until { -not (Get-AppWindow 'Capture Conversation') } 'capture dialog saves and closes' | Out-Null
     $entries = @(Invoke-DemoLibrary @{ command = 'list' })
     if ($entries.Count -ne 2) { throw 'UI capture did not persist the second demo.' }
     if (-not ($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB))) { throw 'The PowerShell bridge did not preserve the Unicode capture title.' }
     if (($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB)).count -ne 2) { throw 'Capture did not save both default-selected exchanges.' }
+    if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Capture changed the original saved conversation.' }
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     $capturedItem = @($items | Where-Object { $_.Current.Name -like '*Captured through UI*' })[0]
     if (-not $capturedItem) { throw 'Captured demo was not added to the library dialog.' }
