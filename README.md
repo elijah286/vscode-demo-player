@@ -10,8 +10,8 @@
 2. Open **VS Code Demo Player** from the Windows Start menu.
 3. Use **Capture Conversation** for a local saved chat, or **Manage Demos >
    Import Recording** for an exported `.demo-recording.json` package.
-4. Select the demo and press **Play**. The app opens its own isolated VS Code
-   window automatically; you do not need to open VS Code first.
+4. Select the demo and press **Open** to prepare its isolated VS Code target.
+   Once ready, press **Play** to start the first recorded exchange.
 
 Requires x64 Windows 10/11 and compatible desktop VS Code 1.140 or later.
 Node.js is bundled: no npm, PowerShell commands, or repository checkout are
@@ -37,6 +37,45 @@ This repository isolates the reusable playback tooling from its
 original application project. It contains no original conversations, demo
 selections, application source, recorded assets, or generated evidence.
 The original workspace remains untouched.
+
+## Canonical development checkout
+
+Use the existing `%USERPROFILE%\Documents\GitHub\vscode-demo-player` folder,
+connected to `https://github.com/elijah286/vscode-demo-player.git`. Open it with
+**File > Open Folder** or `code .` from that folder. `main` tracks `origin/main`;
+feature and integration branches live in this same checkout, one writer at a
+time. Legacy `vscode-demo-player-*` siblings are recovery sources, not alternate
+development defaults. Creating more clones/worktrees requires explicit approval.
+
+Before editing, verify the Git root, branch/status, upstream, and sanitized
+origin. Coordinate existing work before switching branches. Read
+[AGENTS.md](AGENTS.md) and [the workflow runbook](docs/RELEASING.md).
+Consolidation is not permission to delete recovery sources, push, or publish.
+
+For source development, install Node.js 22.23.3 with npm, then run:
+
+```powershell
+Set-Location "$env:USERPROFILE\Documents\GitHub\vscode-demo-player"
+Set-Location native
+npm ci
+npm run test:unit
+npm run lint
+Set-Location ..
+.\Start-DemoPlayer.ps1 -NodePath (Get-Command node.exe).Source
+```
+
+Install dependencies in this checkout; never borrow another project's
+`node_modules` through a junction. Keep recordings/settings, generated evidence,
+and temporary helpers outside tracked application source. Use synthetic libraries
+and isolated profiles for the validation commands below, not the real demo library.
+
+**Open** never starts playback. While the target prepares, playback remains
+disabled; failures and readiness timeouts are reported. After each exchange,
+**Start Over** restarts the entire selected demo, **Next Step** plays the next
+prompt/response exchange, and **Stop** closes only the paired target. Next Step
+is disabled after the final exchange. Closing the target returns the controller
+to Open. The extension's separate keyboard **Step** command still advances one
+timed event; it is not the controller's Next Step.
 
 ## Application updates
 
@@ -256,8 +295,9 @@ Delete requires confirmation and affects only that library copy. Exports never
 overwrite an existing destination, even after the standard save dialog's
 overwrite confirmation; choose a new filename.
 
-**Play** launches a dedicated VS Code window and starts the first exchange once
-ready. After each answer, Play advances the next exchange; Pause/Resume freezes
+**Open** launches a dedicated VS Code window without playback. Once ready,
+**Play** starts the first exchange. After each answer, **Next Step** advances
+one exchange or **Start Over** restarts the selected demo. Pause/Resume freezes
 the current timeline. **Stop** closes only the isolated replay window and leaves
 Demo Player ready to run again. Closing Demo Player stops its paired window
 before exiting. A completed demo stays visible until Stop.

@@ -296,31 +296,53 @@ try {
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'selected demo ready' | Out-Null
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     } 'isolated replay process'
     $replayId = [int]$replay.ProcessId
-    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'playback automatically starts after preparation' 50 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' -and (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'Open prepares target without starting playback' 50 | Out-Null
+    if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable before the first exchange.' }
+    Save-WindowImage $window 'controller-open-ready.png'
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Play') { throw 'Open started playback without a second click.' }
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'explicit Play starts playback' | Out-Null
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' } 'paused playback' | Out-Null
     Save-WindowImage $window 'controller-paused.png'
     Invoke-Button $window 'PlayPause'
-    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'first answer review' | Out-Null
-    Invoke-Button $window 'PlayPause'
-    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Finished' } 'second answer complete' | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' -and (Find-Element $window 'Id' 'NextStep').Current.IsEnabled } 'first answer review offers restart and next exchange' | Out-Null
+    Invoke-Button $window 'NextStep'
+    Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'second answer complete' | Out-Null
+    if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable after the final exchange.' }
     Save-WindowImage $window 'controller-finished.png'
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Start Over restarts the selected demo' | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'Start Over returns to first exchange' | Out-Null
     Invoke-Button $window 'Stop'
     Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'scoped replay closes' 20 | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'controller remains available after stop' | Out-Null
     if (-not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue)) { throw 'Stop closed the standalone controller.' }
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'Stopped targets must return the primary control to Open.' }
     Save-WindowImage $window 'controller-after-stop.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     } 'second isolated replay process'
     $replayId = [int]$replay.ProcessId
-    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'second run starts' 50 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'second target becomes ready' 50 | Out-Null
+    (Get-Process -Id $replayId).CloseMainWindow() | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Open' } 'closing target returns to Open' 20 | Out-Null
+    if ((Find-Element $window 'Id' 'Status').Current.Name -notlike '*target closed*') { throw 'Unexpected target closure must be reported.' }
+    Invoke-Button $window 'PlayPause'
+    $replay = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    } 'reopened isolated target'
+    $replayId = [int]$replay.ProcessId
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'reopened target ready' 50 | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'second run starts explicitly' | Out-Null
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' } 'second run pauses' | Out-Null
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
@@ -337,7 +359,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, project search, agent/prompt filters, title sorting, clear filters, refresh/deduplication, SDK raw-event preview, native capture/save, rename/select, play/pause/resume, review/completion, scoped stop, reuse, paused close, persistence, and unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, Open without autoplay, explicit Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, and unchanged edit target.'
 } catch {
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())

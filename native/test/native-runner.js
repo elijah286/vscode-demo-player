@@ -96,7 +96,8 @@ async function run() {
     assert.equal(api.state.typed.at(-1), recording.request.message.text);
     assert.equal(api.state.typed.length, Array.from(recording.request.message.text).length, 'One native input update per character');
     assert.equal(api.state.phase, 'review');
-    assert.equal(controlView(api.state).action, 'play');
+    assert.equal(controlView(api.state).action, 'restart');
+    assert.equal(controlView(api.state).nextEnabled, true);
     assert.equal(api.state.turnIndex, 1);
     const expected = recording.request.response.filter(part => kindOf(part) === 'markdown').map(part => typeof part === 'string' ? part : part.value).join('');
     const actual = api.state.emitted.filter(part => part.kind === 'markdown').map(part => part.value).join('');
@@ -154,14 +155,30 @@ async function run() {
     if (edits.length) {
         await page.locator('.interactive-response').filter({ hasText: 'Recorded code edit - not applied' }).first().waitFor({ state: 'visible', timeout: 5000 });
     }
-    assert.equal(controlView(api.state).enabled, false);
+    assert.equal(controlView(api.state).button, 'Start Over');
+    assert.equal(controlView(api.state).nextEnabled, false);
     const secondTyping = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const secondResponse = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
     assert.ok(Math.abs(secondTyping - 2000) < 400, 'Second prompt timing: ' + secondTyping);
     assert.ok(Math.abs(secondResponse - 5000) < 400, 'Second response timing: ' + secondResponse);
     await page.screenshot({ path: path.join(screenshots, 'native-two-turns.png') });
+    try {
+        await Promise.race([
+            api.restart(),
+            new Promise((resolve, reject) => {
+                void resolve;
+                deadline = setTimeout(() => reject(new Error('Native Start Over exceeded 25 seconds')), 25000);
+            })
+        ]);
+    } finally { clearTimeout(deadline); }
+    assert.equal(api.state.phase, 'review');
+    assert.equal(api.state.turnIndex, 1, 'Start Over replays the first exchange');
+    assert.equal(api.state.history.length, 2, 'Start Over clears previously completed history');
+    assert.equal(api.state.typed.at(-1), recording.request.message.text);
+    assert.equal(api.state.emitted.filter(part => part.kind === 'markdown').map(part => part.value).join(''), expected);
+    await page.screenshot({ path: path.join(screenshots, 'native-start-over.png') });
     await browser.close();
-    console.log('NATIVE TWO-TURN REVIEW PASSED', JSON.stringify({ turns: api.state.turnIndex, typingMs: secondTyping, responseMs: secondResponse, fingerprint: nextRecording.fingerprint }));
+    console.log('NATIVE TWO-TURN REVIEW AND START OVER PASSED', JSON.stringify({ completedTurns: 2, restartedTurn: api.state.turnIndex, typingMs: secondTyping, responseMs: secondResponse, fingerprint: nextRecording.fingerprint }));
 }
 
 module.exports = { run };

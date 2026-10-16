@@ -138,7 +138,7 @@ try {
         Switch-Mode 'Agents (experimental)' 'Agents'
         Switch-Mode 'VS Code' 'Editor'
     } else { Write-Output 'NOT RUN: authenticated Agents UI switches; supply -TestAgents -ProfilePath with a coordinated test profile.' }
-    Invoke-Button 'PlayPause'
+    Invoke-Button 'NextStep'
     Wait-Condition { (Read-State).phase -eq 'complete' } 'Second turn did not complete.'
     if ((Read-State).overlay.elapsed -ne '00:03:03') { throw 'Stopwatch included an idle gap or lost response time.' }
     Save-Overlay 'finished.png'

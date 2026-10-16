@@ -1,26 +1,13 @@
-# Parallel work and release runbook
+# Canonical development and release runbook
 
 ## Authority and scope
 
-This policy applies to `elijah286/vscode-demo-player`, not the original LabVIEW
-workspace. The user appoints one release captain. A user request to add/fix a
-feature or integrate the fleet authorizes integration and shipment of that
-scope after reasonable targeted checks. The user's production use is functional
-acceptance for this personal tool; do not add per-commit approval or exhaustive
-environment gates. Publishing a new release does not authorize silently installing it on a
-user's computer; preserve the updater's consent behavior.
-
-The captain coordinates releases, not product implementation. Route feature and
-bug-fix requests addressed to the captain to an implementation agent, even if
-the requested change looks small. Dispatch a bounded task with an isolated
-named branch/worktree, file ownership, acceptance criteria, and the handoff
-requirements below. Have the agent implement and test it, then review and
-integrate its delivery. If integration or release checks expose a product bug,
-send that fix to the owning agent or a new isolated implementation agent rather
-than coding it in the captain's checkout. The captain retains coordination,
-review, integration/conflict resolution, combined validation, release policy and
-version metadata, installer builds, publication, and consented installation
-checks. An implementation agent must not publish or modify the shared install.
+This policy applies only to `elijah286/vscode-demo-player`. Use the existing
+canonical `vscode-demo-player` checkout and sequential branches by default.
+Feature or consolidation approval authorizes only the agreed local work.
+Pushing, merging GitHub pull requests, publishing/tagging, deleting recovery
+sources, and modifying the installed app each require explicit approval.
+Never interpret a feature request as automatic shipment or installation consent.
 
 The captain is an on-demand role. Between user requests, remain idle: no
 session polling, background listeners, watchers, or automatic integrations.
@@ -34,28 +21,18 @@ policy directly to active agents. Older worktrees must read the current policy.
 Agents in other VS Code windows or machines are not necessarily discoverable:
 they must register with the captain before writing.
 
-## Start an isolated workstream
+## Start sequential work
 
-From a known repository, inspect `git status --short --branch` and
-`git worktree list --porcelain` without altering existing work. Fetch the
-approved remote baseline, then create a unique branch and sibling worktree:
+Open the existing canonical folder documented in the README. Confirm its Git
+root, sanitized origin, branch, upstream, and working status before writing.
+Coordinate exclusive writing ownership before changing branches. With a clean,
+owned checkout, create a feature branch there from the agreed baseline.
+Do not create sibling clones/worktrees without explicit approval. Dirty or
+unexpected state is a coordination issue, not permission to create a workaround.
 
-```powershell
-git fetch origin
-git worktree add -b agent/<task> ..\vscode-demo-player-<task> origin/main
-```
-
-Replace `<task>` with a unique task name. Run all subsequent commands in that
-new worktree. Tell the captain its absolute path, branch, base SHA, intended
-files, dependencies, and test plan before implementation. A separate branch
-inside the same checkout is not isolation. Do not copy uncommitted shared
-changes into it without an agreed file-by-file attribution.
-
-Overlapping file ownership must be declared, especially the controller,
-README, manifests/lockfiles, packaging allowlist, and release workflow. Agents
-can change overlapping files in isolated worktrees, but the captain determines
-integration order and resolves conflicts with their owners. Feature agents
-must not edit each other's worktrees or the captain's worktree.
+Report the branch/base SHA, scope, overlapping files, dependencies, and tests.
+Preserve existing changes rather than copying mixed files between checkouts.
+Install locked dependencies locally; do not use another project's junction.
 
 Use unique temporary libraries, control ports, profiles, build caches, output
 paths, and evidence directories. Coordinate interactive desktop tests and
@@ -72,7 +49,7 @@ library.
 3. Have each owner identify its exact changes, including overlapping files.
    Assign mixed hunks explicitly. Do not use `git add .`, reset, clean, stash,
    or a whole-file copy as a shortcut.
-4. Reproduce only the attributed changes in the owner's isolated worktree,
+4. Integrate only attributed changes into the approved canonical branch,
    include dependencies explicitly, test, and commit only those files.
 5. Compare the preserved shared changes against all delivered commits before
    declaring migration complete. Leave the original checkout intact until the
@@ -99,8 +76,8 @@ Never mark a workstream integrated from a verbal completion report. Verify its
 changes in Git. Do not mark it released until the published installer actually
 contains it.
 
-The captain identifies the branches/commits covered by the user's request and
-integrates serially in a clean captain-owned integration worktree.
+The captain identifies the approved branches/commits and integrates serially
+on a dedicated integration branch in the canonical checkout.
 Merge the delivered branch (or cherry-pick the explicitly agreed commits, not
 both). Resolve conflicts with the owners; do not blindly prefer either side.
 Rerun targeted checks on the combined result, including tests from each included
@@ -144,9 +121,10 @@ ran in the handoff without claiming unperformed tests passed.
 3. Run the README's installer and installed controller/native tests on a
    coordinated test installation. Do not replace a user's existing app just
    to make a harness pass. Record unavailable environments as blockers.
-4. Push the verified approved integration to `main` through the protected
+4. Only with explicit push approval, push the verified integration through the protected
    integration path. After its required CI passes, the captain creates and
-   pushes `v<version>` at that same current `main` SHA, never at a feature SHA.
+   pushes `v<version>` only with explicit publishing approval at that same current
+   `main` SHA, never at a feature SHA.
 5. The tag workflow verifies the tag is current `main`, verifies version
    agreement, runs tests, builds the installer, and publishes it with its
    checksum. Releases are serialized. Manual workflow dispatch builds only;
@@ -166,8 +144,8 @@ Version 0.1.0 has no updater; it requires a one-time installer bootstrap.
 Do not claim old installations update themselves until the shipped updater
 and actual upgrade path have passed acceptance.
 
-If any gate fails, stop publication and preserve evidence. Fix on a new
-isolated branch and obtain approval for any scope change. Never force-move a
+If any gate fails, stop publication and preserve evidence. Fix on a sequential
+branch in the canonical checkout and obtain approval for any scope change. Never force-move a
 released tag, replace an existing version's assets, or downgrade clients.
 Use a new version for an approved fix or revert.
 

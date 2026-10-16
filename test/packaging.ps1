@@ -21,6 +21,66 @@ function Assert-Fails([scriptblock]$Action, [string]$Pattern) {
         $script:assertions++
     }
 }
+function Test-ControllerFailures {
+    $controller = Join-Path $ApplicationRoot 'Show-ReplayController.ps1'
+    $ast = [Management.Automation.Language.Parser]::ParseFile($controller, [ref]$null, [ref]$null)
+    $tickNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Expression.Extent.Text -eq '$timer' -and $node.Member.Value -eq 'Add_Tick'
+    }, $true)
+    $clickNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Expression.Extent.Text -eq '$playPause' -and $node.Member.Value -eq 'Add_Click'
+    }, $true)
+    $stopNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Request-Stop'
+    }, $true)
+    Assert-Equal ($null -ne $tickNode -and $null -ne $clickNode -and $null -ne $stopNode) $true 'Production lifecycle handlers exist'
+    $tick = $tickNode.Arguments[0].ScriptBlock.GetScriptBlock()
+    ${function:Request-Stop} = $stopNode.Body.GetScriptBlock()
+    function Test-ReplayAlive { return $script:alive }
+    function Reset-ReplaySession { $script:resetObserved = $true }
+    function Update-ReplayOverlays {}
+    function Send-Control([string]$Action) { $script:sentAction = $Action; $script:stopSent = $true }
+    $status = [pscustomobject]@{ Text = ''; ToolTip = '' }
+    $playPause = [pscustomobject]@{ IsEnabled = $true }
+    $nextStep = [pscustomobject]@{ IsEnabled = $true }
+    $window = [pscustomobject]@{}
+    $window | Add-Member -MemberType ScriptMethod -Name Show -Value {}
+    $script:ReplayProcessId = 42
+    $script:switching = $false
+    $script:stopping = $false
+    $script:pairedVisible = $true
+    $script:alive = $false
+    & $tick
+    Assert-Equal $script:resetObserved $true 'Closed target resets session'
+    Assert-Equal $script:lastFault 'The isolated VS Code target closed.' 'Unexpected closure is not success'
+    $script:pairedVisible = $false
+    & $tick
+    Assert-Equal $script:lastFault 'The isolated player exited before it was ready.' 'Early launch exit is explicit'
+    $script:alive = $true
+    $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(-1)
+    $script:ControlPath = Join-Path $scratch 'missing-control.json'
+    $script:client = $null
+    $script:actionTask = $null
+    $script:stateTask = $null
+    $script:connectionFailures = 0
+    & $tick
+    Assert-Equal $script:lastFault 'Player was not ready within 45 seconds.' 'Readiness timeout is explicit'
+    Assert-Equal $script:stopping $true 'Readiness timeout requests scoped stop'
+    Assert-Equal $script:sentAction 'stop' 'Timed-out target is not played'
+    Assert-Equal $playPause.IsEnabled $false 'Timed-out primary control remains disabled'
+    Assert-Equal $nextStep.IsEnabled $false 'Timed-out Next Step remains disabled'
+    $script:ReplayProcessId = 0
+    $script:standalone = $true
+    function Start-DemoReplay { throw 'Synthetic target launch failure' }
+    function Set-IdleView { $script:idleObserved = $true }
+    function Show-DemoError($Owner, $Failure) { $script:reportedFailure = $Failure.Exception.Message }
+    & ($clickNode.Arguments[0].ScriptBlock.GetScriptBlock())
+    Assert-Equal $script:idleObserved $true 'Launch failure restores idle controls'
+    Assert-Equal $script:lastFault 'Synthetic target launch failure' 'Launch failure is retained in status'
+    Assert-Equal $script:reportedFailure $script:lastFault 'Launch failure is displayed rather than reported as success'
+}
 try {
     $scripts = @(Get-ChildItem -LiteralPath $ApplicationRoot -Filter '*.ps1' -File)
     foreach ($directory in @('test', 'packaging')) {
@@ -33,6 +93,7 @@ try {
         if ($parseErrors) { throw ($_.Name + ': ' + ($parseErrors.Message -join '; ')) }
         $script:assertions++
     }
+    Test-ControllerFailures
     Assert-Equal (Resolve-PlayerNode $NodePath) (Resolve-Path -LiteralPath $NodePath).Path 'Explicit Node runtime'
     Assert-Fails { Resolve-PlayerNode (Join-Path $scratch 'missing.exe') } 'does not exist'
     $env:LOCALAPPDATA = Join-Path $scratch 'User App Data'
@@ -53,7 +114,7 @@ try {
     $wrong = Join-Path $scratch 'wrong.exe'
     [IO.File]::WriteAllText($wrong, 'not Code')
     Assert-Fails { Resolve-PlayerVSCode $wrong } 'CodePath must point'
-    Write-Output ('PACKAGING CHECKS PASSED: ' + $assertions + ' assertions, including source syntax, dependency resolution, missing dependencies, user/system/portable VS Code, and paths with spaces.')
+    Write-Output ('PACKAGING CHECKS PASSED: ' + $assertions + ' assertions, including source syntax, production controller launch/timeout/closure handlers with synthetic failures, dependency resolution, missing dependencies, user/system/portable VS Code, and paths with spaces.')
 } finally {
     $env:LOCALAPPDATA = $original.Local
     $env:ProgramFiles = $original.Program

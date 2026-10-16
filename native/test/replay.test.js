@@ -70,10 +70,21 @@ test('speed is finite and bounded', () => {
 
 test('controller maps ready, playing, paused, and finished without auto-closing', () => {
     assert.equal(controlView({ phase: 'ready' }).action, 'play');
-    assert.equal(controlView({ phase: 'review' }).action, 'play');
+    assert.equal(controlView({ phase: 'review' }).action, 'restart');
     assert.equal(controlView({ phase: 'typing', clock: { paused: false } }).action, 'pause');
     assert.equal(controlView({ phase: 'response', clock: { paused: true } }).action, 'resume');
-    assert.deepEqual(controlView({ phase: 'complete' }), { phase: 'complete', label: 'Finished', button: 'Finished', enabled: false });
+    const finished = controlView({ phase: 'complete', turnIndex: 2, recordings: [{}, {}] });
+    assert.equal(finished.button, 'Start Over');
+    assert.equal(finished.restartEnabled, true);
+    assert.equal(finished.nextEnabled, false);
+    const review = controlView({ phase: 'review', turnIndex: 1, recordings: [{}, {}] });
+    assert.equal(review.nextEnabled, true);
+    assert.equal(review.restartEnabled, true);
+    for (const phase of ['ready', 'typing', 'response', 'error', 'stopping']) {
+        const view = controlView({ phase, recordings: [{}, {}], turnIndex: 1 });
+        assert.equal(view.nextEnabled, false);
+        assert.equal(view.restartEnabled, false);
+    }
 });
 
 test('working-time overlay interpolates response work and excludes user idle gaps', () => {
@@ -130,13 +141,15 @@ test('prompt preview is a bounded excerpt separate from original recording conte
 
 test('private controller accepts only authorized state-appropriate controls', { timeout: 5000 }, async context => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-control-test-'));
-    const state = { phase: 'ready', clock: { paused: false } };
+    const state = { phase: 'ready', clock: { paused: false }, recordings: [{}, {}], turnIndex: 0 };
     const invoked = [];
     const errors = [];
     const server = await createControlServer({
         controlPath: path.join(directory, 'control.json'),
         getState: () => state,
         play: () => { state.phase = 'typing'; invoked.push('play'); },
+        next: () => { state.phase = 'typing'; invoked.push('next'); },
+        restart: () => { state.turnIndex = 0; state.phase = 'typing'; invoked.push('restart'); },
         pause: () => { state.clock.paused = true; invoked.push('pause'); },
         resume: () => { state.clock.paused = false; invoked.push('resume'); },
         stop: () => { state.phase = 'stopping'; invoked.push('stop'); },
@@ -149,17 +162,27 @@ test('private controller accepts only authorized state-appropriate controls', { 
     assert.equal((await fetch(url + '/state', { signal: AbortSignal.timeout(1500) })).status, 401);
     assert.equal((await call('/state', { headers: { ...headers, Origin: 'https://example.com' } })).status, 401);
     assert.equal((await call('/pause', { method: 'POST' })).status, 409);
+    assert.equal((await call('/next', { method: 'POST' })).status, 409);
+    assert.equal((await call('/restart', { method: 'POST' })).status, 409);
     assert.equal((await call('/play', { method: 'POST' })).status, 202);
     assert.equal((await (await call('/state')).json()).button, 'Pause');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);
     assert.equal((await call('/pause', { method: 'POST' })).status, 202);
     assert.equal((await (await call('/state')).json()).button, 'Resume');
     assert.equal((await call('/resume', { method: 'POST' })).status, 202);
+    state.phase = 'review';
+    state.turnIndex = 1;
+    assert.equal((await call('/next', { method: 'POST' })).status, 202);
     state.phase = 'complete';
+    state.turnIndex = 2;
     assert.equal((await (await call('/state')).json()).label, 'Finished');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);
+    assert.equal((await call('/next', { method: 'POST' })).status, 409);
+    assert.equal((await call('/restart', { method: 'POST' })).status, 202);
+    assert.equal(state.turnIndex, 0);
+    assert.equal((await call('/restart', { method: 'POST' })).status, 409);
     assert.equal((await call('/stop', { method: 'POST' })).status, 202);
-    assert.deepEqual(invoked, ['play', 'pause', 'resume', 'stop']);
+    assert.deepEqual(invoked, ['play', 'pause', 'resume', 'next', 'restart', 'stop']);
     assert.deepEqual(errors, []);
 });
 
@@ -243,6 +266,7 @@ test('portable demo resume restores completed Editor history without replaying o
     await fs.writeFile(demoPath, JSON.stringify(recording));
     const disposable = { dispose() {} };
     const invoked = [];
+    let failLaunch = false;
     class Part { constructor(...values) { this.values = values; } }
     class Markdown {
         constructor(value) { this.value = value; }
@@ -251,7 +275,10 @@ test('portable demo resume restores completed Editor history without replaying o
     const vscode = {
         StatusBarAlignment: { Left: 0 },
         MarkdownString: Markdown, ChatResponseMarkdownPart: Part, ChatRequestTurn: Part, ChatResponseTurn2: Part,
-        commands: { registerCommand: () => disposable, executeCommand: async command => { invoked.push(command); } },
+        commands: { registerCommand: () => disposable, executeCommand: async command => {
+            invoked.push(command);
+            if (failLaunch) throw new Error('Synthetic target readiness failure');
+        } },
         window: { createStatusBarItem: () => ({ dispose() {} }) },
         chat: { createChatParticipant: () => disposable, createChatSessionItemController: () => disposable, registerChatSessionContentProvider: () => disposable }
     };
@@ -267,6 +294,13 @@ test('portable demo resume restores completed Editor history without replaying o
     assert.equal(api.state.selection.demoPath, demoPath);
     assert.deepEqual(api.state.recordings[0].request, request);
     assert.deepEqual(invoked, []);
+    failLaunch = true;
+    await assert.rejects(api.restart(), /Synthetic target readiness failure/);
+    assert.equal(api.state.phase, 'error');
+    assert.equal(controlView(api.state).error, 'Synthetic target readiness failure');
+    assert.equal(controlView(api.state).enabled, false);
+    assert.equal(api.state.turnIndex, 0);
+    assert.equal(api.state.history.length, 0);
     env.HISTORY_REPLAY_RESUME_TURN = '2';
     await assert.rejects(api.prepare(''), /outside the selected recording/);
 });
@@ -487,15 +521,17 @@ test('controller counts the current turn and waits at every response boundary', 
     assert.equal(controlView(state).button, 'Pause');
     state.phase = 'review';
     state.turnIndex = 1;
-    assert.equal(controlView(state).label, 'Paused');
+    assert.equal(controlView(state).label, 'Exchange complete');
     assert.equal(controlView(state).progress, '1/7');
-    assert.equal(controlView(state).action, 'play');
+    assert.equal(controlView(state).action, 'restart');
+    assert.equal(controlView(state).nextEnabled, true);
     state.phase = 'typing';
     assert.equal(controlView(state).progress, '2/7');
     state.phase = 'complete';
     state.turnIndex = 7;
     assert.equal(controlView(state).progress, '7/7');
-    assert.equal(controlView(state).enabled, false);
+    assert.equal(controlView(state).enabled, true);
+    assert.equal(controlView(state).nextEnabled, false);
 });
 
 test('native JSONL updates reconstruct final fields, replaced tails, appended turns, and cleared values', async context => {

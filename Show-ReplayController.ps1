@@ -51,12 +51,21 @@ if (-not $script:standalone) {
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
     <Grid Grid.Row="2">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
       <Button x:Name="PlayPause" IsEnabled="False" ToolTip="Play"
               AutomationProperties.AutomationId="PlayPause" AutomationProperties.Name="Play">
-        <TextBlock x:Name="PlayIcon" FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE768;"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock x:Name="PlayIcon" FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE768;" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PrimaryLabel" Text="Open" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
       </Button>
-      <Button x:Name="Stop" Grid.Column="2" ToolTip="Stop playback"
+            <Button x:Name="NextStep" Grid.Column="2" IsEnabled="False" ToolTip="Next Step" AutomationProperties.AutomationId="NextStep" AutomationProperties.Name="Next Step">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14" Text="&#xE72A;" VerticalAlignment="Center"/>
+                    <TextBlock Text="Next Step" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+            <Button x:Name="Stop" Grid.Column="4" ToolTip="Stop playback"
               AutomationProperties.AutomationId="Stop" AutomationProperties.Name="Stop">
         <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE71A;"/>
       </Button>
@@ -96,6 +105,8 @@ try { $window = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $r
 $status = $window.FindName('Status')
 $playPause = $window.FindName('PlayPause')
 $playIcon = $window.FindName('PlayIcon')
+$primaryLabel = $window.FindName('PrimaryLabel')
+$nextStep = $window.FindName('NextStep')
 $stop = $window.FindName('Stop')
 $chooseDemo = $window.FindName('ChooseDemo')
 $capture = $window.FindName('Capture')
@@ -123,7 +134,6 @@ $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(45)
 $script:pairedVisible = $false
 $script:selectedDemo = $null
 $script:exitRequested = $false
-$script:autoPlay = $false
 $script:connectionFailures = 0
 $script:lastFault = $null
 $script:lastView = $null
@@ -135,14 +145,16 @@ $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
 function Set-IdleView {
-    $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Ready - ' + $script:selectedDemo.count + ' exchanges' } else { 'Select or capture a conversation' }
+    $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Select or capture a conversation' }
     $status.ToolTip = $status.Text
     $chooseDemo.Content = if ($script:selectedDemo) { $script:selectedDemo.title } else { 'Select a demo...' }
     $chooseDemo.ToolTip = $chooseDemo.Content
     $playPause.IsEnabled = [bool]$script:selectedDemo
-    $playPause.ToolTip = 'Play'
-    [System.Windows.Automation.AutomationProperties]::SetName($playPause, 'Play')
-    $playIcon.Text = [char]0xE768
+    $playPause.ToolTip = 'Open'
+    $primaryLabel.Text = 'Open'
+    [System.Windows.Automation.AutomationProperties]::SetName($playPause, 'Open')
+    $playIcon.Text = [char]0xE8A7
+    $nextStep.IsEnabled = $false
     $stop.IsEnabled = $false
     $chooseDemo.IsEnabled = $true
     $capture.IsEnabled = $true
@@ -162,7 +174,6 @@ function Reset-ReplaySession {
     $script:stopSent = $false
     $script:fallbackSent = $false
     $script:pairedVisible = $false
-    $script:autoPlay = $false
     $script:connectionFailures = 0
     $script:lastView = $null
     Update-ReplayOverlays
@@ -183,10 +194,11 @@ function Start-DemoReplay {
     $script:ControlPath = $started.ControlPath
     $script:profile = $started.ProfilePath
     $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(45)
-    $script:autoPlay = $true
     $script:lastFault = $null
     $status.Text = 'Preparing isolated playback'
     $playPause.IsEnabled = $false
+    $primaryLabel.Text = 'Opening'
+    $nextStep.IsEnabled = $false
     $stop.IsEnabled = $true
     $chooseDemo.IsEnabled = $false
     $capture.IsEnabled = $false
@@ -278,7 +290,6 @@ function Start-SwitchedPlayback {
     $script:pairedVisible = $false
     $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(45)
     $script:switching = $false
-    $script:autoPlay = $false
     $script:connectionFailures = 0
     $status.Text = 'Preparing ' + $script:replayMode
 }
@@ -292,9 +303,9 @@ $windowMode.Add_SelectionChanged({
     $script:replayMode = $mode
     $script:switching = $true
     $script:deadline = [DateTime]::UtcNow.AddSeconds(15)
-    $script:autoPlay = $false
     $windowMode.IsEnabled = $false
     $playPause.IsEnabled = $false
+    $nextStep.IsEnabled = $false
     $status.Text = 'Switching to ' + $mode
     Send-Control 'stop'
 })
@@ -307,18 +318,31 @@ function Request-Stop {
     $script:deadline = [DateTime]::UtcNow.AddSeconds(8)
     $status.Text = 'Stopping'
     $playPause.IsEnabled = $false
+    $nextStep.IsEnabled = $false
     Update-ReplayOverlays
     Send-Control 'stop'
 }
 
 $playPause.Add_Click({
     if ($script:standalone -and -not $ReplayProcessId) {
-        try { Start-DemoReplay } catch { Show-DemoError $window $_ }
+        try { Start-DemoReplay } catch {
+            $script:lastFault = $_.Exception.Message
+            Set-IdleView
+            Show-DemoError $window $_
+        }
         return
     }
     if ($script:action) {
         $playPause.IsEnabled = $false
+        $nextStep.IsEnabled = $false
         Send-Control $script:action
+    }
+})
+$nextStep.Add_Click({
+    if ($nextStep.IsEnabled -and $script:lastView.nextEnabled) {
+        $playPause.IsEnabled = $false
+        $nextStep.IsEnabled = $false
+        Send-Control 'next'
     }
 })
 $stop.Add_Click({ Request-Stop })
@@ -345,14 +369,15 @@ $timer.Add_Tick({
         }
         if (-not $ReplayProcessId) { return }
         if (-not (Test-ReplayAlive)) {
-            if (-not $script:pairedVisible -and -not $script:stopping) { $script:lastFault = 'The isolated player exited before it was ready.' }
+            if (-not $script:stopping) {
+                $script:lastFault = if ($script:pairedVisible) { 'The isolated VS Code target closed.' } else { 'The isolated player exited before it was ready.' }
+            }
             Reset-ReplaySession
             return
         }
         if (-not $script:pairedVisible -and -not $script:stopping -and [DateTime]::UtcNow -gt $script:preparedDeadline) {
             $window.Show()
             $script:lastFault = 'Player was not ready within 45 seconds.'
-            $script:autoPlay = $false
             Request-Stop
         }
         if (-not $script:client -and (Test-Path -LiteralPath $ControlPath)) {
@@ -406,13 +431,20 @@ $timer.Add_Tick({
                 $window.Show()
             }
             $status.Text = if ($view.progress) { $view.label + '  ' + $view.progress } else { $view.label }
+            if ($view.phase -eq 'error') {
+                $script:lastFault = if ($view.error) { $view.error } else { 'Recorded playback failed.' }
+                $status.Text = 'Replay error: ' + $script:lastFault
+                $status.ToolTip = $status.Text
+            }
             $script:action = $view.action
             $playPause.IsEnabled = [bool]$view.enabled -and -not $script:actionTask
+            $nextStep.IsEnabled = [bool]$view.nextEnabled -and -not $script:actionTask
             $playPause.ToolTip = $view.button
+            $primaryLabel.Text = $view.button
             [System.Windows.Automation.AutomationProperties]::SetName($playPause, $view.button)
             $playIcon.Text = switch ($view.button) {
                 'Pause' { [char]0xE769 }
-                'Finished' { [char]0xE73E }
+                'Start Over' { [char]0xE72C }
                 default { [char]0xE768 }
             }
             $script:lastView = $view
@@ -422,11 +454,6 @@ $timer.Add_Tick({
             $windowMode.IsEnabled = [bool]$view.modeSwitchEnabled -and -not $script:actionTask
             $script:overlayWindow.Owner = $window
             Update-ReplayOverlays
-            if ($script:autoPlay -and $view.phase -eq 'ready' -and -not $script:actionTask) {
-                $script:autoPlay = $false
-                Send-Control 'play'
-                $playPause.IsEnabled = $false
-            }
         }
         if ($script:client -and -not $script:stateTask) { $script:stateTask = $script:client.GetAsync('state') }
     } catch {
@@ -436,7 +463,9 @@ $timer.Add_Tick({
         $status.Text = if ($script:stopping) { 'Stopping' } else { 'Connection unavailable' }
         $script:stateTask = $null
         $script:actionTask = $null
-        if ($script:connectionFailures -ge 3 -and -not $script:stopping) { $script:autoPlay = $false; Request-Stop }
+        $playPause.IsEnabled = $false
+        $nextStep.IsEnabled = $false
+        if ($script:connectionFailures -ge 3 -and -not $script:stopping) { Request-Stop }
     }
 })
 $window.Add_Closed({

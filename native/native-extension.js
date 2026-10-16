@@ -68,7 +68,8 @@ function activate(context) {
             state.metrics.responseFinished = performance.now();
             state.resolveResponse();
         } catch (error) {
-            state.phase = 'stopped';
+            state.phase = state.stopRequested ? 'stopped' : 'error';
+            if (!state.stopRequested) state.error = error.message;
             state.rejectResponse(error);
         } finally {
             cancellation.dispose();
@@ -96,6 +97,8 @@ function activate(context) {
     async function prepare(file, requestIndex = 0, requestCount = 1) {
         if (['loading', 'typing', 'response', 'stopping'].includes(state.phase)) throw new Error('A replay is already active.');
         state.phase = 'loading';
+        state.stopRequested = false;
+        state.error = undefined;
         try {
             state.recordings = process.env.HISTORY_REPLAY_DEMO
                 ? await packageRecordings(process.env.HISTORY_REPLAY_DEMO)
@@ -137,7 +140,8 @@ function activate(context) {
             if (!nativeComposer) {
                 nativeComposer = new NativeComposer();
                 await nativeComposer.connect(Number(process.env.HISTORY_REPLAY_CDP_PORT), 'Editor');
-                context.subscriptions.push({ dispose: () => { nativeComposer.close().catch(console.error); } });
+                    const composer = nativeComposer;
+                    context.subscriptions.push({ dispose: () => { composer.close().catch(console.error); } });
             }
             await nativeComposer.focus();
             const typingOrigin = state.clock.now();
@@ -163,8 +167,9 @@ function activate(context) {
             return { fingerprint: state.recording.fingerprint, prompt, parts: state.emitted.length, metrics: state.metrics };
         } catch (error) {
             state.clock.stop();
-            state.phase = 'stopped';
-            status.text = '$(history) Historical replay | Stopped';
+            state.phase = state.stopRequested ? 'stopped' : 'error';
+            if (!state.stopRequested) state.error = error.message;
+            status.text = '$(history) Historical replay | ' + (state.stopRequested ? 'Stopped' : 'Error');
             throw error;
         }
     }
@@ -172,6 +177,29 @@ function activate(context) {
     async function play(file, requestIndex = 0, options = {}) {
         await prepare(file, requestIndex, options.requestCount ?? 1);
         return playNext(options);
+    }
+
+    async function restart() {
+        if (!['review', 'complete'].includes(state.phase)) throw new Error('Start Over is available only after an exchange completes.');
+        state.phase = 'loading';
+        if (recordingEndpoint) {
+            await recordingEndpoint.close();
+            recordingEndpoint = undefined;
+            recordingHost = undefined;
+        }
+        if (nativeComposer) {
+            await nativeComposer.close();
+            nativeComposer = undefined;
+        }
+        state.clock?.stop();
+        state.clock = undefined;
+        state.turnIndex = 0;
+        state.history = [];
+        state.typed = [];
+        state.emitted = [];
+        state.error = undefined;
+        state.phase = 'ready';
+        return playNext();
     }
 
     async function waitForHost(predicate, message) {
@@ -240,7 +268,8 @@ function activate(context) {
         if (!nativeComposer) {
             nativeComposer = new NativeComposer();
             await nativeComposer.connect(Number(process.env.HISTORY_REPLAY_CDP_PORT));
-            context.subscriptions.push({ dispose: () => { nativeComposer.close().catch(console.error); } });
+                const composer = nativeComposer;
+                context.subscriptions.push({ dispose: () => { composer.close().catch(console.error); } });
         }
         await nativeComposer.focus();
         state.recording = state.recordings[state.turnIndex];
@@ -292,6 +321,7 @@ function activate(context) {
         return play(file, Number(process.env.HISTORY_REPLAY_REQUEST ?? '3'), { requestCount: Number(process.env.HISTORY_REPLAY_REQUEST_COUNT ?? '1') });
     }
     async function closePlayer() {
+        state.stopRequested = true;
         state.phase = 'stopping';
         state.clock?.stop();
         await vscode.commands.executeCommand('workbench.action.closeWindow');
@@ -319,12 +349,15 @@ function activate(context) {
                 controlPath: process.env.HISTORY_REPLAY_CONTROL_PATH,
                 getState: () => state,
                 play: startSelected,
+                next: playNext,
+                restart,
                 pause: () => state.clock?.setPaused(true),
                 resume: () => state.clock?.setPaused(false),
                 stop: closePlayer,
                 onError: error => {
                     if (state.phase !== 'stopping' && state.phase !== 'stopped') {
                         state.phase = 'error';
+                        state.error = error.message;
                         status.text = '$(history) Historical replay | Error';
                         console.error('Historical replay controller:', error);
                     }
@@ -349,7 +382,7 @@ function activate(context) {
         await configuration.update('remoteAgentHosts', [{ name: state.recordings[0]?.responderName || 'Recorded conversation', address: endpoint.address, connectionToken: endpoint.connectionToken }], vscode.ConfigurationTarget.Global);
         return recordingHost;
     }
-    return { capabilities, state, play, prepare, playNext, controlReady, startBackendProbe };
+    return { capabilities, state, play, prepare, playNext, restart, controlReady, startBackendProbe };
 }
 
 function deactivate() {}

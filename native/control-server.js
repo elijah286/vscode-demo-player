@@ -5,7 +5,7 @@ const { RESPONSE_DURATION } = require('./replay');
 
 function playbackView(state) {
     if (state.phase === 'ready') return { phase: 'ready', label: 'Ready', action: 'play', button: 'Play', enabled: true };
-    if (state.phase === 'review') return { phase: 'review', label: 'Paused', action: 'play', button: 'Play', enabled: true };
+    if (state.phase === 'review') return { phase: 'review', label: 'Exchange complete', action: 'restart', button: 'Start Over', enabled: true };
     if (state.phase === 'typing' || state.phase === 'response') {
         return {
             phase: state.phase,
@@ -15,7 +15,7 @@ function playbackView(state) {
             enabled: true
         };
     }
-    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished', button: 'Finished', enabled: false };
+    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished', action: 'restart', button: 'Start Over', enabled: true };
     if (state.phase === 'error') return { phase: 'error', label: 'Replay error', button: 'Unavailable', enabled: false };
     if (state.phase === 'stopping' || state.phase === 'stopped') return { phase: state.phase, label: 'Stopping', button: 'Unavailable', enabled: false };
     return { phase: state.phase, label: 'Preparing', button: 'Play', enabled: false };
@@ -24,6 +24,9 @@ function playbackView(state) {
 function controlView(state) {
     const view = playbackView(state);
     const total = state.recordings?.length ?? 0;
+    view.restartEnabled = total > 0 && ['review', 'complete'].includes(state.phase);
+    view.nextEnabled = total > 0 && state.phase === 'review' && state.turnIndex < total;
+    if (state.error) view.error = state.error;
     if (!total) return view;
     const current = ['ready', 'typing', 'response'].includes(state.phase)
         ? Math.min(state.turnIndex + 1, total)
@@ -54,7 +57,7 @@ function controlView(state) {
     };
 }
 
-async function createControlServer({ controlPath, getState, play, pause, resume, stop, onError }) {
+async function createControlServer({ controlPath, getState, play, next, restart, pause, resume, stop, onError }) {
     const token = crypto.randomBytes(32).toString('hex');
     const expected = Buffer.from('Bearer ' + token);
     let stopping = false;
@@ -72,13 +75,15 @@ async function createControlServer({ controlPath, getState, play, pause, resume,
             send(200, controlView(getState()));
             return;
         }
-        if (request.method !== 'POST' || !['/play', '/pause', '/resume', '/stop'].includes(request.url)) {
+        if (request.method !== 'POST' || !['/play', '/next', '/restart', '/pause', '/resume', '/stop'].includes(request.url)) {
             send(404, { error: 'Unknown control' });
             return;
         }
         const view = controlView(getState());
         const action = request.url.slice(1);
-        if (action !== 'stop' && (stopping || !view.enabled || view.action !== action)) {
+        const callback = { play, next, restart, pause, resume, stop }[action];
+        const available = action === 'next' ? view.nextEnabled : action === 'restart' ? view.restartEnabled : view.enabled && view.action === action;
+        if (typeof callback !== 'function' || (action !== 'stop' && (stopping || !available))) {
             send(409, { error: 'Control is not available in the current playback state' });
             return;
         }
@@ -86,7 +91,6 @@ async function createControlServer({ controlPath, getState, play, pause, resume,
             if (stopping) { send(202, { accepted: true }); return; }
             stopping = true;
         }
-        const callback = { play, pause, resume, stop }[action];
         response.once('finish', () => {
             Promise.resolve().then(callback).catch(onError);
         });
