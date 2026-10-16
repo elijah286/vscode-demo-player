@@ -15,7 +15,7 @@ $fixture = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) ('source-fixture-' 
 foreach ($name in @('Show-ReplayController.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1')) {
     Copy-Item -LiteralPath (Join-Path $application $name) -Destination (Join-Path $fixture $name)
 }
-foreach ($name in @('package.json', 'library-cli.js', 'demo-library.js', 'replay.js', 'saved-parts.js', 'updater.js')) {
+foreach ($name in @('package.json', 'library-cli.js', 'demo-library.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'updater.js')) {
     Copy-Item -LiteralPath (Join-Path $application ('native\' + $name)) -Destination (Join-Path $fixture ('native\' + $name))
 }
 Copy-Item -LiteralPath $NodePath -Destination (Join-Path $fixture 'runtime\node.exe')
