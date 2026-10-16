@@ -105,10 +105,19 @@ API also accepts explicitly ordered distinct indices. Partial or unsupported
 exchanges are marked unavailable with a reason; nothing is silently dropped.
 If the source changes after preview, reload and review it before capture.
 Saved inline file/symbol references are supported in Editor playback as inert,
-escaped labels; linked external content is not fetched or bundled. Saved edit
-groups and question carousels still require the experimental saved-parts renderer
-and remain explicitly unavailable in baseline Editor capture. Their original
-payloads are retained in the inspection preview; they are never silently skipped.
+escaped labels; linked external content is not fetched or bundled. Completed
+saved text edit groups are supported in Editor capture/playback and labeled
+**Read-only edits**. They display the recorded target, ordered edit batches,
+1-based ranges (exclusive end), and replacement text as inert code blocks marked
+**Recorded code edit - not applied**. Empty replacements and batches are labeled
+explicitly. The player neither reads nor modifies the target files and does not
+invent original contents or a before/after diff. Original edit payloads, including
+extra metadata, remain intact through capture, export/import, and playback.
+Missing completion flags, malformed batches, missing replacement text/targets,
+and invalid ranges are rejected with specific errors and remain inspectable in
+the raw preview. Unknown response kinds are also rejected, never silently dropped.
+Question carousels still require the experimental saved-parts renderer and remain
+explicitly unavailable in baseline Editor capture.
 
 The selected-demo button and **Manage Demos** open a custom searchable library,
 not a system dropdown. Select, rename, delete, import, or export a recording.

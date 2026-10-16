@@ -1,10 +1,10 @@
 const vscode = require('vscode');
-const { readRecordings, readPlaylist, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('./replay');
+const { readRecordings, readPlaylist, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('./replay');
 const { createControlServer } = require('./control-server');
 const { RecordingAgentHost } = require('./recording-agent-host');
 const { NativeComposer } = require('./native-composer');
 const { packageRecordings } = require('./demo-library');
-const { inlineReferenceLabel } = require('./saved-parts');
+const { inlineReferenceLabel, savedEditMarkdown } = require('./saved-parts');
 
 function activate(context) {
     const capabilities = {
@@ -50,6 +50,7 @@ function activate(context) {
         const part = event.part;
         if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(event.value));
         if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
+        if (event.kind === 'textEditGroup') return new vscode.ChatResponseMarkdownPart(markdown(savedEditMarkdown(part)));
         if (event.kind === 'inlineReference') {
             const label = new vscode.MarkdownString();
             label.appendText(inlineReferenceLabel(part));
@@ -88,7 +89,7 @@ function activate(context) {
                 stream.push(nativeEvent(event));
                 if (event.kind === 'markdown') state.emitted.push({ kind: 'markdown', value: event.value });
                 else if (event.kind === 'thinking') state.emitted.push({ kind: 'thinking', value: event.part.value });
-                else if (event.kind === 'inlineReference') state.emitted.push(event.part);
+                else if (event.kind === 'inlineReference' || event.kind === 'textEditGroup') state.emitted.push(event.part);
                 else if (event.kind === 'toolComplete') state.emitted.push({ kind: 'toolInvocationSerialized', toolCallId: event.part.toolCallId });
             }
             await state.clock.waitUntil(state.responseOrigin + RESPONSE_DURATION);
@@ -132,9 +133,7 @@ function activate(context) {
                 recordingEndpoint = undefined;
                 recordingHost = undefined;
             }
-            if (process.env.HISTORY_REPLAY_AGENTS !== '1' && state.recordings.some(recording => recording.requiresSavedPartsRenderer)) {
-                throw new Error('This complete exchange requires the native Agents saved-question/edit renderer.');
-            }
+            if (process.env.HISTORY_REPLAY_AGENTS !== '1') state.recordings.forEach(validateEditorRecording);
             state.turnIndex = 0;
             state.history = [];
             state.phase = 'ready';

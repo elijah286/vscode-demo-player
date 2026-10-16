@@ -49,6 +49,66 @@ test('preview fingerprint prevents capturing a changed conversation', async cont
     await assert.rejects(library.createPackage(source, [0], 'Demo'), /Inspect/);
 });
 
+test('completed code edits survive capture, library storage, export/import and missing original files', async context => {
+    const { directory, source, root } = await fixture(context);
+    const target = path.join(directory, 'original-source.js');
+    await fs.writeFile(target, 'Live file contents must not be changed.');
+    const edit = {
+        kind: 'textEditGroup', uri: { fsPath: target }, done: true,
+        edits: [[{ text: 'saved\r\nreplacement \u03bb', range: { startLineNumber: 4, startColumn: 1, endLineNumber: 5, endColumn: 2 } }]],
+        state: { sha1: 'saved-metadata', applied: 1 }
+    };
+    await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 0, 'response'], v: [edit] }) + '\n');
+    const inspected = await library.inspectTranscript(source);
+    assert.equal(inspected.turns[0].status, 'archived-edits');
+    assert.equal(inspected.turns[0].error, undefined);
+    assert.equal(inspected.turns[1].status, 'ready');
+    assert.equal(inspected.turns[2].status, 'unavailable');
+    assert.match(inspected.turns[0].content, /Recorded code edit - not applied/);
+    assert.match(inspected.turns[0].content, /range 4:1 - 5:2/);
+    assert.match(inspected.turns[0].content, /saved\r\nreplacement \u03bb/);
+    assert.deepEqual(JSON.parse(inspected.turns[0].details).response.at(-1), edit);
+    const value = await library.createPackage(source, [0, 1], 'Saved edits', inspected.sha256);
+    const added = await library.addPackage(root, value);
+    const exported = path.join(directory, 'saved-edits.demo-recording.json');
+    await library.exportDemo(root, added.id, exported);
+    assert.equal(await fs.readFile(target, 'utf8'), 'Live file contents must not be changed.');
+    await fs.unlink(target);
+    await fs.unlink(source);
+    const imported = await library.addPackage(path.join(directory, 'imported'), await library.readPackage(exported));
+    const playback = await library.packageRecordings(path.join(directory, 'imported', imported.id + '.demo.json'));
+    assert.deepEqual(playback[0].request.response.at(-1), edit);
+    assert.equal(playback[0].requiresSavedPartsRenderer, false);
+    assert.equal(playback[1].request.message.text, 'Second original prompt');
+    await assert.rejects(fs.stat(target), { code: 'ENOENT' });
+    const changed = structuredClone(value);
+    changed.turns[0].snapshot.requests[0].response.at(-1).edits[0][0].text = 'tampered';
+    assert.throws(() => library.validatePackage(changed), /hash mismatch/);
+});
+
+test('large replacement payloads remain exact and malformed parts do not prevent inspecting other exchanges', async context => {
+    const { source } = await fixture(context);
+    const edit = {
+        kind: 'textEditGroup', uri: { scheme: 'file', path: '/missing/source.js' }, done: true,
+        edits: [[{ text: 'x'.repeat(1024 * 1024 + 1), range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } }]]
+    };
+    await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 0, 'response'], v: [edit] }) + '\n');
+    const inspected = await library.inspectTranscript(source);
+    const captured = await library.createPackage(source, [0], 'Large saved replacement', inspected.sha256);
+    assert.equal(captured.turns[0].snapshot.requests[0].response.at(-1).edits[0][0].text, edit.edits[0][0].text);
+    assert.ok(inspected.turns[0].content.includes(edit.edits[0][0].text));
+    await fs.appendFile(source, JSON.stringify({ kind: 1, k: ['requests', 0, 'response', 2, 'done'], v: false }) + '\n');
+    const incomplete = await library.inspectTranscript(source);
+    assert.match(incomplete.turns[0].error, /code edit is incomplete/);
+    assert.match(incomplete.turns[0].details, /"done": false/);
+    assert.equal(incomplete.turns[1].status, 'ready');
+    await assert.rejects(library.createPackage(source, [0], 'Incomplete edit', incomplete.sha256), /code edit is incomplete/);
+    await fs.appendFile(source, JSON.stringify({ kind: 2, k: ['requests', 1, 'response'], v: [null] }) + '\n');
+    const invalidPart = await library.inspectTranscript(source);
+    assert.match(invalidPart.turns[1].error, /invalid saved response part/);
+    assert.equal(invalidPart.turns.length, 3);
+});
+
 test('capture refuses incomplete, unsupported, duplicate, empty, out-of-range, and excessive selections', async context => {
     const { source, inspection } = await fixture(context);
     for (const indices of [[], [0, 0], [-1], [0.5], Array.from({ length: 101 }, (_, index) => index)]) {

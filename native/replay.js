@@ -2,11 +2,13 @@ const fs = require('node:fs');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const { INTERNAL_PARTS, completedQuestions, inlineReferenceLabel } = require('./saved-parts');
+const { INTERNAL_PARTS, completedQuestions, inlineReferenceLabel, validateSavedEditGroup } = require('./saved-parts');
 
 function kindOf(part) {
-    if (typeof part === 'string' || (!part.kind && typeof part.value === 'string')) return 'markdown';
-    return part.kind;
+    if (typeof part === 'string') return 'markdown';
+    if (!part || typeof part !== 'object') return '(invalid saved response part)';
+    if (!part.kind && typeof part.value === 'string') return 'markdown';
+    return typeof part.kind === 'string' && part.kind ? part.kind : '(missing saved response kind)';
 }
 
 const PROMPT_DURATION = 2000;
@@ -69,13 +71,14 @@ async function readRecordings(file, requestIndex, requestCount = 1) {
 }
 
 function validateEditorRecording(recording) {
-    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'inlineReference', ...INTERNAL_PARTS]);
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'inlineReference', 'textEditGroup', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(recording.request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Editor playback cannot render these saved parts: ' + unsupported.join(', ') + '. No content was discarded.');
     if (!recording.request.message.text.trim()) throw new Error('Editor playback requires a nonempty recorded prompt.');
     for (const part of recording.request.response) {
         const kind = kindOf(part);
         if (kind === 'inlineReference') inlineReferenceLabel(part);
+        if (kind === 'textEditGroup') validateSavedEditGroup(part);
         if (kind === 'markdown' && typeof (typeof part === 'string' ? part : part.value) !== 'string') throw new Error('Invalid recorded Markdown.');
         if (kind === 'toolInvocationSerialized' && (!part.isComplete || typeof part.toolId !== 'string' || typeof part.toolCallId !== 'string')) {
             throw new Error('Recorded tool activity is incomplete or missing tool identifiers.');
@@ -109,7 +112,10 @@ function extractRecording(file, snapshot, requestIndex) {
     const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Native streaming is not implemented for: ' + unsupported.join(', '));
-    for (const part of request.response) if (kindOf(part) === 'questionCarousel') completedQuestions(part);
+    for (const part of request.response) {
+        if (kindOf(part) === 'questionCarousel') completedQuestions(part);
+        if (kindOf(part) === 'textEditGroup') validateSavedEditGroup(part);
+    }
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify(request)).digest('hex');
     return {
         file,
@@ -123,7 +129,7 @@ function extractRecording(file, snapshot, requestIndex) {
         snapshotScope: 'complete native JSONL transcript',
         metadataParts: request.response.filter(part => INTERNAL_PARTS.has(kindOf(part))).length,
         internalParts: request.response.filter(part => INTERNAL_PARTS.has(kindOf(part))),
-        requiresSavedPartsRenderer: request.response.some(part => ['questionCarousel', 'textEditGroup'].includes(kindOf(part)))
+        requiresSavedPartsRenderer: request.response.some(part => kindOf(part) === 'questionCarousel')
     };
 }
 

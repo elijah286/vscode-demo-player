@@ -194,6 +194,7 @@ function Show-CaptureDialog($Owner) {
         foreach ($turn in $inspection.turns) {
             $label = ($turn.index + 1).ToString() + '. ' + ($turn.prompt -replace '\s+', ' ')
             if ($turn.error) { $label = '[Unavailable] ' + $label }
+            elseif ($turn.status -eq 'archived-edits') { $label = '[Read-only edits] ' + $label }
             $turns.Items.Add([pscustomobject]@{ Label = $label; Turn = $turn }) | Out-Null
         }
         $title.Text = if ($inspection.title.Length -gt 160) { $inspection.title.Substring(0,160) } else { $inspection.title }

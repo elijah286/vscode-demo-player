@@ -3,7 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { fileURLToPath } = require('node:url');
 const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf } = require('./replay');
-const { INTERNAL_PARTS, inlineReferenceLabel } = require('./saved-parts');
+const { INTERNAL_PARTS, inlineReferenceLabel, savedEditText } = require('./saved-parts');
 
 const FORMAT = 'vscode-demo-recording';
 const MAX_BYTES = 100 * 1024 * 1024;
@@ -79,9 +79,15 @@ async function inspectTranscript(file) {
             if (kind === 'thinking') return '[Thinking]\n' + (Array.isArray(part.value) ? part.value.join('\n') : part.value ?? '');
             if (kind === 'toolInvocationSerialized') return '[Recorded tool: ' + part.toolId + ']\n' + (part.pastTenseMessage?.value ?? part.pastTenseMessage ?? part.invocationMessage?.value ?? part.invocationMessage ?? '');
             if (kind === 'inlineReference' && !error) return '[Saved reference: ' + inlineReferenceLabel(part) + ']';
+            if (kind === 'textEditGroup' && !error) return savedEditText(part);
             return '[Saved ' + kind + ']\n' + JSON.stringify(part, null, 2);
         }).filter(Boolean).join('\n\n');
-        return { index, prompt, content: 'PROMPT\n' + prompt + '\n\nRESPONSE\n' + response, details: JSON.stringify(request, null, 2), error };
+        const archivedEdits = !error && request.response.some(part => kindOf(part) === 'textEditGroup');
+        return {
+            index, prompt, content: 'PROMPT\n' + prompt + '\n\nRESPONSE\n' + response,
+            details: JSON.stringify(request, null, 2), error,
+            status: error ? 'unavailable' : archivedEdits ? 'archived-edits' : 'ready'
+        };
     });
     const summary = await sessionSummary(file, snapshot);
     return { title: summary.title, sha256, turns, notice: [NOTICE, summary.warning].filter(Boolean).join(' ') };

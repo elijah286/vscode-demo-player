@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
-const { inlineReferenceLabel } = require('../saved-parts');
+const { inlineReferenceLabel, savedEditMarkdown } = require('../saved-parts');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -105,6 +105,13 @@ async function run() {
     for (const reference of references) {
         await page.locator('.interactive-response').filter({ hasText: inlineReferenceLabel(reference) }).last().waitFor({ state: 'visible', timeout: 5000 });
     }
+    const edits = recording.request.response.filter(part => kindOf(part) === 'textEditGroup');
+    assert.deepEqual(api.state.emitted.filter(part => part.kind === 'textEditGroup'), edits, 'Saved code edit payloads are preserved');
+    for (const edit of edits) {
+        await page.locator('.interactive-response strong').filter({ hasText: 'Recorded code edit - not applied' }).last().waitFor({ state: 'visible', timeout: 5000 });
+        assert.ok(api.state.history[1].response.some(part => part.value?.value === savedEditMarkdown(edit)), 'Retained history uses the same read-only edit renderer');
+    }
+    if (edits.length) assert.equal(await page.locator('.interactive-response a[href^="command:example.run"]').count(), 0, 'Recorded replacement text never becomes a command link');
     const typingTime = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const responseTime = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
     assert.ok(Math.abs(typingTime - 2000) < 400, 'Prompt entry follows the two-second timeline: ' + typingTime);
@@ -134,6 +141,9 @@ async function run() {
     assert.equal(api.state.phase, 'complete');
     assert.equal(api.state.turnIndex, 2);
     assert.equal(api.state.history.length, 4);
+    if (edits.length) {
+        await page.locator('.interactive-response').filter({ hasText: 'Recorded code edit - not applied' }).first().waitFor({ state: 'visible', timeout: 5000 });
+    }
     assert.equal(controlView(api.state).enabled, false);
     const secondTyping = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const secondResponse = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
