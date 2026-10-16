@@ -169,7 +169,12 @@ native VS Code JSONL source is captured per demo. Other agents need a future
 format adapter, not a prompt asking a model to invent the package.
 
 The current Editor package renderer accepts Markdown, thinking, completed tool
-records with identifiers, and known internal metadata. Saved question/edit and
+records with identifiers, recorded inline file/URI/location references, and
+known internal metadata. References retain their native inline anchors in
+streamed output and subsequent conversation history. Serialized URI components,
+absolute paths, symbol locations, and saved source ranges are validated without
+reading or requiring the referenced file. Executable URI schemes and malformed
+references are rejected explicitly. Saved question/edit and
 other richer parts are refused explicitly, not converted to approximate tools
 or silently omitted. External images, links, files, and workspace state are
 **not bundled**. The capture tool does not retrieve their contents. Native
@@ -259,6 +264,24 @@ Set-Location .\native
 npm run test:unit
 npm run lint
 ```
+
+`test:unit` selects the native-reference regressions explicitly, including
+capture/export/import fidelity, serialized URI/location variants, native-anchor
+conversion, malformed ranges, and refusal to turn unknown parts into tool calls.
+
+For native reference rendering and retained-history verification:
+
+```powershell
+$env:HISTORY_REPLAY_TEST_SOURCE = 'C:\Recordings\reference-regression.jsonl'
+npm run test:references:native
+```
+
+Use two complete exchanges, with at least one inline reference in the first.
+This test verifies visible native inline anchors, preserved reference payloads,
+exact prompt/answer text, and retained anchors after the second exchange.
+Optional `HISTORY_REPLAY_TEST_EVIDENCE` selects a local screenshot directory.
+Coordinate an interactive desktop test slot before running it; never commit
+real source transcripts or their screenshots.
 
 To run the existing native two-turn visual test with a suitable local source:
 
