@@ -23,7 +23,7 @@ async function main() {
         vscodeExecutablePath: path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe'),
         extensionDevelopmentPath: process.env.HISTORY_REPLAY_TEST_EXTENSION
             ? path.resolve(process.env.HISTORY_REPLAY_TEST_EXTENSION) : __dirname,
-        extensionTestsPath: path.join(__dirname, 'test', 'native-runner.js'),
+        extensionTestsPath: path.join(__dirname, 'test', process.argv.includes('--references') ? 'reference-native-runner.js' : 'native-runner.js'),
         extensionTestsEnv: {
             HISTORY_REPLAY_CDP_PORT: String(port),
             HISTORY_REPLAY_TEST_SOURCE: path.resolve(source),

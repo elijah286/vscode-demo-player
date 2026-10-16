@@ -1,9 +1,10 @@
 const vscode = require('vscode');
-const { readRecordings, readPlaylist, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('./replay');
+const { readRecordings, readPlaylist, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('./replay');
 const { createControlServer } = require('./control-server');
 const { RecordingAgentHost } = require('./recording-agent-host');
 const { NativeComposer } = require('./native-composer');
 const { packageRecordings } = require('./demo-library');
+const { nativeResponsePart } = require('./native-response');
 
 function activate(context) {
     const capabilities = {
@@ -38,29 +39,8 @@ function activate(context) {
         await vscode.commands.executeCommand('workbench.action.chat.openNewSessionSidebar.history-replay');
     }
 
-    function markdown(value) {
-        const result = new vscode.MarkdownString(typeof value === 'string' ? value : value?.value ?? '');
-        result.isTrusted = false;
-        result.supportHtml = false;
-        return result;
-    }
-
     function nativeEvent(event) {
-        const part = event.part;
-        if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(event.value));
-        if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
-        const result = new vscode.ChatToolInvocationPart(part.toolId, part.toolCallId);
-        result.invocationMessage = markdown(part.invocationMessage);
-        result.isConfirmed = true;
-        result.isComplete = event.kind === 'toolPending' ? false : part.isComplete;
-        if (event.kind === 'toolComplete') {
-            result.enablePartialUpdate = true;
-            result.pastTenseMessage = part.pastTenseMessage ? markdown(part.pastTenseMessage) : undefined;
-            result.isError = part.isError;
-            result.presentation = part.presentation;
-            result.toolSpecificData = part.toolSpecificData;
-        }
-        return result;
+        return nativeResponsePart(vscode, event);
     }
 
     function savedHistory() {
@@ -82,6 +62,7 @@ function activate(context) {
                 if (event.kind === 'markdown') state.emitted.push({ kind: 'markdown', value: event.value });
                 else if (event.kind === 'thinking') state.emitted.push({ kind: 'thinking', value: event.part.value });
                 else if (event.kind === 'toolComplete') state.emitted.push({ kind: 'toolInvocationSerialized', toolCallId: event.part.toolCallId });
+                else if (event.kind === 'inlineReference') state.emitted.push({ kind: 'inlineReference', original: event.part });
             }
             await state.clock.waitUntil(state.responseOrigin + RESPONSE_DURATION);
             state.metrics.responseFinished = performance.now();
@@ -124,9 +105,7 @@ function activate(context) {
                 recordingEndpoint = undefined;
                 recordingHost = undefined;
             }
-            if (process.env.HISTORY_REPLAY_AGENTS !== '1' && state.recordings.some(recording => recording.requiresSavedPartsRenderer)) {
-                throw new Error('This complete exchange requires the native Agents saved-question/edit renderer.');
-            }
+            if (process.env.HISTORY_REPLAY_AGENTS !== '1') state.recordings.forEach(validateEditorRecording);
             state.turnIndex = 0;
             state.history = [];
             state.phase = 'ready';

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const { INTERNAL_PARTS, completedQuestions } = require('./saved-parts');
+const { INTERNAL_PARTS, completedQuestions, recordedReference } = require('./saved-parts');
 
 function kindOf(part) {
     if (typeof part === 'string' || (!part.kind && typeof part.value === 'string')) return 'markdown';
@@ -69,13 +69,14 @@ async function readRecordings(file, requestIndex, requestCount = 1) {
 }
 
 function validateEditorRecording(recording) {
-    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', ...INTERNAL_PARTS]);
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'inlineReference', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(recording.request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Editor playback cannot render these saved parts: ' + unsupported.join(', ') + '. No content was discarded.');
     if (!recording.request.message.text.trim()) throw new Error('Editor playback requires a nonempty recorded prompt.');
     for (const part of recording.request.response) {
         const kind = kindOf(part);
         if (kind === 'markdown' && typeof (typeof part === 'string' ? part : part.value) !== 'string') throw new Error('Invalid recorded Markdown.');
+        if (kind === 'inlineReference') recordedReference(part);
         if (kind === 'toolInvocationSerialized' && (!part.isComplete || typeof part.toolId !== 'string' || typeof part.toolCallId !== 'string')) {
             throw new Error('Recorded tool activity is incomplete or missing tool identifiers.');
         }

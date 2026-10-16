@@ -89,7 +89,8 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test:unit": "node --test test/replay.test.js test/demo-library.test.js",
+    "test:unit": "node --test test/replay.test.js test/demo-library.test.js test/native-reference.test.js",
+    "test:references:native": "node test-native.js --references",
     "pretest": "npm run lint",
     "test": "node test-native.js"
   },
