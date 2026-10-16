@@ -10,6 +10,11 @@ Capture a local saved conversation or import a .demo-recording.json package.
 Play opens an isolated VS Code window automatically, even if VS Code is closed.
 Your normal VS Code profile, extensions, and open projects are not modified.
 
+The app checks public GitHub releases at startup. "Check for updates" shows
+installed/latest versions. Installation always asks first, verifies the
+download, stops only its own playback, and restarts after updating.
+Version 0.1.0 users must install this updater-enabled version once manually.
+
 Recordings are private user data and are not included in this installer.
 The demo library is stored in %LOCALAPPDATA%\VSCodeDemoPlayer\demos.
 Upgrades and uninstall leave this library intact.

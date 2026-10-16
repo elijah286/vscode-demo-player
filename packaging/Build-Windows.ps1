@@ -48,8 +48,8 @@ $payload = Join-Path $cache ('payload-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $payload 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $payload 'runtime')) | Out-Null
 
-$rootFiles = @('Start-InstalledPlayer.ps1', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerEnvironment.ps1', 'README.md')
-$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'control-server.js', 'demo-library.js', 'library-cli.js')
+$rootFiles = @('Start-InstalledPlayer.ps1', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
+$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'control-server.js', 'demo-library.js', 'library-cli.js', 'updater.js')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $payload $file) }
 foreach ($file in $nativeFiles) { Copy-Item -LiteralPath (Join-Path $root ('native\' + $file)) -Destination (Join-Path $payload ('native\' + $file)) }
 Copy-Item -LiteralPath $node -Destination (Join-Path $payload 'runtime\node.exe')
