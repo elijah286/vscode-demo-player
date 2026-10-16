@@ -123,7 +123,7 @@ class RecordingAgentHost {
 
     appendSavedPart(part) {
         if (part.kind === 'questionCarousel') return this.appendPart(completedQuestions(part));
-        if (['textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit'].includes(part.kind)) {
+        if (['textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent'].includes(part.kind)) {
             const artifact = archivedEdit(part);
             this.artifacts.set(artifact.uri, artifact.content);
             return this.appendPart(artifact.part);

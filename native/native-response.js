@@ -1,4 +1,5 @@
 const { recordedReference, savedEditMarkdown } = require('./saved-parts');
+const { sdkEventMarkdown } = require('./sdk-transcript');
 
 function markdown(vscode, value) {
     const result = new vscode.MarkdownString(typeof value === 'string' ? value : value?.value ?? '');
@@ -12,6 +13,7 @@ function nativeResponsePart(vscode, event) {
     if (event.kind === 'markdown') return new vscode.ChatResponseMarkdownPart(markdown(vscode, event.value));
     if (event.kind === 'thinking') return new vscode.ChatResponseThinkingProgressPart(part.value, part.id);
     if (event.kind === 'textEditGroup') return new vscode.ChatResponseMarkdownPart(markdown(vscode, savedEditMarkdown(part)));
+    if (event.kind === 'recordedSdkEvent') return new vscode.ChatResponseMarkdownPart(markdown(vscode, sdkEventMarkdown(part)));
     if (event.kind === 'inlineReference') {
         const reference = recordedReference(part);
         let uri;

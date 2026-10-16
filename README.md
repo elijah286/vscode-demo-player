@@ -161,20 +161,57 @@ Set-Location ..
 .\Start-DemoPlayer.ps1
 ```
 
-The controller opens without a project or selected recording. Use **Capture
-Conversation**, choose the project directory (or paste it and click **Find
-conversations**), then select a session and Load. Discovery lists only that exact
-folder's conversations from standard VS Code workspace storage, not every project
-on the computer. Parent and similarly named sibling directories are not included.
-Use **Browse transcript** or paste a native JSONL path for other profiles,
-multi-root workspaces, or transcripts saved outside standard storage.
-Chat names come from VS Code's saved session index, opened read-only. If the
-index is absent, discovery reconstructs the final saved title or opening prompt,
-including transcripts whose initial snapshot exceeds 1 MiB. Unreadable sources
-and title-index errors are explicitly labeled; UUIDs are not used as chat names.
-Discovery shows up to 200 recent matches. Loading reconstructs and validates the
-full final saved conversation; the dialog continues processing window events
-while its helper runs, with a 30-second limit and controls disabled until done.
+The controller opens without a project or selected recording. **Capture
+Conversation** automatically discovers local history and displays a sortable
+table: conversation title, project/workspace, agent/producer, last activity,
+start time, prompt count, duration, source and status. No project-directory
+selection is required. Project means the recorded workspace association, not a
+guess based on which repository was discussed or edited. Multi-root workspaces
+show their saved workspace name; empty-window sessions show **No workspace**.
+
+Discovery probes known VS Code and Insiders workspace/profile stores,
+empty-window chat stores, newer agent-session databases, and the current user's
+Copilot SDK/CLI session-state directory. Agent databases are opened read-only
+and their SDK recording links are followed. The same recording is listed once,
+even when found through multiple sources. Nothing recursively crawls the drive.
+**Add history location...** adds a VS Code user-data/profile root,
+workspaceStorage, agentSessionData, SDK session-state, or a directory of JSONL
+transcripts for the current dialog. **Browse transcript...** and manual JSONL
+paths remain available.
+
+Search filters titles, project names/paths, agents and sources without rescanning.
+Project, agent, source, status, inclusive activity-date filters, minimum prompt
+count and minimum duration can be combined. Click column headers to sort (newest
+recorded activity is the default). **Clear filters** restores the complete table;
+**Refresh history** explicitly rescans for new/changed recordings.
+Duration is the span from the first to last recorded activity, not elapsed model
+working time. Missing dates/agents/duration display **Not recorded**; deferred
+prompt counts display **Not indexed**. File modification times are not invented
+conversation timestamps.
+
+Discovery streams progress and rows in the background while filters and the
+window stay responsive. It is limited to 60 seconds, 10,000 recordings, 8 MiB
+per recording metadata read, and 256 MiB total recording metadata reads per refresh.
+Workspace metadata and agent database values are limited to 1 MiB each; saved
+title indexes are limited to 8 MiB each. Larger recording sources
+remain listed as **Load to inspect** rather than disappearing. **Discovery
+details** shows errors and limits; row tooltips explain partial, unavailable
+and unsupported sources. Chat titles use the VS Code index where available.
+Loading reconstructs and validates the full selected recording (100 MiB maximum)
+with a 30-second helper limit and reentrant controls disabled until done.
+
+SDK event recordings normalize saved prompts, assistant text and tool transitions
+for playback. Original selected events, tool-result data, initial context and
+attachment metadata remain in the raw payload. Other event metadata is shown
+as an inert **Recorded SDK events** archive; no saved tool is executed.
+External attachments are not bundled. Unfinished final turns, unmatched tool
+results and incomplete tool invocations have explicit per-exchange errors.
+Agent databases with no supported SDK link remain visible but unavailable;
+local-only database turns are not yet a supported playback format.
+Legacy JSON snapshots are also listed with an explicit unsupported-format reason;
+they are not silently hidden or treated as JSONL recordings.
+SDK captures use provenance kind `copilot-sdk-jsonl` in the existing version-1
+package; older players that only support native recordings will reject them.
 
 Select up to 100 exchanges with Ctrl/Shift and review the readable prompt/response
 preview. Enable **Show full saved payload** to inspect original tool data and

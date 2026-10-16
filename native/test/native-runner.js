@@ -6,6 +6,7 @@ const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
 const { savedEditMarkdown } = require('../saved-parts');
+const { sdkEventMarkdown } = require('../sdk-transcript');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -114,6 +115,13 @@ async function run() {
         assert.ok(api.state.history[1].response.some(part => part.value?.value === savedEditMarkdown(edit)), 'Retained history uses the same read-only edit renderer');
     }
     if (edits.length) assert.equal(await page.locator('.interactive-response a[href^="command:example.run"]').count(), 0, 'Recorded replacement text never becomes a command link');
+    const sdkArchives = recording.request.response.filter(part => kindOf(part) === 'recordedSdkEvent');
+    assert.deepEqual(api.state.emitted.filter(part => part.kind === 'recordedSdkEvent').map(part => part.original), sdkArchives, 'SDK event payloads survive streaming');
+    for (const archive of sdkArchives) {
+        await page.locator('.interactive-response strong').filter({ hasText: 'Recorded SDK events - read-only, never executed' }).last().waitFor({ state: 'visible', timeout: 5000 });
+        assert.ok(api.state.history[1].response.some(part => part.value?.value === sdkEventMarkdown(archive)), 'SDK event archive survives retained history');
+    }
+    if (sdkArchives.length) assert.equal(await page.locator('.interactive-response a[href^="command:never.run"]').count(), 0, 'SDK result text never becomes a command link');
     const typingTime = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const responseTime = api.state.metrics.responseFinished - api.state.metrics.promptFinished;
     assert.ok(Math.abs(typingTime - 2000) < 400, 'Prompt entry follows the two-second timeline: ' + typingTime);

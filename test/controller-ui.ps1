@@ -132,6 +132,30 @@ function Start-TestPlayer {
 }
 
 $tasks = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+$originalAppData = $env:APPDATA
+$originalProfile = $env:USERPROFILE
+$env:APPDATA = Join-Path $evidence 'AppData'
+$env:USERPROFILE = Join-Path $evidence 'Home'
+$storage = Join-Path $env:APPDATA ('Code\User\workspaceStorage\' + ('a' * 32))
+[IO.Directory]::CreateDirectory((Join-Path $storage 'chatSessions')) | Out-Null
+Copy-Item -LiteralPath $source -Destination (Join-Path $storage 'chatSessions\synthetic.jsonl')
+[IO.File]::WriteAllText((Join-Path $storage 'workspace.json'), (@{ folder = ([Uri]$evidence).AbsoluteUri } | ConvertTo-Json -Compress), $utf8)
+$sdkId = '12345678-1234-1234-1234-123456789abc'
+$sdkSource = Join-Path $env:USERPROFILE ('.copilot\session-state\' + $sdkId + '\events.jsonl')
+[IO.Directory]::CreateDirectory((Split-Path $sdkSource -Parent)) | Out-Null
+$sdkRecords = @(
+    @{ type = 'session.start'; timestamp = '2026-10-16T12:00:00Z'; data = @{ version = 1; sessionId = $sdkId; producer = 'Synthetic SDK Agent'; context = @{ cwd = 'C:\Synthetic\SDKProject' } } },
+    @{ type = 'user.message'; timestamp = '2026-10-16T12:00:01Z'; data = @{ content = 'First synthetic SDK prompt' } },
+    @{ type = 'assistant.message'; timestamp = '2026-10-16T12:00:02Z'; data = @{ content = 'Before the saved tool. '; toolRequests = @(@{ name = 'recorded-only-no-execution' }) } },
+    @{ type = 'tool.execution_start'; timestamp = '2026-10-16T12:00:02.100Z'; data = @{ toolCallId = 'sdk-tool'; toolName = 'recorded-only-no-execution'; arguments = @{ target = $target } } },
+    @{ type = 'tool.execution_complete'; timestamp = '2026-10-16T12:00:02.200Z'; data = @{ toolCallId = 'sdk-tool'; success = $true; result = @{ content = '[Saved text, not a command](command:never.run)' } } },
+    @{ type = 'assistant.message'; timestamp = '2026-10-16T12:00:02.300Z'; data = @{ content = 'First SDK final answer' } },
+    @{ type = 'assistant.turn_end'; timestamp = '2026-10-16T12:00:03Z'; data = @{} },
+    @{ type = 'user.message'; timestamp = '2026-10-16T12:00:04Z'; data = @{ content = 'Second synthetic SDK prompt' } },
+    @{ type = 'assistant.message'; timestamp = '2026-10-16T12:00:05Z'; data = @{ content = 'Second SDK final answer' } },
+    @{ type = 'assistant.turn_end'; timestamp = '2026-10-16T12:00:06Z'; data = @{} }
+)
+[IO.File]::WriteAllText($sdkSource, (($sdkRecords | ForEach-Object { $_ | ConvertTo-Json -Depth 12 -Compress }) -join "`n") + "`n", $utf8)
 $launch = Start-TestPlayer
 $script:controllerId = $launch.ProcessId
 $replayId = 0
@@ -150,12 +174,52 @@ try {
     Invoke-Button $dialog 'CaptureConversation'
     $capture = Wait-Until { Get-AppWindow 'Capture Conversation' } 'capture dialog'
     $sessionList = Find-Element $capture 'Id' 'CaptureSessions'
-    if ($sessionList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 0) { throw 'Capture must not discover unrelated projects before a folder is chosen.' }
-    $folderBox = Find-Element $capture 'Id' 'CaptureFolder'
-    ([System.Windows.Automation.ValuePattern]$folderBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($evidence)
-    Invoke-Button $capture 'CaptureFindSessions'
-    Wait-Until { $capture.Current.IsEnabled -and (Find-Element $capture 'Id' 'CaptureFindSessions').Current.IsEnabled } 'folder discovery completes' | Out-Null
-    if ($sessionList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 0) { throw 'A folder without saved conversations must not list other projects.' }
+    Wait-Until {
+        ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 -and
+        (Find-Element $capture 'Id' 'CaptureRefresh').Current.IsEnabled
+    } 'automatic discovery lists the two synthetic native/SDK conversations' 65 | Out-Null
+    $historySearch = Find-Element $capture 'Id' 'CaptureHistorySearch'
+    ([System.Windows.Automation.ValuePattern]$historySearch.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('SDKProject')
+    Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 1 } 'project search filters without rescanning' | Out-Null
+    $rowCondition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::DataItem)
+    $sdkRow = $sessionList.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $rowCondition)
+    ([System.Windows.Automation.SelectionItemPattern]$sdkRow.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    Invoke-Button $capture 'Load'
+    $turnList = Find-Element $capture 'Id' 'CaptureTurns'
+    Wait-Until { $turnList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 2 } 'SDK conversation loads two exchanges' | Out-Null
+    $rawPayload = Find-Element $capture 'Id' 'CaptureRawPayload'
+    $sdkTurn = $turnList.FindFirst([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+    ([System.Windows.Automation.SelectionItemPattern]$sdkTurn.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    $preview = Find-Element $capture 'Id' 'CapturePreview'
+    if (([System.Windows.Automation.ValuePattern]$preview.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value -notmatch '"sdkEvents"') { throw 'SDK original events are not available in the raw preview.' }
+    ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Invoke-Button $capture 'CaptureClearFilters'
+    Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 } 'clear filters restores both rows' | Out-Null
+    $agentFilter = Find-Element $capture 'Id' 'CaptureAgentFilter'
+    ([System.Windows.Automation.ExpandCollapsePattern]$agentFilter.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+    $agentItem = Find-Element $agentFilter 'Name' 'Synthetic SDK Agent'
+    for ($depth = 0; $agentItem -and $depth -lt 8; $depth++) {
+        if ($agentItem.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) { break }
+        $agentItem = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($agentItem)
+    }
+    if (-not $agentItem -or -not $agentItem.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) { throw 'SDK agent filter item is unavailable.' }
+    ([System.Windows.Automation.SelectionItemPattern]$agentItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 1 } 'agent filter selects SDK conversation' | Out-Null
+    $minimum = Find-Element $capture 'Id' 'CaptureMinPrompts'
+    ([System.Windows.Automation.ValuePattern]$minimum.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('3')
+    Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 0 } 'prompt threshold filters numerically' | Out-Null
+    Invoke-Button $capture 'CaptureClearFilters'
+    $header = Find-Element $sessionList 'Name' 'Conversation'
+    $tasks.Add([DemoUITest]::Invoke($header))
+    Start-Sleep -Milliseconds 200
+    $tasks.Add([DemoUITest]::Invoke($header))
+    Wait-Until {
+        $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
+        Find-Element $cell 'Name' 'Synthetic UI acceptance'
+    } 'conversation column sorts descending' | Out-Null
+    Invoke-Button $capture 'CaptureRefresh'
+    Wait-Until { (Find-Element $capture 'Id' 'CaptureRefresh').Current.IsEnabled -and ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 } 'refresh completes without duplicate rows' 65 | Out-Null
     $sourceBox = Find-Element $capture 'Id' 'CaptureSource'
     ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($source)
     Invoke-Button $capture 'Load'
@@ -235,7 +299,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: empty launch, folder-only discovery, readable/raw preview with inline references and read-only code edits, capture/save, rename/select, play/pause/resume, review/completion, scoped stop, controller reuse, close during paused replay, persisted library after restart, and unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, project search, agent/prompt filters, title sorting, clear filters, refresh/deduplication, SDK raw-event preview, native capture/save, rename/select, play/pause/resume, review/completion, scoped stop, reuse, paused close, persistence, and unchanged edit target.'
 } catch {
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())
@@ -263,4 +327,6 @@ try {
     foreach ($task in $tasks) {
         if (-not $task.Wait(3000)) { Write-Warning 'An automation invocation did not finish within its cleanup timeout.' }
     }
+    $env:APPDATA = $originalAppData
+    $env:USERPROFILE = $originalProfile
 }

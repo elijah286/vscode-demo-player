@@ -3,6 +3,7 @@ const readline = require('node:readline');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { INTERNAL_PARTS, completedQuestions, recordedReference, validateSavedEditGroup } = require('./saved-parts');
+const { sdkSnapshot } = require('./sdk-transcript');
 
 function kindOf(part) {
     if (typeof part === 'string') return 'markdown';
@@ -51,15 +52,25 @@ async function readSnapshot(file) {
     const stream = fs.createReadStream(file, { encoding: 'utf8' });
     const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
     let snapshot;
+    let sdkRecords;
+    let sdkBytes = 0;
     try {
         for await (const line of lines) {
-            if (line.trim()) snapshot = applyTranscriptRecord(snapshot, JSON.parse(line));
+            if (!line.trim()) continue;
+            const record = JSON.parse(line.replace(/^\uFEFF/, ''));
+            if (!snapshot && !sdkRecords && record.type === 'session.start') sdkRecords = [];
+            if (sdkRecords) {
+                sdkBytes += Buffer.byteLength(line);
+                if (sdkBytes > 100 * 1024 * 1024 || sdkRecords.length >= 100000) throw new Error('SDK recording exceeds the 100 MiB / 100,000-event limit.');
+                sdkRecords.push(record);
+            } else snapshot = applyTranscriptRecord(snapshot, record);
         }
     } finally {
         lines.close();
         stream.destroy();
     }
-    if (!Array.isArray(snapshot?.requests)) throw new Error('Expected a native JSONL snapshot.');
+    if (sdkRecords) snapshot = sdkSnapshot(sdkRecords);
+    if (!Array.isArray(snapshot?.requests)) throw new Error('Expected a saved JSONL conversation.');
     return snapshot;
 }
 
@@ -71,13 +82,14 @@ async function readRecordings(file, requestIndex, requestCount = 1) {
 }
 
 function validateEditorRecording(recording) {
-    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', ...INTERNAL_PARTS]);
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(recording.request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Editor playback cannot render these saved parts: ' + unsupported.join(', ') + '. No content was discarded.');
     if (!recording.request.message.text.trim()) throw new Error('Editor playback requires a nonempty recorded prompt.');
     for (const part of recording.request.response) {
         const kind = kindOf(part);
         if (kind === 'textEditGroup') validateSavedEditGroup(part);
+        if (kind === 'recordedSdkEvent' && !Array.isArray(part.events)) throw new Error('Recorded SDK event archive must contain an event array.');
         if (kind === 'markdown' && typeof (typeof part === 'string' ? part : part.value) !== 'string') throw new Error('Invalid recorded Markdown.');
         if (kind === 'inlineReference') recordedReference(part);
         if (kind === 'toolInvocationSerialized' && (!part.isComplete || typeof part.toolId !== 'string' || typeof part.toolCallId !== 'string')) {
@@ -110,10 +122,11 @@ async function readPlaylist(file) {
 
 function extractRecording(file, snapshot, requestIndex) {
     const request = snapshot.requests[requestIndex];
+    if (request?.sourceError) throw new Error(request.sourceError);
     if (!request?.result || typeof request.message?.text !== 'string' || !Array.isArray(request.response)) {
         throw new Error('The selected request is absent or incomplete in the saved transcript.');
     }
-    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', ...INTERNAL_PARTS]);
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent', ...INTERNAL_PARTS]);
     const unsupported = [...new Set(request.response.map(kindOf).filter(kind => !supported.has(kind)))];
     if (unsupported.length) throw new Error('Native streaming is not implemented for: ' + unsupported.join(', '));
     for (const part of request.response) {

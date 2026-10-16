@@ -1,4 +1,4 @@
-function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
+function Start-DemoLibraryProcess([hashtable]$Request) {
     if (-not $script:NodePath) {
         $script:NodePath = Resolve-PlayerNode
     }
@@ -16,12 +16,23 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
     $process = [System.Diagnostics.Process]::Start($start)
     if (-not $process) { throw 'The demo library helper could not start.' }
     try {
-        $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
         $writer = [System.IO.StreamWriter]::new($process.StandardInput.BaseStream, [System.Text.UTF8Encoding]::new($false), 4096, $true)
         try { $writer.Write(($Request | ConvertTo-Json -Depth 10 -Compress)); $writer.Flush() }
         finally { $writer.Dispose() }
         $process.StandardInput.Close()
+        return $process
+    } catch {
+        try { if (-not $process.HasExited) { $process.Kill() } }
+        finally { $process.Dispose() }
+        throw
+    }
+}
+
+function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
+    $process = Start-DemoLibraryProcess $Request
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
         $exited = $false
         if ($Owner) {
             $enabled = $Owner.IsEnabled
@@ -80,7 +91,7 @@ function Select-DemoFile($Owner, [string]$Filter) {
 function Select-DemoFolder($Owner) {
     Add-Type -AssemblyName System.Windows.Forms
     $picker = [System.Windows.Forms.FolderBrowserDialog]::new()
-    $picker.Description = 'Select the project folder whose VS Code conversations you want to import.'
+    $picker.Description = 'Select a VS Code user-data/profile folder, workspaceStorage, agentSessionData, SDK session-state, or a directory of JSONL transcripts.'
     $picker.ShowNewFolderButton = $false
     $nativeOwner = [System.Windows.Forms.NativeWindow]::new()
     try {
@@ -90,31 +101,79 @@ function Select-DemoFolder($Owner) {
     } finally { $nativeOwner.ReleaseHandle(); $picker.Dispose() }
 }
 
+function Test-DemoHistoryRow($Row, [string]$Search, [string]$Project, [string]$Agent, [string]$Source, [string]$Status, $From, $To, $MinPrompts, $MinDuration) {
+    if ($Search -and ($Row.Title + ' ' + $Row.Project + ' ' + $Row.ProjectPath + ' ' + $Row.Agent + ' ' + $Row.Source).IndexOf($Search, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+    foreach ($pair in @(@($Project, $Row.ProjectKey), @($Agent, $Row.AgentKey), @($Source, $Row.Source), @($Status, $Row.Status))) {
+        if ($pair[0] -and $pair[0] -ne '*' -and $pair[0] -ne $pair[1]) { return $false }
+    }
+    if ($From -and (-not $Row.LastActivity -or $Row.LastActivity.Date -lt $From.Date)) { return $false }
+    if ($To -and (-not $Row.LastActivity -or $Row.LastActivity.Date -gt $To.Date)) { return $false }
+    if ($null -ne $MinPrompts -and ($null -eq $Row.Prompts -or $Row.Prompts -lt $MinPrompts)) { return $false }
+    if ($null -ne $MinDuration -and ($null -eq $Row.DurationSeconds -or $Row.DurationSeconds -lt $MinDuration)) { return $false }
+    return $true
+}
+
 function Show-CaptureDialog($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Capture Conversation"
- Width="900" Height="740" MinWidth="720" MinHeight="620" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ Width="1180" Height="820" MinWidth="850" MinHeight="620" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions>
-   <RowDefinition Height="Auto"/><RowDefinition Height="110"/><RowDefinition Height="Auto"/>
-   <RowDefinition Height="140"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/><RowDefinition Height="170"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="90"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
   <StackPanel Margin="0,0,0,8">
   <DockPanel>
-   <Button x:Name="Browse" DockPanel.Dock="Right" Content="Browse transcript..." Padding="12,5"/>
-   <TextBlock x:Name="DiscoveryNote" Text="Choose a project folder to list only its saved VS Code conversations, or browse to a transcript." TextWrapping="Wrap" Margin="0,0,12,0"/>
+   <Button x:Name="Browse" DockPanel.Dock="Right" Content="Browse transcript..." Padding="10,5"/>
+   <Button x:Name="AddLocation" DockPanel.Dock="Right" Content="Add history location..." Padding="10,5" Margin="6,0" AutomationProperties.AutomationId="CaptureAddLocation"/>
+   <Button x:Name="Refresh" DockPanel.Dock="Right" Content="Refresh history" Padding="10,5" AutomationProperties.AutomationId="CaptureRefresh"/>
+   <TextBlock x:Name="DiscoveryNote" Text="Discovering local conversations..." TextWrapping="Wrap" Margin="0,0,12,0" AutomationProperties.AutomationId="CaptureDiscoveryNote"/>
   </DockPanel>
-  <DockPanel Margin="0,8,0,0">
-   <Button x:Name="ChooseFolder" Content="Choose folder..." DockPanel.Dock="Right" Padding="12,5" AutomationProperties.AutomationId="CaptureChooseFolder"/>
-   <Button x:Name="FindSessions" Content="Find conversations" DockPanel.Dock="Right" Padding="12,5" Margin="8,0" AutomationProperties.AutomationId="CaptureFindSessions"/>
-   <TextBox x:Name="Folder" ToolTip="Project directory (not the VS Code storage directory)" VerticalContentAlignment="Center" AutomationProperties.AutomationId="CaptureFolder"/>
+  <WrapPanel Margin="0,7,0,0">
+   <TextBlock Text="Search" VerticalAlignment="Center" Margin="0,0,6,0"/>
+   <TextBox x:Name="HistorySearch" Width="240" Margin="0,0,10,0" ToolTip="Filter titles, projects, agents and sources. Does not rescan disk." AutomationProperties.AutomationId="CaptureHistorySearch"/>
+   <TextBlock Text="Project" VerticalAlignment="Center" Margin="0,0,6,0"/>
+   <ComboBox x:Name="ProjectFilter" Width="190" DisplayMemberPath="Label" Margin="0,0,10,0" AutomationProperties.AutomationId="CaptureProjectFilter"/>
+   <TextBlock Text="Agent" VerticalAlignment="Center" Margin="0,0,6,0"/>
+   <ComboBox x:Name="AgentFilter" Width="150" DisplayMemberPath="Label" Margin="0,0,10,0" AutomationProperties.AutomationId="CaptureAgentFilter"/>
+   <Button x:Name="ClearFilters" Content="Clear filters" Padding="8,2" AutomationProperties.AutomationId="CaptureClearFilters"/>
+  </WrapPanel>
+  <WrapPanel Margin="0,7,0,0">
+   <TextBlock Text="Activity from" VerticalAlignment="Center" Margin="0,0,5,0"/>
+   <DatePicker x:Name="DateFrom" Width="120" Margin="0,0,7,0" AutomationProperties.AutomationId="CaptureDateFrom"/>
+   <TextBlock Text="to" VerticalAlignment="Center" Margin="0,0,5,0"/>
+   <DatePicker x:Name="DateTo" Width="120" Margin="0,0,10,0" AutomationProperties.AutomationId="CaptureDateTo"/>
+   <ComboBox x:Name="SourceFilter" Width="140" DisplayMemberPath="Label" Margin="0,0,7,0" AutomationProperties.AutomationId="CaptureSourceFilter"/>
+   <ComboBox x:Name="StatusFilter" Width="150" DisplayMemberPath="Label" Margin="0,0,10,0" AutomationProperties.AutomationId="CaptureStatusFilter"/>
+   <TextBlock Text="Min prompts" VerticalAlignment="Center" Margin="0,0,5,0"/>
+   <TextBox x:Name="MinPrompts" Width="45" Margin="0,0,8,0" AutomationProperties.AutomationId="CaptureMinPrompts"/>
+   <TextBlock Text="Min duration (s)" VerticalAlignment="Center" Margin="0,0,5,0"/>
+   <TextBox x:Name="MinDuration" Width="60" AutomationProperties.AutomationId="CaptureMinDuration"/>
+  </WrapPanel>
+  <DockPanel Margin="0,5,0,0">
+   <Button x:Name="Details" Content="Discovery details" DockPanel.Dock="Right" Padding="6,1"/>
+   <TextBlock x:Name="HistoryCount" Text="Click column headers to sort. Duration is recorded activity span, not working time." TextWrapping="Wrap"/>
   </DockPanel>
   </StackPanel>
-  <ListBox x:Name="Sessions" Grid.Row="1" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureSessions"/>
+  <DataGrid x:Name="Sessions" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
+   SelectionMode="Single" SelectionUnit="FullRow" EnableRowVirtualization="True" EnableColumnVirtualization="True" AutomationProperties.AutomationId="CaptureSessions">
+   <DataGrid.RowStyle><Style TargetType="DataGridRow"><Setter Property="ToolTip" Value="{Binding Detail}"/></Style></DataGrid.RowStyle>
+   <DataGrid.Columns>
+    <DataGridTextColumn Header="Conversation" Binding="{Binding Title}" Width="180"/>
+    <DataGridTextColumn Header="Project / workspace" Binding="{Binding Project}" SortMemberPath="Project" Width="135"/>
+    <DataGridTextColumn Header="Agent / producer" Binding="{Binding Agent, TargetNullValue=Not recorded}" Width="110"/>
+    <DataGridTextColumn Header="Last activity" Binding="{Binding LastActivity, StringFormat=yyyy-MM-dd HH:mm:ss, TargetNullValue=Not recorded}" Width="140"/>
+    <DataGridTextColumn Header="Started" Binding="{Binding Started, StringFormat=yyyy-MM-dd HH:mm:ss, TargetNullValue=Not recorded}" Width="140"/>
+    <DataGridTextColumn Header="Prompts" Binding="{Binding Prompts, TargetNullValue=Not indexed}" Width="65"/>
+    <DataGridTextColumn Header="Duration" Binding="{Binding Duration, TargetNullValue=Not recorded}" SortMemberPath="DurationSeconds" Width="80"/>
+    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="110"/>
+    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="130"/>
+   </DataGrid.Columns>
+  </DataGrid>
   <DockPanel Grid.Row="2" Margin="0,10,0,6">
    <Button x:Name="Load" Content="Load conversation" DockPanel.Dock="Right" Padding="12,5"/>
-   <TextBox x:Name="Source" ToolTip="Select a session, paste a native JSONL file path, or use Browse" Margin="0,0,12,0" VerticalContentAlignment="Center" AutomationProperties.AutomationId="CaptureSource"/>
+   <TextBox x:Name="Source" ToolTip="Select a conversation or browse/paste a saved JSONL transcript. Source files are never modified." Margin="0,0,12,0" VerticalContentAlignment="Center" AutomationProperties.AutomationId="CaptureSource"/>
   </DockPanel>
   <ListBox x:Name="Turns" Grid.Row="3" SelectionMode="Extended" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureTurns"/>
   <TextBox x:Name="Preview" Grid.Row="4" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
@@ -131,7 +190,14 @@ function Show-CaptureDialog($Owner) {
  </Grid>
 </Window>
 '@ $Owner
-    $dialog.Tag = @{ File = $null; Inspection = $null; Result = $null; Folder = $null }
+    $dialog.Width = [Math]::Min($dialog.Width, [System.Windows.SystemParameters]::WorkArea.Width - 24)
+    $dialog.Height = [Math]::Min($dialog.Height, [System.Windows.SystemParameters]::WorkArea.Height - 24)
+    $dialog.Tag = @{
+        File = $null; Inspection = $null; Result = $null; Scan = $null; Locations = @()
+        Rows = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        Warnings = [System.Collections.Generic.List[string]]::new()
+        UpdatingFilters = $false; FilterError = ''; Filters = @{}
+    }
     $sessions = $dialog.FindName('Sessions')
     $turns = $dialog.FindName('Turns')
     $preview = $dialog.FindName('Preview')
@@ -139,38 +205,186 @@ function Show-CaptureDialog($Owner) {
     $reviewed = $dialog.FindName('Reviewed')
     $captureStatus = $dialog.FindName('CaptureStatus')
     $sourceBox = $dialog.FindName('Source')
-    $folderBox = $dialog.FindName('Folder')
-    $discover = {
-        $sessions.Items.Clear()
-        $sourceBox.Text = ''
-        $dialog.FindName('DiscoveryNote').Text = 'Finding conversations for the selected folder...'
-        $discovery = Invoke-DemoLibrary @{ command = 'discover'; folder = $folderBox.Text } $dialog
-        $dialog.Tag.Folder = $folderBox.Text
-        $dialog.FindName('DiscoveryNote').Text = $discovery.notice
-        foreach ($session in $discovery.sessions) {
-            $sessions.Items.Add([pscustomobject]@{
-                Label = $session.title + ' | ' + $session.modified
-                File = $session.file
-            }) | Out-Null
+    $view = [System.Windows.Data.CollectionViewSource]::GetDefaultView($dialog.Tag.Rows)
+    $sessions.ItemsSource = $dialog.Tag.Rows
+    $view.SortDescriptions.Add([System.ComponentModel.SortDescription]::new('LastActivity', [System.ComponentModel.ListSortDirection]::Descending))
+    $view.Filter = [Predicate[object]]{
+        param($row)
+        $f = $dialog.Tag.Filters
+        if ($dialog.Tag.FilterError) { return $false }
+        return Test-DemoHistoryRow $row $f.Search $f.Project $f.Agent $f.Source $f.Status $f.From $f.To $f.MinPrompts $f.MinDuration
+    }
+    $updateCount = {
+        $dialog.FindName('HistoryCount').Text = if ($dialog.Tag.FilterError) { $dialog.Tag.FilterError } else {
+            $sessions.Items.Count.ToString() + ' of ' + $dialog.Tag.Rows.Count + ' conversations. Click headers to sort; duration is recorded activity span.'
         }
     }
-    $folderBox.Add_TextChanged({
-        if ($folderBox.Text -ne $dialog.Tag.Folder) {
-            $sessions.Items.Clear()
-            $sourceBox.Text = ''
-            $dialog.FindName('DiscoveryNote').Text = 'Find conversations to refresh the list for this folder.'
+    $applyFilters = {
+        if ($dialog.Tag.UpdatingFilters) { return }
+        $f = @{
+            Search = $dialog.FindName('HistorySearch').Text
+            Project = $dialog.FindName('ProjectFilter').SelectedItem.Value
+            Agent = $dialog.FindName('AgentFilter').SelectedItem.Value
+            Source = $dialog.FindName('SourceFilter').SelectedItem.Value
+            Status = $dialog.FindName('StatusFilter').SelectedItem.Value
+            From = $dialog.FindName('DateFrom').SelectedDate
+            To = $dialog.FindName('DateTo').SelectedDate
+            MinPrompts = $null; MinDuration = $null
+        }
+        $dialog.Tag.FilterError = ''
+        if ($f.From -and $f.To -and $f.From -gt $f.To) { $dialog.Tag.FilterError = 'The activity start date must not be after the end date.' }
+        foreach ($name in @('MinPrompts', 'MinDuration')) {
+            $text = $dialog.FindName($name).Text
+            if ($text) {
+                $number = 0
+                if (-not [int]::TryParse($text, [ref]$number) -or $number -lt 0) {
+                    $dialog.Tag.FilterError = 'Minimum prompts and duration must be nonnegative whole numbers.'
+                } else { $f[$name] = $number }
+            }
+        }
+        $dialog.Tag.Filters = $f
+        $view.Refresh()
+        & $updateCount
+    }
+    $fillFilters = {
+        $dialog.Tag.UpdatingFilters = $true
+        try {
+            foreach ($spec in @(
+                @('ProjectFilter', 'ProjectKey', 'All projects'),
+                @('AgentFilter', 'AgentKey', 'All agents'),
+                @('SourceFilter', 'Source', 'All sources'),
+                @('StatusFilter', 'Status', 'All statuses')
+            )) {
+                $control = $dialog.FindName($spec[0])
+                $previous = $control.SelectedItem.Value
+                $control.Items.Clear()
+                $control.Items.Add([pscustomobject]@{ Label = $spec[2]; Value = '*' }) | Out-Null
+                foreach ($value in @($dialog.Tag.Rows | ForEach-Object { $_.($spec[1]) } | Sort-Object -Unique)) {
+                    $label = if ($value -eq '<no workspace>') { 'No workspace' } elseif ($value -eq '<not recorded>') { 'Not recorded' } else { $value }
+                    $control.Items.Add([pscustomobject]@{ Label = $label; Value = $value }) | Out-Null
+                }
+                $selected = @($control.Items | Where-Object { $_.Value -eq $previous })
+                $control.SelectedItem = if ($selected.Count) { $selected[0] } else { $control.Items[0] }
+            }
+        } finally { $dialog.Tag.UpdatingFilters = $false }
+        & $applyFilters
+    }
+    foreach ($name in @('HistorySearch', 'MinPrompts', 'MinDuration')) { $dialog.FindName($name).Add_TextChanged($applyFilters) }
+    foreach ($name in @('ProjectFilter', 'AgentFilter', 'SourceFilter', 'StatusFilter')) { $dialog.FindName($name).Add_SelectionChanged($applyFilters) }
+    foreach ($name in @('DateFrom', 'DateTo')) { $dialog.FindName($name).Add_SelectedDateChanged($applyFilters) }
+    foreach ($name in @('DateFrom', 'DateTo')) {
+        $dialog.FindName($name).Add_DateValidationError({
+            param($sender, $args)
+            $args.ThrowException = $false
+            $dialog.Tag.FilterError = 'Enter a valid activity date or clear the date field.'
+            $view.Refresh()
+            & $updateCount
+        })
+    }
+    $dialog.FindName('ClearFilters').Add_Click({
+        $dialog.Tag.UpdatingFilters = $true
+        try {
+            foreach ($name in @('HistorySearch', 'MinPrompts', 'MinDuration')) { $dialog.FindName($name).Text = '' }
+            foreach ($name in @('ProjectFilter', 'AgentFilter', 'SourceFilter', 'StatusFilter')) { $dialog.FindName($name).SelectedIndex = 0 }
+            foreach ($name in @('DateFrom', 'DateTo')) { $dialog.FindName($name).SelectedDate = $null }
+        } finally { $dialog.Tag.UpdatingFilters = $false }
+        & $applyFilters
+    })
+    $scanTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $scanTimer.Interval = [TimeSpan]::FromMilliseconds(50)
+    $stopScan = {
+        param([bool]$Cancel)
+        $scanTimer.Stop()
+        $scan = $dialog.Tag.Scan
+        if ($scan) {
+            try { if ($Cancel -and -not $scan.Process.HasExited) { $scan.Process.Kill() } }
+            finally { $scan.Process.Dispose(); $scan.Clock.Stop(); $dialog.Tag.Scan = $null }
+        }
+        foreach ($name in @('Refresh', 'AddLocation', 'Load', 'Browse')) { $dialog.FindName($name).IsEnabled = $true }
+    }
+    $startScan = {
+        if ($dialog.Tag.Scan) { return }
+        try {
+            $process = Start-DemoLibraryProcess @{ command = 'history'; locations = @($dialog.Tag.Locations); progress = $true }
+            $dialog.Tag.Scan = @{
+                Process = $process; Line = $process.StandardOutput.ReadLineAsync()
+                Errors = $process.StandardError.ReadToEndAsync(); Clock = [Diagnostics.Stopwatch]::StartNew()
+                Result = $null; End = $false
+            }
+            $dialog.Tag.Rows.Clear()
+            $dialog.Tag.Warnings.Clear()
+            foreach ($name in @('Refresh', 'AddLocation', 'Load', 'Browse')) { $dialog.FindName($name).IsEnabled = $false }
+            $dialog.FindName('DiscoveryNote').Text = 'Discovering known local history stores (no whole-drive search)...'
+            & $updateCount
+            $scanTimer.Start()
+        } catch {
+            & $stopScan $true
+            $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message
+        }
+    }
+    $scanTimer.Add_Tick({
+        try {
+            $scan = $dialog.Tag.Scan
+            if (-not $scan) { return }
+            if ($scan.Clock.Elapsed.TotalSeconds -ge 60) { throw 'History discovery exceeded 60 seconds. Partial rows remain visible; refresh to retry.' }
+            for ($read = 0; $read -lt 50 -and -not $scan.End -and $scan.Line.IsCompleted; $read++) {
+                $line = $scan.Line.GetAwaiter().GetResult()
+                if ($null -eq $line) { $scan.End = $true; break }
+                $message = ConvertFrom-Json -InputObject $line
+                if ($message.progress) {
+                    $event = $message.progress
+                    if ($event.phase -eq 'warning') { $dialog.Tag.Warnings.Add($event.message) }
+                    elseif ($event.phase -eq 'entry') {
+                        $entry = $event.session
+                        $started = if ($entry.started) { ([datetimeoffset]$entry.started).LocalDateTime } else { $null }
+                        $last = if ($entry.lastActivity) { ([datetimeoffset]$entry.lastActivity).LocalDateTime } else { $null }
+                        $duration = if ($null -ne $entry.durationSeconds) { [TimeSpan]::FromSeconds($entry.durationSeconds).ToString('g') } else { $null }
+                        $dialog.Tag.Rows.Add([pscustomobject]@{
+                            Title = $entry.title; Project = $entry.project; ProjectPath = $entry.projectPath
+                            ProjectKey = if ($entry.projectPath) { $entry.projectPath } else { '<no workspace>' }
+                            Agent = $entry.agent; AgentKey = if ($entry.agent) { $entry.agent } else { '<not recorded>' }
+                            Started = $started; LastActivity = $last; DurationSeconds = $entry.durationSeconds; Duration = $duration
+                            Prompts = $entry.promptCount; Source = $entry.source; Status = $entry.status
+                            Detail = $entry.title + "`n" + $entry.detail + "`n" + $entry.projectPath + "`n" + $entry.file
+                            File = $entry.file; Loadable = $entry.loadable
+                        })
+                    } elseif ($event.message) { $dialog.FindName('DiscoveryNote').Text = $event.message }
+                } elseif ($message.ok) { $scan.Result = $message.result }
+                else { throw $message.error }
+                $scan.Line = $scan.Process.StandardOutput.ReadLineAsync()
+            }
+            & $updateCount
+            if ($scan.End -and $scan.Process.HasExited -and $scan.Errors.IsCompleted) {
+                if ($scan.Process.ExitCode -ne 0 -or -not $scan.Result) { throw ('History helper returned no successful result. ' + $scan.Errors.GetAwaiter().GetResult()) }
+                $dialog.FindName('DiscoveryNote').Text = $scan.Result.notice
+                & $stopScan $false
+                & $fillFilters
+            }
+        } catch {
+            $failure = $_.Exception.Message
+            & $stopScan $true
+            $dialog.Tag.Warnings.Add($failure)
+            $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $failure
+            & $fillFilters
         }
     })
-    $dialog.FindName('FindSessions').Add_Click({
-        try { & $discover }
-        catch { $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message }
-    })
-    $dialog.FindName('ChooseFolder').Add_Click({
+    $dialog.FindName('Refresh').Add_Click($startScan)
+    $dialog.FindName('AddLocation').Add_Click({
         try {
             $folder = Select-DemoFolder $dialog
-            if ($folder) { $folderBox.Text = $folder; & $discover }
-        } catch { $dialog.FindName('DiscoveryNote').Text = 'Discovery failed: ' + $_.Exception.Message }
+            if ($folder -and $folder -notin $dialog.Tag.Locations) { $dialog.Tag.Locations += $folder; & $startScan }
+        } catch { Show-DemoError $dialog $_ }
     })
+    $dialog.FindName('Details').Add_Click({
+        $reviewed.IsChecked = $false
+        $preview.Text = "History discovery uses known VS Code, Insiders, profile, agent and SDK/CLI stores. No whole-drive crawl.`r`n" +
+            "Metadata indexing is limited to 8 MiB per recording, 256 MiB total and 10,000 recordings per refresh. Larger sources remain listed for Load.`r`n" +
+            "Additional locations (this dialog):`r`n" + ($dialog.Tag.Locations -join "`r`n") +
+            "`r`nWarnings:`r`n" + ($dialog.Tag.Warnings -join "`r`n")
+    })
+    $dialog.Add_ContentRendered($startScan)
+    $dialog.Add_Closed({ & $stopScan $true })
+    & $fillFilters
     $sourceBox.Add_TextChanged({
         if ($sourceBox.Text -ne $dialog.Tag.File) {
             $dialog.Tag.Inspection = $null
@@ -181,7 +395,10 @@ function Show-CaptureDialog($Owner) {
         }
     })
     $sessions.Add_SelectionChanged({
-        if ($sessions.SelectedItem) { $sourceBox.Text = $sessions.SelectedItem.File }
+        if ($sessions.SelectedItem) {
+            $sourceBox.Text = $sessions.SelectedItem.File
+            $captureStatus.Text = $sessions.SelectedItem.Detail
+        }
     })
     $loadSource = {
         param([string]$File)
@@ -195,9 +412,11 @@ function Show-CaptureDialog($Owner) {
             $label = ($turn.index + 1).ToString() + '. ' + ($turn.prompt -replace '\s+', ' ')
             if ($turn.error) { $label = '[Unavailable] ' + $label }
             elseif ($turn.status -eq 'archived-edits') { $label = '[Read-only edits] ' + $label }
+            elseif ($turn.status -eq 'archived-events') { $label = '[Read-only events] ' + $label }
             $turns.Items.Add([pscustomobject]@{ Label = $label; Turn = $turn }) | Out-Null
         }
-        $title.Text = if ($inspection.title.Length -gt 160) { $inspection.title.Substring(0,160) } else { $inspection.title }
+        $displayTitle = if ($sessions.SelectedItem -and $sessions.SelectedItem.File -eq $File) { $sessions.SelectedItem.Title } else { $inspection.title }
+        $title.Text = if ($displayTitle.Length -gt 160) { $displayTitle.Substring(0,160) } else { $displayTitle }
         $preview.Text = $inspection.notice
         $reviewed.IsChecked = $false
         $captureStatus.Text = 'Select exchanges, review their saved content, then Save Demo.'
@@ -205,12 +424,15 @@ function Show-CaptureDialog($Owner) {
     $dialog.FindName('Load').Add_Click({
         try {
             if (-not $sourceBox.Text) { throw 'Select a saved session, paste a file path, or use Browse.' }
+            if ($sessions.SelectedItem -and $sessions.SelectedItem.File -eq $sourceBox.Text -and -not $sessions.SelectedItem.Loadable) {
+                throw $sessions.SelectedItem.Detail
+            }
             & $loadSource $sourceBox.Text
         } catch { Show-DemoError $dialog $_ }
     })
     $dialog.FindName('Browse').Add_Click({
         try {
-            $file = Select-DemoFile $dialog 'Native VS Code transcripts (*.jsonl)|*.jsonl'
+            $file = Select-DemoFile $dialog 'Saved VS Code or Copilot SDK transcripts (*.jsonl)|*.jsonl'
             if ($file) { & $loadSource $file }
         } catch { Show-DemoError $dialog $_ }
     })

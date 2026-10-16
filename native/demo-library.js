@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { fileURLToPath } = require('node:url');
+const { sdkSnapshot } = require('./sdk-transcript');
 const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf } = require('./replay');
 const { INTERNAL_PARTS, inlineReferenceLabel, savedEditText } = require('./saved-parts');
 
@@ -30,12 +31,12 @@ function defaultLibraryRoot() {
     return path.join(process.env.LOCALAPPDATA, 'VSCodeDemoPlayer', 'demos');
 }
 
-async function readBounded(file) {
+async function readBounded(file, limit = MAX_BYTES) {
     const handle = await fs.open(file, 'r');
     let failure;
     try {
         const before = await handle.stat();
-        if (!before.isFile() || before.size > MAX_BYTES) throw new Error('Expected a file no larger than 100 MiB: ' + file);
+        if (!before.isFile() || before.size > limit) throw new Error('Expected a file no larger than ' + (limit / 1024 / 1024) + ' MiB: ' + file);
         const buffer = Buffer.alloc(before.size + 1);
         let length = 0;
         while (length < buffer.length) {
@@ -56,12 +57,18 @@ async function readBounded(file) {
 async function stableSnapshot(file) {
     const bytes = await readBounded(file);
     if (!bytes.equals(await readBounded(file))) throw new Error('Source changed during capture. Retry after it has finished saving.');
-    let snapshot;
-    for (const line of bytes.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)) {
-        if (line.trim()) snapshot = applyTranscriptRecord(snapshot, JSON.parse(line));
-    }
+    const snapshot = parseSnapshot(bytes);
     if (!Array.isArray(snapshot?.requests)) throw new Error('Expected a native VS Code JSONL transcript with saved requests.');
     return { snapshot, sha256: hash(bytes) };
+}
+
+function parseSnapshot(bytes) {
+    const records = bytes.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
+    if (records[0]?.type === 'session.start') {
+        if (records.length > 100000) throw new Error('SDK recording exceeds the 100,000-event limit.');
+        return sdkSnapshot(records);
+    }
+    return records.reduce(applyTranscriptRecord, undefined);
 }
 
 async function inspectTranscript(file) {
@@ -80,23 +87,27 @@ async function inspectTranscript(file) {
             if (kind === 'toolInvocationSerialized') return '[Recorded tool: ' + part.toolId + ']\n' + (part.pastTenseMessage?.value ?? part.pastTenseMessage ?? part.invocationMessage?.value ?? part.invocationMessage ?? '');
             if (kind === 'inlineReference' && !error) return '[Saved reference: ' + inlineReferenceLabel(part) + ']';
             if (kind === 'textEditGroup' && !error) return savedEditText(part);
+            if (kind === 'recordedSdkEvent') return '[Recorded SDK events - read-only]\n' + JSON.stringify(part.events, null, 2);
             return '[Saved ' + kind + ']\n' + JSON.stringify(part, null, 2);
         }).filter(Boolean).join('\n\n');
         const archivedEdits = !error && request.response.some(part => kindOf(part) === 'textEditGroup');
+        const archivedEvents = !error && request.response.some(part => kindOf(part) === 'recordedSdkEvent');
         return {
             index, prompt, content: 'PROMPT\n' + prompt + '\n\nRESPONSE\n' + response,
             details: JSON.stringify(request, null, 2), error,
-            status: error ? 'unavailable' : archivedEdits ? 'archived-edits' : 'ready'
+            status: error ? 'unavailable' : archivedEdits ? 'archived-edits' : archivedEvents ? 'archived-events' : 'ready'
         };
     });
     const summary = await sessionSummary(file, snapshot);
-    return { title: summary.title, sha256, turns, notice: [NOTICE, summary.warning].filter(Boolean).join(' ') };
+    const sdkNotice = snapshot.sourceKind === 'copilot-sdk-jsonl' ?
+        'SDK text and tool transitions are normalized for playback. Original events and attachment metadata remain in the full saved payload; external assets are not bundled.' : '';
+    return { title: summary.title, sha256, turns, notice: [NOTICE, sdkNotice, summary.warning].filter(Boolean).join(' ') };
 }
 
 function validatePackage(value) {
     if (value?.format !== FORMAT || value.version !== 1 || !uuid.test(value.id) || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt))) throw new Error('Unsupported or invalid demo recording package.');
     titleOf(value.title);
-    if (value.source?.kind !== 'vscode-native-jsonl' || typeof value.source.fileName !== 'string' || !value.source.fileName || value.source.fileName.length > 260 || !/^[a-f0-9]{64}$/.test(value.source.sha256) || value.notice !== NOTICE) throw new Error('Invalid demo recording provenance or fidelity notice.');
+    if (!['vscode-native-jsonl', 'copilot-sdk-jsonl'].includes(value.source?.kind) || typeof value.source.fileName !== 'string' || !value.source.fileName || value.source.fileName.length > 260 || !/^[a-f0-9]{64}$/.test(value.source.sha256) || value.notice !== NOTICE) throw new Error('Invalid demo recording provenance or fidelity notice.');
     if (!Array.isArray(value.turns) || !value.turns.length || value.turns.length > MAX_TURNS) throw new Error('A demo must contain 1 to 100 exchanges.');
     const indices = new Set();
     for (const turn of value.turns) {
@@ -127,7 +138,7 @@ async function createPackage(file, indices, title, expectedHash) {
     const value = validatePackage({
         format: FORMAT, version: 1, id: crypto.randomUUID(), title,
         createdAt: new Date().toISOString(),
-        source: { kind: 'vscode-native-jsonl', fileName: path.basename(file), sessionId: snapshot.sessionId, sha256 },
+        source: { kind: snapshot.sourceKind || 'vscode-native-jsonl', fileName: path.basename(file), sessionId: snapshot.sessionId, sha256 },
         notice: NOTICE, turns
     });
     serializeBounded(value);
@@ -255,13 +266,17 @@ async function exportDemo(root, id, file) {
 async function sessionIndex(directory) {
     const database = path.join(directory, 'state.vscdb');
     try { await fs.access(database); }
-    catch (error) { if (error.code === 'ENOENT') return { entries: {} }; throw error; }
+    catch (error) {
+        if (error.code === 'ENOENT') return { entries: {} };
+        return { entries: {}, warning: 'VS Code chat titles could not be read: ' + error.message };
+    }
     let db;
     try {
         const { DatabaseSync } = require('node:sqlite');
         db = new DatabaseSync(database, { readOnly: true });
-        const row = db.prepare('SELECT value FROM ItemTable WHERE key = ?').get('chat.ChatSessionStore.index');
+        const row = db.prepare('SELECT CASE WHEN length(CAST(value AS BLOB)) <= 8388608 THEN value ELSE NULL END AS value FROM ItemTable WHERE key = ?').get('chat.ChatSessionStore.index');
         if (!row) return { entries: {} };
+        if (row.value === null) throw new Error('Saved session index exceeds the 8 MiB metadata limit.');
         const index = JSON.parse(row.value);
         if (!index.entries || typeof index.entries !== 'object' || Array.isArray(index.entries)) throw new Error('Invalid saved session index.');
         return { entries: index.entries };
@@ -279,7 +294,7 @@ async function sessionSummary(file, snapshot, index) {
     snapshot ??= (await stableSnapshot(file)).snapshot;
     const prompt = snapshot.requests.find(request => typeof request?.message?.text === 'string' && request.message.text.trim())?.message.text;
     return {
-        title: entry?.title?.trim() || snapshot.customTitle?.trim() || prompt?.slice(0, 100) || 'Untitled conversation',
+        title: [entry?.title, snapshot.customTitle, prompt?.slice(0, 100)].find(value => typeof value === 'string' && value.trim())?.trim() || 'Untitled conversation',
         preview: prompt?.slice(0, 200) || 'No saved opening prompt.',
         warning: index.warning
     };
@@ -344,4 +359,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex };
