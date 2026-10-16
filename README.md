@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer](https://github.com/elijah286/vscode-demo-player/releases/latest/download/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.5](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.5/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -460,8 +460,10 @@ and the production dependency licenses are included.
 Outputs are `dist\VSCodeDemoPlayer-Setup.exe` and `dist\SHA256SUMS.txt`.
 The release version comes from `native/package.json`. The GitHub Actions
 release workflow runs tests and builds on Windows before publishing both
-assets for a `v<version>` tag. The stable download URL above follows the newest
-published non-prerelease version. No code-signing certificate is configured.
+assets for a `v<version>` tag. The Releases link above follows the newest
+published non-prerelease version; the versioned
+installer link is pinned to the named release. No code-signing certificate is
+configured.
 
 Startup errors are displayed and saved to
 `%LOCALAPPDATA%\VSCodeDemoPlayer\last-startup-error.log`. To check dependency

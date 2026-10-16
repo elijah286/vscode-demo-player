@@ -1,5 +1,52 @@
 # Canonical consolidation checkpoint
 
+## Release 0.2.5 integration
+
+The user subsequently authorized integrating all fleet work directly into
+`main`, pushing and publishing, confirmed other writers were paused, and
+approved a local source checkpoint with ignored files preserved in place.
+The seven uncommitted capture-fix files were checkpointed as `5769cf1`.
+Local `main` was then fast-forwarded to that complete candidate; no source
+changes were discarded and no fleet branches were deleted.
+
+All delivered branch tips are ancestors of the candidate: SDK recovery
+`deb7c2f`, conversation import `6793f79`, history catalog `0cb98e9`, replay
+controls `5380369`, consolidation `086ca2f`, and capture fix `5769cf1`.
+The latter selects only capturable exchanges by default, keeps unavailable
+exchanges inspectable, gates Save on valid reviewed selections, and identifies
+missing saved fields without changing source transcripts.
+
+Fresh pre-publication validation used Node.js 22.23.3 and the existing local
+locked dependencies. Commands below use `$node` for that runtime, `$compiler`
+for the signature-verified Inno Setup 6.7.3 compiler, and private external
+`$cache`, `$output`, and `$payload` locations:
+
+| Command | Result |
+| --- | --- |
+| `npm run test:unit` (from `native`) | 78 passed, 0 failed |
+| `npm run lint` (from `native`) | 0 errors; 4 existing browser-global warnings |
+| `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test\packaging.ps1 -NodePath $node` | 39 assertions passed |
+| `powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\history-filters.ps1` | 84 assertions passed; no desktop window displayed |
+| `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\packaging\Build-Windows.ps1 -InnoCompiler $compiler -CacheRoot $cache -OutputRoot $output` | Installer and checksum built successfully |
+| `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$payload\Start-InstalledPlayer.ps1" -Check` | Packaged Node/VS Code dependency preflight passed |
+
+Packaged version, runtime-source hash parity, recording exclusion, and
+development-dependency exclusion also passed. The first local build correctly
+refused a missing compiler; provisioning the signature-verified compiler
+resolved it. VS Code's test-discovery tool did not recognize the Node tests,
+so the actual repository `npm run test:unit` selector ran instead.
+
+The capture-fix owner recorded the user's decision to skip fresh desktop
+acceptance. No new native UI, installer execution, or real installed-upgrade
+acceptance is claimed here. The existing user installation and demo library
+remain untouched. Publication must still verify CI for the release SHA,
+public asset checksums/digests, and real updater discovery/download.
+Main was unprotected and no repository rulesets were configured at inspection;
+direct integration follows the user's instruction, not an enforced PR gate.
+
+The sections below describe the earlier consolidation checkpoint and its
+then-current authorization and environment limitations, not the later release.
+
 ## Scope and history
 
 The approved 2026-10-16 consolidation uses the existing `vscode-demo-player`
