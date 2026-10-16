@@ -123,7 +123,9 @@ async function readPlaylist(file) {
 function extractRecording(file, snapshot, requestIndex) {
     const request = snapshot.requests[requestIndex];
     if (request?.sourceError) throw new Error(request.sourceError);
-    if (!request?.result || typeof request.message?.text !== 'string' || !Array.isArray(request.response)) {
+    const partialSdk = request?.sdkCompletion === 'partial' && request.sdkSessionStart?.type === 'session.start' &&
+        request.sdkSessionStart.data?.version === 1 && Array.isArray(request.sdkEvents);
+    if ((!request?.result && !partialSdk) || typeof request.message?.text !== 'string' || !Array.isArray(request.response)) {
         throw new Error('The selected request is absent or incomplete in the saved transcript.');
     }
     const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', 'questionCarousel', 'textEditGroup', 'inlineReference', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent', ...INTERNAL_PARTS]);
@@ -144,7 +146,7 @@ function extractRecording(file, snapshot, requestIndex) {
         request,
         model: recordedModel(request, snapshot),
         fingerprint,
-        snapshotScope: 'complete native JSONL transcript',
+        snapshotScope: request.sdkSessionStart ? 'saved Copilot SDK events' : 'complete native JSONL transcript',
         metadataParts: request.response.filter(part => INTERNAL_PARTS.has(kindOf(part))).length,
         internalParts: request.response.filter(part => INTERNAL_PARTS.has(kindOf(part))),
         requiresSavedPartsRenderer: request.response.some(part => kindOf(part) === 'questionCarousel')
