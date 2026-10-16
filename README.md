@@ -204,18 +204,24 @@ SDK event recordings normalize saved prompts, assistant text and tool transition
 for playback. Original selected events, tool-result data, initial context and
 attachment metadata remain in the raw payload. Other event metadata is shown
 as an inert **Recorded SDK events** archive; no saved tool is executed.
-External attachments are not bundled. Unfinished final turns, unmatched tool
-results and incomplete tool invocations have explicit per-exchange errors.
+External attachments are not bundled. Saved SDK text, reasoning and tool results
+can be replayed even when a follow-up prompt interrupted the work or no final
+answer was recorded. Unfinished or unmatchable tools stay in the read-only event
+archive rather than appearing as live or successfully completed tool calls.
+The original completion state and events remain in the full saved payload.
 Agent databases with no supported SDK link remain visible but unavailable;
 local-only database turns are not yet a supported playback format.
 Legacy JSON snapshots are also listed with an explicit unsupported-format reason;
 they are not silently hidden or treated as JSONL recordings.
 SDK captures use provenance kind `copilot-sdk-jsonl` in the existing version-1
 package; older players that only support native recordings will reject them.
+Captures containing unfinished SDK exchanges require this player update; earlier
+SDK-capable builds still reject exchanges without a completed final answer.
 
 All exchanges are selected when a conversation loads. Use **Select all** or
 **Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
-to adjust the selection. A demo can contain up to 100 exchanges; larger
+to adjust the selection. **Select available** excludes genuinely unreadable
+exchanges; the status names the first error before saving. A demo can contain up to 100 exchanges; larger
 selections show an explicit warning rather than being silently reduced.
 Review the readable prompt/response preview. Exchange rows use short labels and
 recycled containers; preview updates are coalesced over 75 ms and limited to
@@ -357,7 +363,9 @@ reading or requiring the referenced file. Executable URI schemes and malformed
 references are rejected explicitly. Supported saved questions/edits and
 other archived parts are displayed as untrusted read-only
 JSON code blocks, not editable or live widgets; Agents uses its supported saved
-displays. Unknown kinds and incomplete tool records are refused explicitly.
+displays. Unknown native part kinds and incomplete native tool records are
+refused explicitly; interrupted SDK tool events remain available as read-only
+archives.
 External images, links, files, and workspace state are
 **not bundled**. The capture tool does not retrieve their contents. Native
 Markdown may retain links; do not activate external links during a recording.

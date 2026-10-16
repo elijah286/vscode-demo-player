@@ -25,14 +25,22 @@ function sdkSnapshot(records) {
     let tools = new Map();
     let ended = false;
     let finalText = false;
+    let invalidTools = new Set();
+    let archivedMessages = new Set();
     const prelude = [];
     function finish() {
         if (!request) return;
-        const metadata = request.sdkEvents.filter(event => !['user.message', 'assistant.message', 'tool.execution_start'].includes(event.type));
+        const pending = [...tools.values()].some(tool => !tool.isComplete || invalidTools.has(tool.toolCallId));
+        request.response = request.response.filter(part => part.kind !== 'toolInvocationSerialized' || (part.isComplete && !invalidTools.has(part.toolCallId)));
+        const metadata = request.sdkEvents.filter(event => {
+            if (event.type === 'user.message') return false;
+            if (event.type === 'assistant.message') return archivedMessages.has(event);
+            if (event.type === 'tool.execution_start') return !tools.get(event.data.toolCallId)?.isComplete || invalidTools.has(event.data.toolCallId);
+            return true;
+        });
         if (metadata.length) request.response.push({ kind: 'recordedSdkEvent', events: metadata });
-        if ([...tools.values()].some(tool => !tool.isComplete)) request.sourceError = 'Saved SDK tool activity is incomplete. Its original events remain available in the raw preview.';
-        if (ended && finalText && !request.sourceError) request.result = {};
-        else request.sourceError ??= 'Saved SDK exchange has no completed final assistant turn.';
+        request.sdkCompletion = ended && finalText && !pending && !invalidTools.size && !archivedMessages.size && !request.sourceError ? 'complete' : 'partial';
+        if (request.sdkCompletion === 'complete') request.result = {};
     }
     for (const event of records.slice(1)) {
         if (typeof event?.type !== 'string' || !event.data || typeof event.data !== 'object') throw new Error('Malformed saved SDK event.');
@@ -45,34 +53,34 @@ function sdkSnapshot(records) {
             if (!snapshot.requests.length && prelude.length) request.sdkPrelude = [...prelude];
             if (typeof event.data.content !== 'string') request.sourceError = 'Saved SDK prompt is missing its text.';
             snapshot.requests.push(request);
-            tools = new Map(); ended = false; finalText = false;
+            tools = new Map(); invalidTools = new Set(); archivedMessages = new Set(); ended = false; finalText = false;
         }
         if (!request) { prelude.push(event); continue; }
         request.sdkEvents.push(event);
         const timestamp = Date.parse(event.timestamp);
         if (Number.isFinite(timestamp)) request.lastActivity = timestamp;
         if (event.type === 'assistant.message') {
+            if (typeof event.data.reasoningText === 'string' && event.data.reasoningText) request.response.push({ kind: 'thinking', value: event.data.reasoningText, id: event.id || event.data.messageId });
+            else if (event.data.reasoningText !== undefined && event.data.reasoningText !== null && typeof event.data.reasoningText !== 'string') archivedMessages.add(event);
             if (typeof event.data.content === 'string' && event.data.content) request.response.push({ value: event.data.content });
-            else if (event.data.content !== undefined && typeof event.data.content !== 'string') request.sourceError = 'Saved SDK assistant content is not text.';
+            else if (event.data.content !== undefined && event.data.content !== null && typeof event.data.content !== 'string') archivedMessages.add(event);
             if (typeof event.data.model === 'string') request.modelId = event.data.model;
-            if (event.data.toolRequests !== undefined && !Array.isArray(event.data.toolRequests)) request.sourceError = 'Saved SDK tool request list is malformed.';
-            finalText = !event.data.toolRequests?.length;
+            if (event.data.toolRequests !== undefined && event.data.toolRequests !== null && !Array.isArray(event.data.toolRequests)) archivedMessages.add(event);
+            finalText = event.data.toolRequests === undefined || event.data.toolRequests === null || (Array.isArray(event.data.toolRequests) && !event.data.toolRequests.length);
             ended = false;
         } else if (event.type === 'assistant.turn_start') ended = false;
         else if (event.type === 'assistant.turn_end') ended = true;
         else if (event.type === 'tool.execution_start') {
             const { toolCallId, toolName } = event.data;
             if (typeof toolCallId !== 'string' || !toolCallId || typeof toolName !== 'string' || !toolName || tools.has(toolCallId)) {
-                request.sourceError = 'Saved SDK tool activity has missing or duplicate identifiers.';
+                invalidTools.add(toolCallId);
                 continue;
             }
             const tool = { kind: 'toolInvocationSerialized', toolId: toolName, toolCallId, isComplete: false, invocationMessage: 'Recorded ' + toolName };
             tools.set(toolCallId, tool); request.response.push(tool);
         } else if (event.type === 'tool.execution_complete') {
             const tool = tools.get(event.data.toolCallId);
-            if (!tool) request.sourceError = 'Saved SDK tool result has no matching invocation in this exchange.';
-            else if (typeof event.data.success !== 'boolean') request.sourceError = 'Saved SDK tool result has no completion status.';
-            else {
+            if (tool && typeof event.data.success === 'boolean') {
                 tool.isComplete = true; tool.isError = event.data.success === false;
                 tool.pastTenseMessage = 'Recorded ' + tool.toolId + (tool.isError ? ' failed' : ' completed');
             }

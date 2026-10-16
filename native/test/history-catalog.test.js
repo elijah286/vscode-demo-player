@@ -175,7 +175,7 @@ test('SDK capture preserves selected original events, tool results and attachmen
     assert.deepEqual((await library.readPackage(exported)).turns, value.turns);
 });
 
-test('SDK incomplete, malformed, future-version and orphan-tool records are explicit errors', async context => {
+test('SDK unfinished and unmatchable tool activity remains capturable without inventing completion', async context => {
     const fixture = await setup(context);
     assert.throws(() => sdkSnapshot([{ type: 'session.start', data: { version: 2 } }]), /version 1/);
     assert.throws(() => sdkSnapshot([{ type: 'session.start', data: { version: 1 } }]), /missing its identifier/);
@@ -194,9 +194,66 @@ test('SDK incomplete, malformed, future-version and orphan-tool records are expl
     for (const records of cases) {
         await fs.writeFile(fixture.events, records.map(event => JSON.stringify(event)).join('\n') + '\n');
         const inspection = await library.inspectTranscript(fixture.events);
-        assert.match(inspection.turns[0].error, /Saved SDK/);
-        await assert.rejects(library.createPackage(fixture.events, [0], 'Incomplete SDK', inspection.sha256), /Saved SDK/);
+        assert.equal(inspection.turns[0].error, undefined);
+        const value = await library.createPackage(fixture.events, [0], 'Saved SDK', inspection.sha256);
+        const request = value.turns[0].snapshot.requests[0];
+        const original = records.slice(1, records.findIndex((event, index) => index > 1 && event.type === 'user.message') === -1 ?
+            records.length : records.findIndex((event, index) => index > 1 && event.type === 'user.message'));
+        assert.deepEqual(request.sdkEvents, original);
+        assert.ok(request.response.filter(part => part.kind === 'toolInvocationSerialized').every(part => part.isComplete));
+        if (request.sdkCompletion === 'partial') assert.equal(request.result, undefined);
+        assert.ok(request.response.some(part => part.kind === 'recordedSdkEvent'));
     }
+});
+
+test('SDK steering boundaries preserve recorded text, reasoning and cross-prompt tool events through export/import', async context => {
+    const fixture = await setup(context);
+    const start = sdkEvents()[0];
+    const records = [
+        start,
+        { type: 'user.message', data: { content: 'Start some work' } },
+        { type: 'assistant.message', id: 'thought-1', data: { content: 'Actual recorded progress', reasoningText: 'Actual saved reasoning', toolRequests: [{ name: 'saved-tool' }] } },
+        { type: 'tool.execution_start', data: { toolCallId: 'cross-prompt', toolName: 'saved-tool', arguments: { original: true } } },
+        { type: 'user.message', data: { content: 'A follow-up while the tool is running' } },
+        { type: 'tool.execution_complete', data: { toolCallId: 'cross-prompt', success: true, result: { content: 'Actual recorded result' } } },
+        { type: 'assistant.turn_end', data: {} },
+        { type: 'assistant.turn_start', data: {} },
+        { type: 'user.message', data: { content: 'A prompt with no saved answer yet' } }
+    ];
+    await fs.writeFile(fixture.events, records.map(event => JSON.stringify(event)).join('\n') + '\n');
+    const before = await fs.readFile(fixture.events);
+    const inspection = await library.inspectTranscript(fixture.events);
+    assert.equal(inspection.turns.length, 3);
+    assert.ok(inspection.turns.every(turn => !turn.error));
+    assert.ok(inspection.turns[0].content.includes('Actual recorded progress'));
+    assert.ok(inspection.turns[0].content.includes('Actual saved reasoning'));
+    assert.ok(inspection.turns[1].content.includes('Actual recorded result'));
+    const value = await library.createPackage(fixture.events, [0, 1, 2], 'Recorded steering', inspection.sha256);
+    const requests = value.turns.map(turn => turn.snapshot.requests[0]);
+    assert.deepEqual(requests.flatMap(request => request.sdkEvents), records.slice(1));
+    assert.ok(requests.every(request => request.sdkCompletion === 'partial' && request.result === undefined));
+    assert.equal(requests.flatMap(request => request.response).filter(part => part.kind === 'toolInvocationSerialized').length, 0);
+    assert.deepEqual(requests[0].response.find(part => part.kind === 'thinking'), { kind: 'thinking', id: 'thought-1', value: 'Actual saved reasoning' });
+    assert.deepEqual(requests[0].response.find(part => part.kind === 'recordedSdkEvent').events, [records[3]]);
+    const root = path.join(fixture.root, 'Library');
+    const added = await library.addPackage(root, value);
+    const exported = path.join(fixture.root, 'steering.demo-recording.json');
+    await library.exportDemo(root, added.id, exported);
+    assert.deepEqual((await library.readPackage(exported)).turns, value.turns);
+    assert.equal((await library.packageRecordings(exported)).length, 3);
+    assert.deepEqual(await fs.readFile(fixture.events), before);
+});
+
+test('malformed SDK prompt text is still rejected without blocking inspection of the other prompts', async context => {
+    const fixture = await setup(context);
+    const records = sdkEvents();
+    records.find(event => event.type === 'user.message').data.content = null;
+    await fs.writeFile(fixture.events, records.map(event => JSON.stringify(event)).join('\n') + '\n');
+    const inspection = await library.inspectTranscript(fixture.events);
+    assert.match(inspection.turns[0].error, /prompt is missing its text/);
+    assert.equal(inspection.turns[1].error, undefined);
+    await assert.rejects(library.createPackage(fixture.events, [0], 'Bad prompt', inspection.sha256), /prompt is missing/);
+    assert.equal((await library.createPackage(fixture.events, [1], 'Good prompt', inspection.sha256)).turns.length, 1);
 });
 
 test('SDK archives render as untrusted literal content and remain read-only host artifacts', () => {

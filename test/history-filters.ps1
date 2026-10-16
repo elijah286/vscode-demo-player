@@ -47,12 +47,33 @@ try {
     foreach ($name in @('Refresh', 'HistorySearch', 'ProjectFilter', 'AgentFilter', 'SourceFilter', 'StatusFilter', 'DateFrom', 'DateTo', 'MinPrompts', 'MinDuration', 'ClearFilters', 'AddLocation')) {
         Assert-Equal ($null -ne $dialog.FindName($name)) $true ('Control exists: ' + $name)
     }
-    foreach ($name in @('SelectAll', 'ClearSelection', 'SelectionCount')) {
+    foreach ($name in @('SelectAll', 'SelectAvailable', 'ClearSelection', 'SelectionCount')) {
         Assert-Equal ($null -ne $dialog.FindName($name)) $true ('Selection control exists: ' + $name)
     }
     $turns = $dialog.FindName('Turns')
     Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($turns)) $true 'Exchange rows are virtualized'
     Assert-Equal ([Windows.Controls.VirtualizingPanel]::GetVirtualizationMode($turns)) 'Recycling' 'Exchange containers are recycled'
+    $dialog.Tag = [pscustomobject]@{ UpdatingTurns = $false }
+    $turns.ItemsSource = @(
+        [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; error = $null } },
+        [pscustomobject]@{ Turn = [pscustomobject]@{ index = 1; error = 'Malformed prompt' } },
+        [pscustomobject]@{ Turn = [pscustomobject]@{ index = 2; error = $null; sdkCompletion = 'partial' } }
+    )
+    $turns.SelectAll()
+    Assert-Equal $turns.SelectedItems.Count 3 'Select all still includes every loaded exchange'
+    $selectAvailable = $ast.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Member.Value -eq 'Add_Click' -and $node.Expression.Extent.Text -eq '$dialog.FindName(''SelectAvailable'')'
+    }, $true)
+    if (-not $selectAvailable) { throw 'Production Select available handler was not found.' }
+    $script:selectionUpdates = 0
+    $updatePreview = { $script:selectionUpdates++ }
+    & ($selectAvailable.Arguments[0].ScriptBlock.GetScriptBlock())
+    Assert-Equal $turns.SelectedItems.Count 2 'Select available excludes unreadable entries only'
+    Assert-Equal $turns.SelectedItems[1].Turn.index 2 'A partial SDK exchange remains selected'
+    Assert-Equal $dialog.Tag.UpdatingTurns $false 'Bulk selection guard is restored'
+    Assert-Equal $script:selectionUpdates 1 'Bulk selection triggers exactly one preview update'
 } finally { $dialog.Close() }
 $first = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 0; prompt = ('x' * 100000); content = 'FIRST CONTENT'; details = 'FIRST RAW'; error = 'Explicit unavailable reason' } }
 $second = [pscustomobject]@{ Turn = [pscustomobject]@{ index = 1; prompt = 'Second'; content = 'SECOND CONTENT'; details = 'SECOND RAW' } }

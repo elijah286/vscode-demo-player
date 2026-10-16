@@ -215,6 +215,7 @@ function Show-CaptureDialog($Owner) {
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
    <DockPanel Margin="0,0,0,4">
     <Button x:Name="ClearSelection" Content="Clear selection" DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureClearSelection"/>
+    <Button x:Name="SelectAvailable" Content="Select available" DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureSelectAvailable"/>
     <Button x:Name="SelectAll" Content="Select all (Ctrl+A)" DockPanel.Dock="Right" Padding="8,2" AutomationProperties.AutomationId="CaptureSelectAll"/>
     <TextBlock x:Name="SelectionCount" VerticalAlignment="Center" AutomationProperties.AutomationId="CaptureSelectionCount"/>
    </DockPanel>
@@ -496,13 +497,27 @@ function Show-CaptureDialog($Owner) {
         $reviewed.IsEnabled = $false
         $preview.Text = ''
         $dialog.FindName('SelectionCount').Text = $turns.SelectedItems.Count.ToString() + ' of ' + $turns.Items.Count + ' exchanges selected'
+        $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
         $captureStatus.Text = if ($turns.SelectedItems.Count -gt 100) {
             'A demo supports at most 100 exchanges. Reduce the selection before saving.'
-        } else { 'Review the selected saved content, then Save Demo. Incomplete exchanges cannot be captured.' }
+        } elseif ($unavailable.Count) {
+            $first = $unavailable[0].Turn
+            $unavailable.Count.ToString() + ' selected exchanges cannot be captured. Use Select available. Exchange ' + ($first.index + 1) + ': ' + $first.error
+        } else { 'Review the selected saved content, then Save Demo.' }
         $previewTimer.Stop()
         $previewTimer.Start()
     }
     $dialog.FindName('SelectAll').Add_Click({ $turns.SelectAll() })
+    $dialog.FindName('SelectAvailable').Add_Click({
+        $dialog.Tag.UpdatingTurns = $true
+        try {
+            $turns.UnselectAll()
+            foreach ($item in $turns.Items) {
+                if (-not $item.Turn.error) { $turns.SelectedItems.Add($item) | Out-Null }
+            }
+        } finally { $dialog.Tag.UpdatingTurns = $false }
+        & $updatePreview
+    })
     $dialog.FindName('ClearSelection').Add_Click({ $turns.UnselectAll() })
     $turns.Add_PreviewKeyDown({
         param($sender, $args)
@@ -521,7 +536,11 @@ function Show-CaptureDialog($Owner) {
             if (-not $reviewed.IsChecked) { throw 'Review the selected content and acknowledge the privacy and asset notice.' }
             $selected = @($turns.SelectedItems | Sort-Object { $_.Turn.index })
             if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 exchanges.' }
-            if (@($selected | Where-Object { $_.Turn.error }).Count) { throw 'The selection contains incomplete or unsupported exchanges. Their exact errors are shown in the preview.' }
+            $unavailable = @($selected | Where-Object { $_.Turn.error })
+            if ($unavailable.Count) {
+                $first = $unavailable[0].Turn
+                throw ('Use Select available to exclude ' + $unavailable.Count + ' unavailable exchanges. Exchange ' + ($first.index + 1) + ': ' + $first.error)
+            }
             $indices = @($selected | ForEach-Object { [int]$_.Turn.index })
             $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'capture'; file = $dialog.Tag.File; sha256 = $dialog.Tag.Inspection.sha256; title = $title.Text; indices = $indices } $dialog
             $dialog.DialogResult = $true
