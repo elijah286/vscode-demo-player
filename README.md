@@ -51,6 +51,8 @@ Before editing, verify the Git root, branch/status, upstream, and sanitized
 origin. Coordinate existing work before switching branches. Read
 [AGENTS.md](AGENTS.md) and [the workflow runbook](docs/RELEASING.md).
 Consolidation is not permission to delete recovery sources, push, or publish.
+The [consolidation checkpoint](docs/CONSOLIDATION.md) records integrated commits,
+preservation, test results, exclusions, and remaining gates.
 
 For source development, install Node.js 22.23.3 with npm, then run:
 

@@ -17,3 +17,4 @@ evidence/
 replay-control-*.json
 .build/
 dist/
+/Microsoft/Windows/PowerShell/ModuleAnalysisCache
