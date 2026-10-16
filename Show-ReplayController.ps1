@@ -27,6 +27,7 @@ $script:NodePath = $NodePath
 $script:CodePath = $CodePath
 . (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
 . (Join-Path $PSScriptRoot 'DemoDialogs.ps1')
+. (Join-Path $PSScriptRoot 'PlayerUpdates.ps1')
 $profile = $null
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
 if (-not $script:standalone) {
@@ -40,11 +41,11 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="218"
+        Title="Demo Player" Width="360" Height="270"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="48"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Select a demo..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -65,6 +66,10 @@ if (-not $script:standalone) {
       <Button x:Name="Capture" Content="Capture Conversation" AutomationProperties.AutomationId="CaptureConversation"/>
       <Button x:Name="Library" Grid.Column="2" Content="Manage Demos" AutomationProperties.AutomationId="ManageDemos"/>
     </Grid>
+    <DockPanel Grid.Row="5" Margin="0,12,0,0">
+      <Button x:Name="CheckUpdates" DockPanel.Dock="Right" Content="Check for updates" Padding="8,0" AutomationProperties.AutomationId="CheckUpdates"/>
+      <TextBlock x:Name="UpdateNotice" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,8,0" AutomationProperties.AutomationId="UpdateNotice"/>
+    </DockPanel>
   </Grid>
 </Window>
 '@
@@ -77,6 +82,8 @@ $stop = $window.FindName('Stop')
 $chooseDemo = $window.FindName('ChooseDemo')
 $capture = $window.FindName('Capture')
 $library = $window.FindName('Library')
+$checkUpdates = $window.FindName('CheckUpdates')
+$updateNotice = $window.FindName('UpdateNotice')
 $area = [System.Windows.SystemParameters]::WorkArea
 $window.Left = [Math]::Max($area.Left, $area.Right - $window.Width - 16)
 $window.Top = [Math]::Max($area.Top, $area.Bottom - $window.Height - 16)
@@ -330,11 +337,14 @@ $timer.Add_Tick({
 })
 $window.Add_Closed({
     $timer.Stop()
+    $script:updateTimer.Stop()
+    try { Stop-PlayerUpdateOperation } catch { Set-PlayerUpdateFailure $_ }
     if ($script:client) { $script:client.Dispose() }
 })
 $application = [System.Windows.Application]::new()
 $application.ShutdownMode = [System.Windows.ShutdownMode]::OnMainWindowClose
 $application.MainWindow = $window
+Initialize-PlayerUpdates
 if ($script:standalone) { Set-IdleView; $window.Show() }
 else {
     $chooseDemo.IsEnabled = $false
@@ -344,3 +354,4 @@ else {
 }
 $timer.Start()
 $application.Run() | Out-Null
+Start-PlayerUpdateHandoff

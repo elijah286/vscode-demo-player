@@ -48,15 +48,15 @@ $payload = Join-Path $cache ('payload-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $payload 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $payload 'runtime')) | Out-Null
 
-$rootFiles = @('Start-InstalledPlayer.ps1', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerEnvironment.ps1', 'README.md')
-$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-response.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'control-server.js', 'demo-library.js', 'library-cli.js')
+$rootFiles = @('Start-InstalledPlayer.ps1', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
+$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-response.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'control-server.js', 'demo-library.js', 'library-cli.js', 'updater.js')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $payload $file) }
 foreach ($file in $nativeFiles) { Copy-Item -LiteralPath (Join-Path $root ('native\' + $file)) -Destination (Join-Path $payload ('native\' + $file)) }
 Copy-Item -LiteralPath $node -Destination (Join-Path $payload 'runtime\node.exe')
 Copy-Item -LiteralPath (Join-Path $nodeRoot 'LICENSE') -Destination (Join-Path $payload 'runtime\NODE-LICENSE.txt')
 & $node $npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix (Join-Path $payload 'native')
 if ($LASTEXITCODE -ne 0) { throw 'Installing the locked production dependencies failed.' }
-& $node -e "for (const name of process.argv.slice(1)) require(name);" (Join-Path $payload 'native\native-composer.js') (Join-Path $payload 'native\recording-agent-host.js') (Join-Path $payload 'native\demo-library.js')
+& $node -e "for (const name of process.argv.slice(1)) require(name);" (Join-Path $payload 'native\native-composer.js') (Join-Path $payload 'native\native-response.js') (Join-Path $payload 'native\recording-agent-host.js') (Join-Path $payload 'native\demo-library.js') (Join-Path $payload 'native\updater.js')
 if ($LASTEXITCODE -ne 0) { throw 'The production payload cannot load its runtime dependencies.' }
 $environment = @{
     version = $version

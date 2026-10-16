@@ -1,13 +1,5 @@
 # VS Code Demo Player
 
-## Contributing and releases
-
-Parallel agents must use separate worktrees and hand off committed changes to
-the release captain. Integration requires explicit user approval; publication
-may follow automatically only after the approved integration passes release
-checks. See [agent rules](AGENTS.md) and the
-[integration and release runbook](docs/RELEASING.md).
-
 **[Download the Windows installer](https://github.com/elijah286/vscode-demo-player/releases/latest/download/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
@@ -28,7 +20,7 @@ https://code.visualstudio.com/ if it is not already available. Standard user
 and system-wide installations are detected. Proposed APIs make compatibility
 version-sensitive; a newer VS Code build is not automatically certified.
 
-The repository is private, so downloads require an authorized GitHub account.
+The repository and installer releases are public; no GitHub sign-in is needed.
 The initial installer is unsigned; Windows may show an unknown-publisher
 warning. Follow your organization's software policy.
 
@@ -41,10 +33,93 @@ profile. Recordings and private conversation data are not shipped.
 Local recorded-conversation playback in an isolated, native VS Code window,
 with a compact Windows Play/Pause/Stop controller.
 
-This private repository isolates the reusable playback tooling from its
+This repository isolates the reusable playback tooling from its
 original application project. It contains no original conversations, demo
 selections, application source, recorded assets, or generated evidence.
 The original workspace remains untouched.
+
+## Application updates
+
+The installed app checks the latest stable GitHub release at startup. Click
+**Check for updates** to see **Installed version** and **Latest available
+version**, retry a check, or install a newer release. Checks run in the
+background and do not interrupt playback. A startup check never installs
+anything automatically.
+
+**Install update...** asks for confirmation. After consent, the app downloads
+the installer from this repository, checks its size and SHA-256 against both
+the checksum file and GitHub's asset digest, and stops only its own playback.
+An external helper waits for Demo Player to exit, verifies the installer again,
+runs the per-user installer, checks the installed version, and restarts the app.
+The demo library and explicit library/VS Code paths are preserved. Closing the
+update dialog during download cancels it without changing the installation.
+
+No GitHub credentials are stored. No recordings or conversation data are sent
+to GitHub; checks request only public release metadata and assets. GitHub can
+observe the normal network request metadata, such as the client IP address.
+Only stable three-part versions are supported; equal/older versions,
+prereleases, drafts, unrelated URLs, and incomplete releases are refused.
+The installer remains unsigned: SHA-256 verifies release integrity, not an
+independent publisher identity or protection against repository compromise.
+
+Metadata requests have a 15-second network limit; installer downloads have a
+120-second limit. The UI caps each whole check at 30 seconds and each download
+operation at 180 seconds, with no retries. The installer helper waits at most
+30 seconds for app exit and five minutes for installation; it does not kill
+the installer or unrelated editor processes. Errors are displayed in the update
+window/footer and saved to `%LOCALAPPDATA%\VSCodeDemoPlayer\last-update-error.log`.
+Update handoff results and installer logs remain under
+`%LOCALAPPDATA%\VSCodeDemoPlayer\updates`; successful installer binaries are
+removed after installation.
+
+**One-time bootstrap:** version 0.1.0 has no updater. Install the latest download
+once to get this feature; subsequent releases can be installed from inside the
+app. Source checkouts can check versions but cannot replace themselves.
+
+Updater source/UI acceptance uses an isolated synthetic application fixture,
+without installing anything or touching the shared installed app:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.1.0'
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.2.1' -Scenario AvailableUpdate
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.2.1' -Scenario CheckFailure
+```
+
+For the first command, replace `ExpectedLatestVersion` with the current public
+stable release. The live scenario exercises the real GitHub check. The other
+scenarios replace only the disposable fixture's update helper with synthetic
+metadata/slow-download/offline responses, exercising declined consent,
+cancellation, cleanup, and visible errors. They never execute an installer.
+Owned update windows are found beneath their controller in the Windows UI
+Automation tree, not assumed to be direct desktop children.
+
+The release captain must additionally run the real installed upgrade test:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-ui.ps1 -ExpectedCurrentVersion '0.2.0' -ExpectedLatestVersion '0.2.1' -EvidenceRoot .\.build\upgrade-acceptance -InstallUpdate
+```
+
+This last test requires the expected newer stable release to be published and
+explicit permission to update the installed app. It tests declined consent,
+confirmed installation during paused synthetic playback, automatic restart,
+and preserved library bytes. Source/UI fixture success is not installed-upgrade
+acceptance; the pre-updater 0.1.0 release always needs a manual bootstrap.
+
+The earlier updater-dialog acceptance timeout was a UI test lookup bug, not a
+missing dialog: owned WPF windows must be searched as descendants. A disposable,
+read-only copy of the existing local 0.2.0 application's sources passed startup
+and manual public-GitHub checks with that correction; it does not require
+bootstrap for this dialog issue. The actual 0.2.0-to-new-release installation
+still requires the captain's installed-upgrade gate.
+
+Updater branch validation covers numeric versions, stable-release/asset/URL
+validation, rate-limit/offline/malformed responses, digest/size/corrupt/truncated
+downloads, interrupted-stream cleanup, source UI version display, declined
+consent, confirmed-download cancellation, and visible check failures.
+Cancellation cleanup uses a five-second helper limit (plus two-second exit/output
+limits) so Windows PowerShell's legacy long-path deletion does not leave partial
+downloads silently. UI fixtures keep their logs/downloads and synthetic libraries
+in their explicit evidence directory, not the real user library.
 
 ## Current scope
 
