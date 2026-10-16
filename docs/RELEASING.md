@@ -9,6 +9,12 @@ authorized automatically after that approved integration passes all release
 gates. Publishing a new release does not authorize silently installing it on a
 user's computer; preserve the updater's consent behavior.
 
+The captain is an on-demand role. Between user requests, remain idle: no
+session polling, background listeners, watchers, or automatic integrations.
+Workstream handoffs and queued reports alone do not authorize a new work cycle.
+When asked to pause, preserve the current candidate and stop at a safe boundary;
+resume only on the user's instruction.
+
 Repository instructions guide agents but are not access control. They become
 the shared baseline only when merged. Until then, the captain must send the
 policy directly to active agents. Older worktrees must read the current policy.

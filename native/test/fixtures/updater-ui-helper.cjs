@@ -6,7 +6,9 @@ async function main() {
     const command = JSON.parse(input);
     if (process.env.UPDATER_UI_SCENARIO === 'CheckFailure') throw new Error('Synthetic offline failure');
     if (command.command === 'check') {
-        return { currentVersion: command.currentVersion, latestVersion: '0.2.1', updateAvailable: true, installedIsNewer: false };
+        const latestVersion = process.env.UPDATER_UI_LATEST_VERSION;
+        if (!/^\d+\.\d+\.\d+$/.test(latestVersion ?? '')) throw new Error('The updater UI fixture requires an explicit latest version');
+        return { currentVersion: command.currentVersion, latestVersion, updateAvailable: true, installedIsNewer: false };
     }
     if (command.command !== 'download') throw new Error('Unknown synthetic update operation');
     await fs.mkdir(command.directory, { recursive: true });

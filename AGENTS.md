@@ -1,5 +1,9 @@
 # Parallel development and release ownership
 
+- The release captain is on demand, not a continuous monitor. Do not poll
+  sessions, run watchers, or start integration/release work without a user
+  request. A workstream handoff is evidence, not a command to resume. Record
+  completion in the workstream/PR; do not repeatedly wake the captain.
 - Each implementation agent works on its own named branch in its own Git
   worktree. Before writing, report the absolute worktree path, branch, base
   commit, task scope, and overlapping files to the release captain.

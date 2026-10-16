@@ -81,7 +81,7 @@ without installing anything or touching the shared installed app:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.1.0'
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.2.1' -Scenario AvailableUpdate
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '9.9.9' -Scenario AvailableUpdate
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\updater-source-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot .\.build\updater-ui -ExpectedLatestVersion '0.2.1' -Scenario CheckFailure
 ```
 
@@ -90,6 +90,10 @@ stable release. The live scenario exercises the real GitHub check. The other
 scenarios replace only the disposable fixture's update helper with synthetic
 metadata/slow-download/offline responses, exercising declined consent,
 cancellation, cleanup, and visible errors. They never execute an installer.
+The available-update fixture uses the supplied expected version, which must be
+newer than the application version; it is not tied to a particular release.
+Canceled-download cleanup uses Node directly, including for directory paths
+that exceed Windows PowerShell's legacy path-length limit.
 Owned update windows are found beneath their controller in the Windows UI
 Automation tree, not assumed to be direct desktop children.
 

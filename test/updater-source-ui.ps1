@@ -20,6 +20,9 @@ foreach ($name in @('package.json', 'library-cli.js', 'demo-library.js', 'replay
 }
 Copy-Item -LiteralPath $NodePath -Destination (Join-Path $fixture 'runtime\node.exe')
 $version = (Get-Content -LiteralPath (Join-Path $application 'native\package.json') -Raw | ConvertFrom-Json).version
+if ($Scenario -eq 'AvailableUpdate' -and [version]$ExpectedLatestVersion -le [version]$version) {
+    throw 'The AvailableUpdate scenario requires ExpectedLatestVersion to be newer than the application version.'
+}
 [IO.File]::WriteAllText((Join-Path $fixture 'build-info.json'), (@{ version = $version } | ConvertTo-Json))
 # Only a marker for installed-mode UI behavior; never executed or installed.
 [IO.File]::WriteAllText((Join-Path $fixture 'VSCodeDemoPlayer.exe'), 'Synthetic source UI fixture marker; not executable.')
@@ -27,13 +30,18 @@ if ($Scenario -ne 'LiveGitHub') {
     Copy-Item -LiteralPath (Join-Path $root 'native\test\fixtures\updater-ui-helper.cjs') -Destination (Join-Path $fixture 'native\updater.js') -Force
 }
 $previous = $env:UPDATER_UI_SCENARIO
+$previousLatest = $env:UPDATER_UI_LATEST_VERSION
 try {
     $env:UPDATER_UI_SCENARIO = $Scenario
+    $env:UPDATER_UI_LATEST_VERSION = $ExpectedLatestVersion
     $options = @{
         ApplicationRoot = $fixture; SourceController = $true; ExpectedCurrentVersion = $version
         ExpectedLatestVersion = $ExpectedLatestVersion; EvidenceRoot = (Join-Path $fixture 'evidence')
         CancelDownload = ($Scenario -eq 'AvailableUpdate'); ExpectCheckFailure = ($Scenario -eq 'CheckFailure')
     }
     & (Join-Path $PSScriptRoot 'updater-ui.ps1') @options
-} finally { $env:UPDATER_UI_SCENARIO = $previous }
+} finally {
+    $env:UPDATER_UI_SCENARIO = $previous
+    $env:UPDATER_UI_LATEST_VERSION = $previousLatest
+}
 Write-Output ('Source-only fixture: ' + $fixture)

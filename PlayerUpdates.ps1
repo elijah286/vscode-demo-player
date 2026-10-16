@@ -21,7 +21,7 @@ function Stop-PlayerUpdateOperation {
             }
         } finally { $state.Process.Dispose(); $state.Process = $null }
     }
-    if ($state.Directory -and -not $state.Pending -and (Test-Path -LiteralPath $state.Directory)) {
+    if ($state.Directory -and -not $state.Pending) {
         $cleanup = [Diagnostics.ProcessStartInfo]::new()
         $cleanup.FileName = Resolve-PlayerNode $script:NodePath
         $cleanup.Arguments = '-e "require(''node:fs'').rmSync(process.argv[1],{recursive:true,force:true})" "' + $state.Directory + '"'
