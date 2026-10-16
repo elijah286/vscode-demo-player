@@ -1,8 +1,6 @@
 function Invoke-DemoLibrary([hashtable]$Request) {
     if (-not $script:NodePath) {
-        $command = Get-Command node.exe -ErrorAction SilentlyContinue
-        if (-not $command) { throw 'Node.js 22.16 or newer is required. Install Node or launch with -NodePath pointing to node.exe.' }
-        $script:NodePath = $command.Source
+        $script:NodePath = Resolve-PlayerNode
     }
     $Request.root = $script:LibraryRoot
     $start = [System.Diagnostics.ProcessStartInfo]::new()

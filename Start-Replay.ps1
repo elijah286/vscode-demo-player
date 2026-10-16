@@ -8,6 +8,7 @@ param(
     [string]$DemoPath,
     [switch]$NoController,
     [string]$ExtensionPath,
+    [string]$CodePath,
     [ValidateSet('Editor', 'Agents')]
     [string]$WindowMode = 'Editor',
     [string]$UserDataPath,
@@ -29,8 +30,8 @@ if ($PlaylistPath) { $PlaylistPath = (Resolve-Path -LiteralPath $PlaylistPath).P
 if ($DemoPath) { $DemoPath = (Resolve-Path -LiteralPath $DemoPath).Path }
 $controllerScript = Join-Path ([System.IO.Path]::GetDirectoryName($extension)) 'Show-ReplayController.ps1'
 if (-not (Test-Path -LiteralPath $controllerScript)) { throw 'The replay controller script was not found.' }
-$code = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
-if (-not (Test-Path -LiteralPath $code)) { throw 'The installed VS Code executable was not found.' }
+. (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
+$code = Resolve-PlayerVSCode $CodePath
 $profile = if ($UserDataPath) { [System.IO.Path]::GetFullPath($UserDataPath) } else { Join-Path ([System.IO.Path]::GetTempPath()) ('historical-replay-player-' + [guid]::NewGuid().ToString('N')) }
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
 if ([System.IO.Path]::GetDirectoryName($profile) -ine $temporaryRoot -or [System.IO.Path]::GetFileName($profile) -notmatch '^historical-replay-(player|agents)-[a-f0-9]{32}$') {

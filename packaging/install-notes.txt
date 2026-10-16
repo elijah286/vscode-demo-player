@@ -1,0 +1,19 @@
+VS Code Demo Player
+
+Requires 64-bit Windows 10/11 and compatible desktop VS Code 1.140 or later.
+Compatibility depends on proposed VS Code APIs; not every newer build is guaranteed.
+Download VS Code separately from https://code.visualstudio.com/ if needed.
+Node.js is included. No npm, administrator access, or source checkout is needed.
+
+Launch "VS Code Demo Player" from the Windows Start menu.
+Capture a local saved conversation or import a .demo-recording.json package.
+Play opens an isolated VS Code window automatically, even if VS Code is closed.
+Your normal VS Code profile, extensions, and open projects are not modified.
+
+Recordings are private user data and are not included in this installer.
+The demo library is stored in %LOCALAPPDATA%\VSCodeDemoPlayer\demos.
+Upgrades and uninstall leave this library intact.
+
+This release is unsigned. Windows may display an unknown-publisher warning.
+Organizational security policy may block it; do not bypass that policy.
+Recorded tools and model responses are displayed only, never executed.

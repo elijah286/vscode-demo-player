@@ -2,7 +2,7 @@
   "name": "historical-transcript-replay",
   "displayName": "Transcript Playback",
   "description": "Replay original local chat transcripts in the native VS Code interface without model or tool execution.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.140.0"
@@ -100,14 +100,14 @@
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.0.0",
     "eslint": "^10.5.0",
-    "globals": "^17.13.0",
-    "playwright": "^1.64.1"
+    "globals": "^17.13.0"
   },
   "overrides": {
     "diff": "^8.0.4",
     "serialize-javascript": "^7.0.6"
   },
   "dependencies": {
+    "playwright": "^1.64.1",
     "ws": "^8.22.0"
   }
 }

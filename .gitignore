@@ -15,3 +15,5 @@ evidence/
 *.demo.json
 *.demo-recording.json
 replay-control-*.json
+.build/
+dist/

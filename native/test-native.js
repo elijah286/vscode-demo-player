@@ -21,7 +21,8 @@ async function main() {
     console.log('NATIVE TEST PROFILE', profile);
     await runTests({
         vscodeExecutablePath: path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe'),
-        extensionDevelopmentPath: __dirname,
+        extensionDevelopmentPath: process.env.HISTORY_REPLAY_TEST_EXTENSION
+            ? path.resolve(process.env.HISTORY_REPLAY_TEST_EXTENSION) : __dirname,
         extensionTestsPath: path.join(__dirname, 'test', 'native-runner.js'),
         extensionTestsEnv: {
             HISTORY_REPLAY_CDP_PORT: String(port),

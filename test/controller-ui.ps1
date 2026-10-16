@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$NodePath,
-    [Parameter(Mandatory = $true)][string]$EvidenceRoot
+    [Parameter(Mandatory = $true)][string]$EvidenceRoot,
+    [string]$ApplicationRoot,
+    [switch]$Installed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +19,7 @@ public static class DemoUITest {
     }
 }
 '@ -ReferencedAssemblies UIAutomationClient, UIAutomationTypes
-$root = Split-Path $PSScriptRoot -Parent
+$root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Split-Path $PSScriptRoot -Parent }
 $evidence = Join-Path ([System.IO.Path]::GetFullPath($EvidenceRoot)) ('run-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 Write-Output ('UI evidence: ' + $evidence)
@@ -89,8 +91,26 @@ function Save-WindowImage($Element, [string]$Name) {
     } finally { $graphics.Dispose(); $image.Dispose() }
 }
 
+function Start-TestPlayer {
+    if (-not $Installed) { return & (Join-Path $root 'Start-DemoPlayer.ps1') -LibraryRoot $library -NodePath $NodePath }
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $root 'VSCodeDemoPlayer.exe'
+    $start.Arguments = '-LibraryRoot "' + $library + '"'
+    $start.UseShellExecute = $false
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) { throw 'Installed launcher failed to start.' }
+    } finally { $process.Dispose() }
+    $controller = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object {
+            $_.CommandLine -and $_.CommandLine.Contains((Join-Path $root 'Start-InstalledPlayer.ps1')) -and $_.CommandLine.Contains($library)
+        } | Select-Object -First 1
+    } 'installed controller process'
+    return [pscustomobject]@{ ProcessId = $controller.ProcessId }
+}
+
 $tasks = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
-$launch = & (Join-Path $root 'Start-DemoPlayer.ps1') -LibraryRoot $library -NodePath $NodePath
+$launch = Start-TestPlayer
 $script:controllerId = $launch.ProcessId
 $replayId = 0
 try {
@@ -165,7 +185,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'closing controller stops its paused replay' 20 | Out-Null
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'controller closes after its replay stops' | Out-Null
-    $launch = & (Join-Path $root 'Start-DemoPlayer.ps1') -LibraryRoot $library -NodePath $NodePath
+    $launch = Start-TestPlayer
     $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'reopened standalone controller'
     Invoke-Button $window 'ManageDemos'

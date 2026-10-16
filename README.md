@@ -1,5 +1,35 @@
 # VS Code Demo Player
 
+**[Download the Windows installer](https://github.com/elijah286/vscode-demo-player/releases/latest/download/VSCodeDemoPlayer-Setup.exe)** |
+[Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
+
+## Install and launch
+
+1. Download and run **VSCodeDemoPlayer-Setup.exe**. This is a per-user install;
+   administrator access is not required.
+2. Open **VS Code Demo Player** from the Windows Start menu.
+3. Use **Capture Conversation** for a local saved chat, or **Manage Demos >
+   Import Recording** for an exported `.demo-recording.json` package.
+4. Select the demo and press **Play**. The app opens its own isolated VS Code
+   window automatically; you do not need to open VS Code first.
+
+Requires x64 Windows 10/11 and compatible desktop VS Code 1.140 or later.
+Node.js is bundled: no npm, PowerShell commands, or repository checkout are
+needed to use the installed app. Install VS Code separately from
+https://code.visualstudio.com/ if it is not already available. Standard user
+and system-wide installations are detected. Proposed APIs make compatibility
+version-sensitive; a newer VS Code build is not automatically certified.
+
+The repository is private, so downloads require an authorized GitHub account.
+The initial installer is unsigned; Windows may show an unknown-publisher
+warning. Follow your organization's software policy.
+
+Upgrade by running the newer installer after closing Demo Player. Uninstall
+through Windows **Installed apps** or its Start menu uninstaller. Neither
+operation deletes your demo library at
+`%LOCALAPPDATA%\VSCodeDemoPlayer\demos`, nor changes your normal VS Code
+profile. Recordings and private conversation data are not shipped.
+
 Local recorded-conversation playback in an isolated, native VS Code window,
 with a compact Windows Play/Pause/Stop controller.
 
@@ -21,11 +51,10 @@ The original workspace remains untouched.
 - Persistent rename/delete operations; original conversation storage is never edited.
 - Deterministic capture from reviewed native transcripts, not model-authored exports.
 
-## Requirements
+## Requirements for running from source
 
 - Windows PowerShell 5.1 with WPF.
-- A compatible desktop VS Code installed under
-  `%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe`.
+- A compatible desktop VS Code user or system installation.
 - Node.js 22.16 or newer and npm.
 - Access to a saved native VS Code chat transcript.
 
@@ -35,6 +64,8 @@ Agents mode is experimental and retains its existing integration guard.
 Use Editor mode for the baseline player.
 
 ## Setup and playback
+
+These commands are for source development. Installed users use the Start menu.
 
 ```powershell
 Set-Location .\native
@@ -75,6 +106,10 @@ For a portable Node runtime outside PATH, pass its executable explicitly:
 ```powershell
 .\Start-DemoPlayer.ps1 -NodePath 'C:\Tools\node\node.exe'
 ```
+
+For portable VS Code, also pass `-CodePath 'C:\Tools\VSCode\Code.exe'`.
+The installed executable accepts the same `-CodePath` and `-LibraryRoot`
+options, and uses its bundled Node runtime by default.
 
 The library defaults to `%LOCALAPPDATA%\VSCodeDemoPlayer\demos`, outside the
 repository. `-LibraryRoot` chooses a separate library. Multiple players may
@@ -150,6 +185,66 @@ It does not implement the proposed portable package or reconstruct later
 updates. The playback reader reconstructs updates separately.
 
 ## Validation
+
+### Build the Windows installer
+
+Install [Inno Setup 6](https://jrsoftware.org/isdl.php), then run from a
+Windows PowerShell 5.1 terminal:
+
+```powershell
+.\packaging\Build-Windows.ps1
+```
+
+If the compiler is not in a standard installation location, pass
+`-InnoCompiler 'C:\Tools\InnoSetup\ISCC.exe'`.
+The build downloads the pinned official Node.js 22.23.3 x64 archive, verifies
+its SHA-256, and installs only locked production npm dependencies into a fresh
+allowlisted payload. It does not package local recordings, source transcripts,
+development dependencies, or your normal VS Code installation. Node's license
+and the production dependency licenses are included.
+
+Outputs are `dist\VSCodeDemoPlayer-Setup.exe` and `dist\SHA256SUMS.txt`.
+The release version comes from `native/package.json`. The GitHub Actions
+release workflow runs tests and builds on Windows before publishing both
+assets for a `v<version>` tag. The stable download URL above follows the newest
+published non-prerelease version. No code-signing certificate is configured.
+
+Startup errors are displayed and saved to
+`%LOCALAPPDATA%\VSCodeDemoPlayer\last-startup-error.log`. To check dependency
+resolution without opening a UI, run
+`powershell.exe -NoProfile -File .\Start-InstalledPlayer.ps1 -Check`
+from the installed directory.
+
+Installer acceptance (on a machine with no existing installed Demo Player):
+
+```powershell
+.\test\installer.ps1 -InstallerPath .\dist\VSCodeDemoPlayer-Setup.exe -EvidenceRoot .\.build\acceptance -KeepInstalled
+.\test\controller-ui.ps1 -NodePath "$env:LOCALAPPDATA\Programs\VSCodeDemoPlayer\runtime\node.exe" -EvidenceRoot .\.build\acceptance -ApplicationRoot "$env:LOCALAPPDATA\Programs\VSCodeDemoPlayer" -Installed
+```
+
+The installer harness refuses to replace an existing user installation, tests
+same-version repair/upgrade and uninstall, and verifies data preservation and
+the Start menu shortcut. `-KeepInstalled` reinstalls the tested app afterward.
+The installed UI harness launches the executable without a Node override and
+tests capture, library persistence, Play/Pause/Stop, completion, controller
+reuse, and closure during paused playback using synthetic conversations.
+
+Release 0.1.0 was checked locally on Windows x64 with VS Code 1.142.0:
+33 unit tests, 19 packaging/syntax assertions, 38 installer assertions, and
+the installed executable's interactive UI harness passed. Native tests against
+the installed extension verified two original synthetic prompts/responses and
+history; measured prompt entry was 2.007/2.011 seconds and output was
+5.014/5.009 seconds. This is not a test on a second physical computer or a
+guarantee of compatibility with every newer VS Code build. Lint has zero errors
+and four pre-existing browser-global warnings.
+
+For native content and timing checks against the installed extension, set
+`HISTORY_REPLAY_TEST_EXTENSION` to
+`%LOCALAPPDATA%\Programs\VSCodeDemoPlayer\native` before running the native
+test below. The test harness and development dependencies stay in the source
+checkout; they are not shipped.
+
+### Source tests
 
 ```powershell
 Set-Location .\native

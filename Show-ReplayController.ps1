@@ -3,7 +3,8 @@ param(
     [string]$ProfilePath,
     [int]$ReplayProcessId,
     [string]$LibraryRoot = (Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\demos'),
-    [string]$NodePath
+    [string]$NodePath,
+    [string]$CodePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,8 @@ public static class ReplayWindowVisibility {
 $script:standalone = -not $ReplayProcessId -and -not $ControlPath -and -not $ProfilePath
 $script:LibraryRoot = [System.IO.Path]::GetFullPath($LibraryRoot)
 $script:NodePath = $NodePath
+$script:CodePath = $CodePath
+. (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
 . (Join-Path $PSScriptRoot 'DemoDialogs.ps1')
 $profile = $null
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
@@ -133,7 +136,7 @@ function Start-DemoReplay {
     # Validate the saved entry again before launching a new isolated process.
     Invoke-DemoLibrary @{ command = 'read'; id = $script:selectedDemo.id } | Out-Null
     $demoPath = Join-Path $script:LibraryRoot ($script:selectedDemo.id + '.demo.json')
-    $started = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') -DemoPath $demoPath -NoController
+    $started = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') -DemoPath $demoPath -NoController -CodePath $script:CodePath
     $script:ReplayProcessId = $started.ProcessId
     $script:ControlPath = $started.ControlPath
     $script:profile = $started.ProfilePath
