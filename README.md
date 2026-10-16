@@ -17,9 +17,9 @@ The original workspace remains untouched.
 - An authenticated loopback control channel and separate Windows popup.
 - Recorded tool displays only: no model requests or actual tool execution.
 
-The standalone library, Capture Conversation dialog, portable demo packages,
-and import/rename/delete workflow are **not implemented yet**. This extraction
-is the baseline for that work, not a claim that those features are finished.
+- Standalone Demo Player, custom searchable library, capture, and package import/export.
+- Persistent rename/delete operations; original conversation storage is never edited.
+- Deterministic capture from reviewed native transcripts, not model-authored exports.
 
 ## Requirements
 
@@ -40,14 +40,61 @@ Use Editor mode for the baseline player.
 Set-Location .\native
 npm ci
 Set-Location ..
-.\Start-Replay.ps1 -SessionPath 'C:\Recordings\conversation.jsonl' -RequestIndex 0 -RequestCount 2
+.\Start-DemoPlayer.ps1
 ```
 
-Both windows prepare before playback. Play advances the selected exchange;
-after an answer, the controller waits for the next Play. Stop or closing the
-controller closes its isolated replay window, not your working editor.
-The current controller exits with that replay session; persistent library
-management is planned.
+The controller opens without a project or selected recording. Use **Capture
+Conversation** to discover saved conversations from standard VS Code workspace
+storage. Select a session and Load, browse to a native JSONL transcript from
+another profile, or paste its path and Load.
+Discovery shows project, date, and initial-snapshot titles/opening prompts
+using at most 1 MiB per source for previews. Unavailable previews are labeled;
+Load always reconstructs and validates the full final saved conversation.
+
+Select up to 100 exchanges with Ctrl/Shift, inspect their full saved payloads
+(including tool data), give the demo a title, acknowledge the privacy/asset
+notice, and Save Demo. UI capture follows source order; the underlying capture
+API also accepts explicitly ordered distinct indices. Partial or unsupported
+exchanges are marked unavailable with a reason; nothing is silently dropped.
+If the source changes after preview, reload and review it before capture.
+
+The selected-demo button and **Manage Demos** open a custom searchable library,
+not a system dropdown. Select, rename, delete, import, or export a recording.
+Delete requires confirmation and affects only that library copy. Exports never
+overwrite an existing destination, even after the standard save dialog's
+overwrite confirmation; choose a new filename.
+
+**Play** launches a dedicated VS Code window and starts the first exchange once
+ready. After each answer, Play advances the next exchange; Pause/Resume freezes
+the current timeline. **Stop** closes only the isolated replay window and leaves
+Demo Player ready to run again. Closing Demo Player stops its paired window
+before exiting. A completed demo stays visible until Stop.
+
+For a portable Node runtime outside PATH, pass its executable explicitly:
+
+```powershell
+.\Start-DemoPlayer.ps1 -NodePath 'C:\Tools\node\node.exe'
+```
+
+The library defaults to `%LOCALAPPDATA%\VSCodeDemoPlayer\demos`, outside the
+repository. `-LibraryRoot` chooses a separate library. Multiple players may
+read it; concurrent writes are rejected with a visible busy error. After a
+helper crash, inspect the library and ensure no writer is running before
+manually removing `.library.lock`. Library helper operations time out after
+30 seconds, startup after 45 seconds, and HTTP calls after one second.
+Three consecutive connection failures initiate stop. Stop first allows eight
+seconds for normal closure, then requests scoped window closure and waits six
+more seconds; if it still cannot close, it asks you to close that isolated
+window normally rather than killing the IDE.
+
+The original direct launcher remains available:
+
+```powershell
+.\Start-Replay.ps1 -SessionPath 'C:\Recordings\conversation.jsonl' -RequestIndex 0 -RequestCount 2
+.\Start-Replay.ps1 -DemoPath 'C:\Recordings\example.demo-recording.json'
+```
+
+Direct-launch mode retains its paired-controller lifetime: Stop closes both.
 
 Never install this development extension in your normal VS Code profile.
 The launcher supplies a dedicated temporary profile and extension directory.
@@ -57,6 +104,42 @@ They refer to native workspace-storage session IDs on the same computer;
 they are not portable packages. No machine-specific default playlist is used.
 
 ## Export helper
+
+Use **Export...** in the library for the portable format. **Import Recording**
+validates the format, version, supported response parts, and content hashes
+before adding it. A package includes only selected request payloads and the
+minimal session/model metadata needed for playback; the source transcript is
+not required afterward. Display-title renames are stored separately from the
+original capture.
+
+Version 1 is a single UTF-8 `.demo-recording.json` file with:
+
+- `format: "vscode-demo-recording"`, `version: 1`, UUID, title, and capture date.
+- Source filename/session ID and SHA-256 of the previewed source bytes.
+- Ordered `turns`, each with its source index, minimal native snapshot, and
+  SHA-256 of that snapshot's JSON representation.
+- An explicit fidelity/asset notice.
+
+Hashes detect accidental content changes; they are not authentication,
+redaction, or proof that the source recorded every action. Only one supported
+native VS Code JSONL source is captured per demo. Other agents need a future
+format adapter, not a prompt asking a model to invent the package.
+
+The current Editor package renderer accepts Markdown, thinking, completed tool
+records with identifiers, and known internal metadata. Saved question/edit and
+other richer parts are refused explicitly, not converted to approximate tools
+or silently omitted. External images, links, files, and workspace state are
+**not bundled**. The capture tool does not retrieve their contents. Native
+Markdown may retain links; do not activate external links during a recording.
+This is portable conversation-payload playback,
+not a reproducible project/hardware execution environment.
+
+Limits: 100 MiB per input/package/library entry, 100 exchanges per demo, 1,000
+demos per library, and 10,000 turns per inspected transcript. Discovery shows the
+200 most recently saved native sessions across at most 5,000 storage folders
+and 10,000 session files. Other sources can be selected manually.
+
+### Legacy helper
 
 ```powershell
 .\Export-OriginalChat.ps1 -SessionPath 'C:\Recordings\conversation.jsonl' -OutputPath 'C:\Recordings\excerpt.native-chat.json' -RequestCount 2
@@ -88,16 +171,37 @@ an isolated VS Code instance and saves screenshots beneath the temporary
 `VSCode-Demo-Player\visual` directory. Do not commit that evidence or source data.
 Unit and lint success alone do not establish native UI acceptance.
 
-At extraction, all 23 unit tests and PowerShell syntax checks passed. ESLint
-reported four existing browser-global warnings in `native-composer.js`
+The capture/library and original playback unit suites run together. ESLint
+retains four existing browser-global warnings in `native-composer.js`
 (`document`, `requestAnimationFrame`, and `TextUpdateEvent`). A strict
-zero-warning lint gate therefore does not pass. Native visual playback was
-not rerun as part of repository isolation.
+zero-warning lint gate therefore does not pass.
+
+Validation of the capture/library implementation passed 33 unit tests,
+PowerShell syntax checks, the interactive Windows acceptance harness, and
+native two-turn content/timing/history verification with synthetic recordings.
+The measured native prompt durations were approximately 2.0 seconds and response
+durations approximately 5.0 seconds. These are synthetic playback checks, not
+new execution of the original projects or hardware.
+
+The Windows UI acceptance harness creates synthetic recordings in an explicit
+evidence directory, captures through the actual dialog, renames/selects a demo,
+and exercises play/pause/resume, review, completion, and scoped stop:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\controller-ui.ps1 -NodePath 'C:\Tools\node\node.exe' -EvidenceRoot 'C:\Temp\demo-player-ui'
+```
+
+Run UI tests only on an interactive desktop. It opens and normally closes only
+its own test windows. Evidence and synthetic library files stay in the supplied
+directory and must not be committed.
 
 ## Layout
 
 - [Start-Replay.ps1](Start-Replay.ps1): isolated VS Code and controller launcher.
+- [Start-DemoPlayer.ps1](Start-DemoPlayer.ps1): standalone application entry point.
 - [Show-ReplayController.ps1](Show-ReplayController.ps1): compact WPF popup.
+- [DemoDialogs.ps1](DemoDialogs.ps1): custom library/capture dialogs and bounded helper bridge.
+- [native/demo-library.js](native/demo-library.js): deterministic capture and local library.
 - [Export-OriginalChat.ps1](Export-OriginalChat.ps1): legacy snapshot exporter.
 - [native/](native/): extension, transcript reader, control server, and tests.
 

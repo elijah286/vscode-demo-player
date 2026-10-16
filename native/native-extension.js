@@ -3,6 +3,7 @@ const { readRecordings, readPlaylist, PlaybackClock, promptTimeline, responseTim
 const { createControlServer } = require('./control-server');
 const { RecordingAgentHost } = require('./recording-agent-host');
 const { NativeComposer } = require('./native-composer');
+const { packageRecordings } = require('./demo-library');
 
 function activate(context) {
     const capabilities = {
@@ -115,7 +116,9 @@ function activate(context) {
         if (['loading', 'typing', 'response', 'stopping'].includes(state.phase)) throw new Error('A replay is already active.');
         state.phase = 'loading';
         try {
-            state.recordings = process.env.HISTORY_REPLAY_PLAYLIST ? await readPlaylist(process.env.HISTORY_REPLAY_PLAYLIST) : await readRecordings(file, requestIndex, requestCount);
+            state.recordings = process.env.HISTORY_REPLAY_DEMO
+                ? await packageRecordings(process.env.HISTORY_REPLAY_DEMO)
+                : process.env.HISTORY_REPLAY_PLAYLIST ? await readPlaylist(process.env.HISTORY_REPLAY_PLAYLIST) : await readRecordings(file, requestIndex, requestCount);
             if (recordingEndpoint) {
                 await recordingEndpoint.close();
                 recordingEndpoint = undefined;

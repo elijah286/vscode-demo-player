@@ -1,7 +1,7 @@
 # Native playback extension
 
 See the repository [README](../README.md) for setup, playback, validation,
-privacy boundaries, and the remaining standalone capture/library work.
+privacy boundaries, and standalone capture/library usage.
 
 The extension identifier remains `local.historical-transcript-replay` to
 preserve launcher, proposed-API, and test integration.

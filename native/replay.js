@@ -68,6 +68,21 @@ async function readRecordings(file, requestIndex, requestCount = 1) {
     return Array.from({ length: requestCount }, (_, offset) => extractRecording(file, snapshot, requestIndex + offset));
 }
 
+function validateEditorRecording(recording) {
+    const supported = new Set(['markdown', 'thinking', 'toolInvocationSerialized', ...INTERNAL_PARTS]);
+    const unsupported = [...new Set(recording.request.response.map(kindOf).filter(kind => !supported.has(kind)))];
+    if (unsupported.length) throw new Error('Editor playback cannot render these saved parts: ' + unsupported.join(', ') + '. No content was discarded.');
+    if (!recording.request.message.text.trim()) throw new Error('Editor playback requires a nonempty recorded prompt.');
+    for (const part of recording.request.response) {
+        const kind = kindOf(part);
+        if (kind === 'markdown' && typeof (typeof part === 'string' ? part : part.value) !== 'string') throw new Error('Invalid recorded Markdown.');
+        if (kind === 'toolInvocationSerialized' && (!part.isComplete || typeof part.toolId !== 'string' || typeof part.toolCallId !== 'string')) {
+            throw new Error('Recorded tool activity is incomplete or missing tool identifiers.');
+        }
+    }
+    return recording;
+}
+
 async function readPlaylist(file) {
     const manifest = JSON.parse(await fs.promises.readFile(file, 'utf8'));
     if (manifest.version !== 1 || !/^[a-f0-9]{32}$/.test(manifest.workspaceStorageId) || !Array.isArray(manifest.segments) || !manifest.segments.length || manifest.segments.length > 100) {
@@ -219,4 +234,4 @@ class PlaybackClock {
     }
 }
 
-module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION };
+module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, extractRecording, validateEditorRecording, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION };

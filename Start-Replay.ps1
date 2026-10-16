@@ -5,6 +5,8 @@ param(
     [ValidateRange(1, 100)]
     [int]$RequestCount = 1,
     [string]$PlaylistPath,
+    [string]$DemoPath,
+    [switch]$NoController,
     [string]$ExtensionPath,
     [ValidateSet('Editor', 'Agents')]
     [string]$WindowMode = 'Editor',
@@ -14,8 +16,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ([string]::IsNullOrWhiteSpace($SessionPath) -eq [string]::IsNullOrWhiteSpace($PlaylistPath)) {
-    throw 'Specify exactly one of SessionPath or PlaylistPath.'
+if (@(@($SessionPath, $PlaylistPath, $DemoPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 1) {
+    throw 'Specify exactly one of SessionPath, PlaylistPath, or DemoPath.'
 }
 $source = if ($SessionPath) { (Resolve-Path -LiteralPath $SessionPath).Path } else { '' }
 if (-not $ExtensionPath) {
@@ -24,6 +26,7 @@ if (-not $ExtensionPath) {
 }
 $extension = (Resolve-Path -LiteralPath $ExtensionPath).Path
 if ($PlaylistPath) { $PlaylistPath = (Resolve-Path -LiteralPath $PlaylistPath).Path }
+if ($DemoPath) { $DemoPath = (Resolve-Path -LiteralPath $DemoPath).Path }
 $controllerScript = Join-Path ([System.IO.Path]::GetDirectoryName($extension)) 'Show-ReplayController.ps1'
 if (-not (Test-Path -LiteralPath $controllerScript)) { throw 'The replay controller script was not found.' }
 $code = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
@@ -76,11 +79,15 @@ $start.EnvironmentVariables['HISTORY_REPLAY_AGENTS'] = if ($WindowMode -eq 'Agen
 $start.EnvironmentVariables['HISTORY_REPLAY_CDP_PORT'] = [string]$RemoteDebuggingPort
 if ($PlaylistPath) { $start.EnvironmentVariables['HISTORY_REPLAY_PLAYLIST'] = $PlaylistPath }
 else { $start.EnvironmentVariables.Remove('HISTORY_REPLAY_PLAYLIST') }
+if ($DemoPath) { $start.EnvironmentVariables['HISTORY_REPLAY_DEMO'] = $DemoPath }
+else { $start.EnvironmentVariables.Remove('HISTORY_REPLAY_DEMO') }
 $process = [System.Diagnostics.Process]::Start($start)
 if ($null -eq $process) { throw 'The isolated replay window could not be started.' }
 $process.StandardInput.Close()
 $null = $process.StandardOutput.BaseStream.CopyToAsync([System.IO.Stream]::Null)
 $null = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+$controllerProcess = $null
+if (-not $NoController) {
 $controllerStart = [System.Diagnostics.ProcessStartInfo]::new()
 $controllerStart.FileName = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $controllerStart.UseShellExecute = $false
@@ -94,9 +101,10 @@ $controllerStart.Arguments = @(
 ) -join ' '
 $controllerProcess = [System.Diagnostics.Process]::Start($controllerStart)
 if ($null -eq $controllerProcess) { throw 'The replay controller could not be started. Close the isolated replay window normally.' }
+}
 [pscustomobject]@{
     ProcessId = $process.Id
-    ControllerProcessId = $controllerProcess.Id
+    ControllerProcessId = if ($controllerProcess) { $controllerProcess.Id } else { $null }
     ProfilePath = $profile
     ControlPath = $controlPath
     WindowMode = $WindowMode
@@ -109,6 +117,7 @@ if ($null -eq $controllerProcess) { throw 'The replay controller could not be st
     RequestIndex = $RequestIndex
     RequestCount = $RequestCount
     PlaylistPath = $PlaylistPath
+    DemoPath = $DemoPath
     PromptMilliseconds = 2000
     ResponseMilliseconds = 5000
 }

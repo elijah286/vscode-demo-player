@@ -89,7 +89,7 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test:unit": "node --test test/replay.test.js",
+    "test:unit": "node --test test/replay.test.js test/demo-library.test.js",
     "pretest": "npm run lint",
     "test": "node test-native.js"
   },

@@ -12,4 +12,6 @@ evidence/
 *.jsonl
 *.native-chat.json
 *.playlist.json
+*.demo.json
+*.demo-recording.json
 replay-control-*.json
