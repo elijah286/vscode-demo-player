@@ -4,7 +4,8 @@ param(
     [int]$ReplayProcessId,
     [string]$LibraryRoot = (Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\demos'),
     [string]$NodePath,
-    [string]$CodePath
+    [string]$CodePath,
+    [string]$InstalledLauncherPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +103,16 @@ if (-not $script:standalone) {
 '@
 $reader = [System.Xml.XmlNodeReader]::new($layout)
 try { $window = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $reader.Dispose() }
+if ($InstalledLauncherPath) {
+    Add-Type -AssemblyName System.Drawing
+    $icon = [Drawing.Icon]::ExtractAssociatedIcon($InstalledLauncherPath)
+    if (-not $icon) { throw 'The installed taskbar launcher has no icon. Reinstall VS Code Demo Player.' }
+    try {
+        $window.Icon = [Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($icon.Handle, [Windows.Int32Rect]::Empty, [Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+    } finally { $icon.Dispose() }
+    $handle = [System.Windows.Interop.WindowInteropHelper]::new($window).EnsureHandle()
+    [PlayerTaskbarIdentity]::InitializeWindow($handle, $InstalledLauncherPath)
+}
 $status = $window.FindName('Status')
 $playPause = $window.FindName('PlayPause')
 $playIcon = $window.FindName('PlayIcon')
@@ -353,6 +364,9 @@ $window.Add_Closing({
         $eventArgs.Cancel = $true
         $script:exitRequested = $true
         Request-Stop
+    }
+    if (-not $eventArgs.Cancel -and $InstalledLauncherPath) {
+        [PlayerTaskbarIdentity]::ClearWindow([System.Windows.Interop.WindowInteropHelper]::new($window).Handle)
     }
 })
 $timer = [System.Windows.Threading.DispatcherTimer]::new()

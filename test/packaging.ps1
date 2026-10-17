@@ -94,6 +94,19 @@ try {
         $script:assertions++
     }
     Test-ControllerFailures
+    $installer = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'packaging\DemoPlayer.iss') -Raw
+    $appShortcuts = @($installer -split '\r?\n' | Where-Object { $_ -match '^Name:.*Filename: "\{app\}\\VSCodeDemoPlayer.exe"' })
+    Assert-Equal $appShortcuts.Count 2 'Start menu and optional desktop app shortcuts exist'
+    foreach ($shortcut in $appShortcuts) {
+        Assert-Equal ($shortcut -match 'AppUserModelID: "VSCodeDemoPlayer.Desktop"') $true 'Installed shortcut has stable app identity'
+    }
+    Assert-Equal ($installer -match 'FinishedLabel=.*launch it, right-click its taskbar icon, then choose Pin to taskbar') $true 'Finish page explains manual pinning'
+    Assert-Equal ($installer -match 'Flags: nowait postinstall skipifsilent') $true 'Optional finish launch and silent-install behavior retained'
+    $build = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'packaging\Build-Windows.ps1') -Raw
+    Assert-Equal ($build -match "'PlayerTaskbarIdentity.cs'") $true 'Taskbar runtime helper is allowlisted'
+    $startup = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'Start-InstalledPlayer.ps1') -Raw
+    Assert-Equal ($startup -match '\[PlayerTaskbarIdentity\]::InitializeProcess\(\)') $true 'Installed startup sets process identity'
+    Assert-Equal ($startup -match '-InstalledLauncherPath \(Join-Path \$PSScriptRoot ''VSCodeDemoPlayer.exe''\)') $true 'Installed startup supplies launcher rather than PowerShell'
     Assert-Equal (Resolve-PlayerNode $NodePath) (Resolve-Path -LiteralPath $NodePath).Path 'Explicit Node runtime'
     Assert-Fails { Resolve-PlayerNode (Join-Path $scratch 'missing.exe') } 'does not exist'
     $env:LOCALAPPDATA = Join-Path $scratch 'User App Data'

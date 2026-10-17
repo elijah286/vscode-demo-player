@@ -35,6 +35,9 @@ SetupLogging=yes
 DisableProgramGroupPage=yes
 InfoBeforeFile=install-notes.txt
 
+[Messages]
+FinishedLabel=Setup has finished installing [name] on your computer.%n%nTo pin Demo Player: launch it, right-click its taskbar icon, then choose Pin to taskbar.
+
 [Tasks]
 Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
@@ -42,9 +45,9 @@ Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\VS Code Demo Player"; Filename: "{app}\VSCodeDemoPlayer.exe"; WorkingDir: "{app}"
+Name: "{group}\VS Code Demo Player"; Filename: "{app}\VSCodeDemoPlayer.exe"; WorkingDir: "{app}"; AppUserModelID: "VSCodeDemoPlayer.Desktop"
 Name: "{group}\Uninstall VS Code Demo Player"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\VS Code Demo Player"; Filename: "{app}\VSCodeDemoPlayer.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\VS Code Demo Player"; Filename: "{app}\VSCodeDemoPlayer.exe"; WorkingDir: "{app}"; AppUserModelID: "VSCodeDemoPlayer.Desktop"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\VSCodeDemoPlayer.exe"; Description: "Launch VS Code Demo Player"; Flags: nowait postinstall skipifsilent

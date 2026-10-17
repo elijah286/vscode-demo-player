@@ -13,6 +13,21 @@
 4. Select the demo and press **Open** to prepare its isolated VS Code target.
    Once ready, press **Play** to start the first recorded exchange.
 
+To pin the installed app, launch **VS Code Demo Player**, right-click its
+taskbar icon, then choose **Pin to taskbar**. Windows does not allow setup to
+silently pin apps; setup only shows these instructions and retains its optional
+launch checkbox. Silent installs do not launch the app. The installed controller
+uses its own stable Windows app identity and relaunches **VSCodeDemoPlayer.exe**,
+not PowerShell, retaining the library and explicit runtime/editor paths.
+If an older version was pinned as PowerShell, unpin that old shortcut yourself
+and pin the newly launched Demo Player instead. Setup never changes existing pins.
+Source-run controllers keep their normal PowerShell identity.
+Taskbar relaunch uses the last successful installed launch's paths, stored in
+`%LOCALAPPDATA%\VSCodeDemoPlayer\taskbar-relaunch.json` to stay within Windows'
+taskbar command-length limit. Ordinary Start menu launches still use the default
+library (or their explicit arguments), not this profile. Missing or invalid
+profiles produce a startup error; launching normally recreates the profile.
+
 Requires x64 Windows 10/11 and compatible desktop VS Code 1.140 or later.
 Node.js is bundled: no npm, PowerShell commands, or repository checkout are
 needed to use the installed app. Install VS Code separately from
@@ -553,6 +568,29 @@ Startup errors are displayed and saved to
 resolution without opening a UI, run
 `powershell.exe -NoProfile -File .\Start-InstalledPlayer.ps1 -Check`
 from the installed directory.
+
+Taskbar identity acceptance without installing or changing any pins (coordinate
+the shared desktop slot first, then supply a disposable build payload):
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\taskbar-identity.ps1 -ApplicationRoot '<build-payload>' -EvidenceRoot .\.build\taskbar-identity
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test\taskbar-relaunch.ps1 -ApplicationRoot '<build-payload>' -EvidenceRoot .\.build\taskbar-relaunch
+```
+
+This opens and closes a synthetic WPF window, runs the production installed-only
+window initialization, and independently reads back the native process ID and
+window property store. It checks the launcher command and argument round-trip,
+display name, executable icon location, source-run isolation, and explicit
+failure handling. It also checks native property cleanup on close while
+cancelled replay closes retain their identity. It does not pin/unpin, create
+shortcuts, run an installer,
+launch VS Code, or access the real demo library. The relaunch harness runs the
+production launcher/startup with a controller fixture and redirected app data,
+checking long custom paths, saved-profile relaunch, ordinary defaults, and
+explicit missing/invalid-profile failures. Packaging checks additionally
+verify shortcut AppUserModelIDs, the finish-page text, optional/silent launch,
+and the runtime helper allowlist. Actual manual pin/relaunch and installed
+upgrade acceptance remain separate interactive release checks.
 
 Installer acceptance (on a machine with no existing installed Demo Player):
 
