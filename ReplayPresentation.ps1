@@ -11,7 +11,8 @@ Add-Type -AssemblyName System.Windows.Forms
   <Grid>
   <Border x:Name="OverlayFrame" Background="#FFFFFF" BorderBrush="#F5B82E"
           BorderThickness="4" CornerRadius="8" Padding="16,12" Cursor="SizeAll">
-    <Grid>
+    <Grid x:Name="OverlayContent">
+      <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="0"/></Grid.RowDefinitions>
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <Grid x:Name="PromptPanel">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -50,6 +51,23 @@ $timerPanel = $script:overlayWindow.FindName('TimerPanel')
 $promptText = $script:overlayWindow.FindName('PromptText')
 $promptProgress = $script:overlayWindow.FindName('PromptProgress')
 $elapsedText = $script:overlayWindow.FindName('ElapsedText')
+$overlayContent = $script:overlayWindow.FindName('OverlayContent')
+
+function Update-OverlayLayout {
+    $combined = $promptPanel.Visibility -eq 'Visible' -and $timerPanel.Visibility -eq 'Visible'
+    $width = if ($script:overlayWindow.ActualWidth -gt 0) { $script:overlayWindow.ActualWidth } else { $script:overlayWindow.Width }
+    $stacked = $combined -and $width -lt 640
+    $overlayContent.RowDefinitions[0].Height = if ($stacked) { [System.Windows.GridLength]::Auto } else { [System.Windows.GridLength]::new(1, 'Star') }
+    $overlayContent.RowDefinitions[1].Height = if ($stacked) { [System.Windows.GridLength]::new(1, 'Star') } else { [System.Windows.GridLength]::new(0) }
+    $overlayContent.ColumnDefinitions[1].Width = if ($stacked) { [System.Windows.GridLength]::new(0) } else { [System.Windows.GridLength]::Auto }
+    [System.Windows.Controls.Grid]::SetRow($promptPanel, $(if ($stacked) { 1 } else { 0 }))
+    [System.Windows.Controls.Grid]::SetColumn($timerPanel, $(if ($stacked) { 0 } else { 1 }))
+    $timerPanel.VerticalAlignment = if ($stacked) { 'Top' } else { 'Center' }
+    $timerPanel.HorizontalAlignment = if ($stacked) { 'Left' } else { 'Stretch' }
+    $timerPanel.Margin = if ($stacked) { [System.Windows.Thickness]::new(0,0,0,12) } elseif ($combined) { [System.Windows.Thickness]::new(24,0,0,0) } else { [System.Windows.Thickness]::new(0) }
+}
+
+$script:overlayWindow.Add_SizeChanged({ Update-OverlayLayout })
 $script:overlayResized = $false
 $script:overlayWindow.FindName('OverlayResize').Add_DragDelta({
     param($sender, $eventArgs)
@@ -70,14 +88,14 @@ function Update-ReplayOverlays {
     $promptText.Text = $overlay.promptSummary
     $promptProgress.Text = $script:lastView.progress
     $elapsedText.Text = $overlay.elapsed
-    $timerPanel.Margin = if ($promptVisible) { [System.Windows.Thickness]::new(24,0,0,0) } else { [System.Windows.Thickness]::new(0) }
     $desiredWidth = if ($promptVisible -and $timerVisible) { 820 } elseif ($promptVisible) { 720 } else { 238 }
-    $script:overlayWindow.MinWidth = if ($promptVisible -and $timerVisible) { 480 } elseif ($promptVisible) { 280 } else { 238 }
+    $script:overlayWindow.MinWidth = if ($promptVisible) { 280 } else { 238 }
     if (-not $script:overlayResized) {
         $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
         $script:overlayWindow.Height = if ($promptVisible) { 180 } else { 104 }
     }
     $script:overlayWindow.MinHeight = if ($promptVisible) { 132 } else { 104 }
+    Update-OverlayLayout
     if ($promptVisible -or $timerVisible) {
         $script:overlayWindow.Owner = $window
         if (-not $script:overlayWindow.IsVisible) { $script:overlayWindow.Show() }

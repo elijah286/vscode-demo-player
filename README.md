@@ -369,8 +369,17 @@ Click the **Overlay frame** swatch to use the native Windows color picker. Overl
 choices and color survive mode switches within that controller session; they
 are not saved as global settings. Drag the overlay's bottom-right grip to resize
 its width and height. Text wraps to the available width; a vertical scrollbar
-keeps text accessible in a short window. Your chosen dimensions survive prompt
+keeps text accessible in a short window. With both options enabled, widths below
+640 WPF layout units place the timer at the top and give the summary the full
+width and remaining height below it. Wider windows keep the side-by-side layout.
+Your chosen dimensions survive prompt
 updates, checkbox changes, Stop, and mode switches within that controller session.
+
+Run the responsive layout regression without opening interactive windows:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layout.ps1
+```
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
 original prompt. Under **Manage Demos > Edit prompt summaries...**, select an
