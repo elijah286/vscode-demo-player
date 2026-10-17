@@ -181,15 +181,16 @@ try {
     $play = Find-Element $window 'Id' 'PlayPause'
     if ($play.Current.IsEnabled) { throw 'Play must be disabled without a selected demo.' }
     Save-WindowImage $window 'controller-empty.png'
-    Invoke-Button $window 'ManageDemos'
-    $dialog = Wait-Until { Get-AppWindow 'Demo Library' } 'custom demo library'
+    Invoke-Button $window 'ChooseDemo'
+    $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'unified interaction picker'
+    ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     $list = Find-Element $dialog 'Id' 'DemoList'
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     if ($items.Count -ne 1) { throw ('Expected one persisted demo, got ' + $items.Count) }
     ([System.Windows.Automation.SelectionItemPattern]$items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Save-WindowImage $dialog 'library.png'
-    Invoke-Button $dialog 'CaptureConversation'
-    $capture = Wait-Until { Get-AppWindow 'Capture Conversation' } 'capture dialog'
+    ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'AgentConversationsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    $capture = $dialog
     $sessionList = Find-Element $capture 'Id' 'CaptureSessions'
     Wait-Until {
         ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 -and
@@ -223,6 +224,7 @@ try {
     if (-not $agentItem -or -not $agentItem.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) { throw 'SDK agent filter item is unavailable.' }
     ([System.Windows.Automation.SelectionItemPattern]$agentItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 1 } 'agent filter selects SDK conversation' | Out-Null
+    ([System.Windows.Automation.ExpandCollapsePattern](Find-Element $capture 'Id' 'MoreFilters').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
     $minimum = Find-Element $capture 'Id' 'CaptureMinPrompts'
     ([System.Windows.Automation.ValuePattern]$minimum.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('3')
     Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 0 } 'prompt threshold filters numerically' | Out-Null
@@ -290,6 +292,7 @@ try {
     ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Wait-Until { ([System.Windows.Automation.ValuePattern]$preview.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value -match '"inlineReference"' } 'raw saved payload remains inspectable' | Out-Null
     ([System.Windows.Automation.TogglePattern]$rawPayload.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    ([System.Windows.Automation.ExpandCollapsePattern](Find-Element $capture 'Name' 'Selection name (optional)').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
     $title = Find-Element $capture 'Id' 'CaptureTitle'
     ([System.Windows.Automation.ValuePattern]$title.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('Captured through UI ' + [char]0x03BB)
     $reviewed = Find-Element $capture 'Id' 'CaptureReviewed'
@@ -308,17 +311,22 @@ try {
     Save-WindowImage $capture 'capture.png'
     if ((Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -ne '2 of 3 exchanges selected') { throw 'Preview controls or focus changes altered the selected exchanges.' }
     Invoke-Button $capture 'SaveDemo'
-    Wait-Until { -not (Get-AppWindow 'Capture Conversation') } 'capture dialog saves and closes' | Out-Null
+    Wait-Until { -not (Get-AppWindow 'Find interaction') } 'selection returns to controller' | Out-Null
     $entries = @(Invoke-DemoLibrary @{ command = 'list' })
     if ($entries.Count -ne 2) { throw 'UI capture did not persist the second demo.' }
     if (-not ($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB))) { throw 'The PowerShell bridge did not preserve the Unicode capture title.' }
     if (($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB)).count -ne 2) { throw 'Capture did not save both default-selected exchanges.' }
     if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Capture changed the original saved conversation.' }
+    Invoke-Button $window 'ChooseDemo'
+    $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'reopen unified picker'
+    ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    $list = Find-Element $dialog 'Id' 'DemoList'
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     $capturedItem = @($items | Where-Object { $_.Current.Name -like '*Captured through UI*' })[0]
     if (-not $capturedItem) { throw 'Captured demo was not added to the library dialog.' }
     ([System.Windows.Automation.SelectionItemPattern]$capturedItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
-    $renameTitle = Find-Element $dialog 'Id' 'Title'
+    ([System.Windows.Automation.ExpandCollapsePattern](Find-Element $dialog 'Id' 'SavedActions').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+    $renameTitle = Find-Element $dialog 'Id' 'SavedTitle'
     ([System.Windows.Automation.ValuePattern]$renameTitle.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('Renamed UI demo')
     Invoke-Button $dialog 'Rename'
     Wait-Until { @(Invoke-DemoLibrary @{ command = 'list' } | Where-Object title -eq 'Renamed UI demo').Count -eq 1 } 'rename persists' | Out-Null
@@ -443,8 +451,9 @@ try {
     $launch = Start-TestPlayer
     $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'reopened standalone controller'
-    Invoke-Button $window 'ManageDemos'
-    $dialog = Wait-Until { Get-AppWindow 'Demo Library' } 'persisted library after restart'
+    Invoke-Button $window 'ChooseDemo'
+    $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'persisted selections after restart'
+    ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     $list = Find-Element $dialog 'Id' 'DemoList'
     if ($list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 2) { throw 'Saved library did not survive application restart.' }
     ([System.Windows.Automation.WindowPattern]$dialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
@@ -470,7 +479,7 @@ try {
         $authoringProcess = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
         if ($authoringProcess) { $authoringProcess.CloseMainWindow() | Out-Null }
     }
-    foreach ($title in @('Capture Conversation', 'Demo Library')) {
+    foreach ($title in @('Find interaction')) {
         $child = Get-AppWindow $title
         if ($child) { ([System.Windows.Automation.WindowPattern]$child.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close() }
     }

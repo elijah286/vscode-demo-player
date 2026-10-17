@@ -17,6 +17,7 @@ async function run() {
         const page = browser.contexts()[0].pages().find(page => page.url().includes('workbench'));
         assert.ok(page, 'Isolated authoring workbench is available');
         await page.locator('.quick-input-list .monaco-list-row').filter({ hasText: 'Exchange 1' }).first().click();
+        await page.keyboard.press('Enter');
         await page.getByRole('button', { name: 'Generate summary', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
         assert.ok(vscode.workspace.textDocuments.some(document => document.getText() === prompt), 'The complete original query is available for review before consent');
         await page.getByRole('button', { name: 'Generate summary', exact: true }).click();

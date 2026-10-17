@@ -135,7 +135,7 @@ test('AI request contains only the query and validates exact output limits and m
 });
 
 function authoringAPI(options = {}) {
-    const calls = { errors: [], saved: [], requests: 0, consent: 0 };
+    const calls = { errors: [], saved: [], requests: 0, consent: 0, reviews: 0 };
     class CancellationTokenSource {
         constructor() {
             this.listeners = new Set();
@@ -170,7 +170,7 @@ function authoringAPI(options = {}) {
         workspace: { openTextDocument: async document => document },
         lm: { selectChatModels: async () => options.noModels ? [] : [model] },
         window: {
-            showQuickPick: async items => items[0],
+            showQuickPick: async (items, picker) => picker.canPickMany ? (options.allPrompts ? items : [items[0]]) : items[0],
             showTextDocument: async () => {},
             showWarningMessage: async () => { calls.consent++; return options.decline ? undefined : 'Generate summary'; },
             withProgress: async (_options, callback) => {
@@ -178,8 +178,9 @@ function authoringAPI(options = {}) {
                 return callback({}, options.cancelSource.token);
             },
             showInputBox: async () => {
+                calls.reviews++;
                 if (options.beforeReview) await options.beforeReview();
-                return options.cancelReview ? undefined : 'Reviewed shorter query';
+                return options.cancelReview || options.cancelReviewAt === calls.reviews ? undefined : 'Reviewed shorter query';
             },
             showErrorMessage: async message => calls.errors.push(message),
             showInformationMessage: async message => calls.saved.push(message)
@@ -220,6 +221,33 @@ test('AI authoring refuses a concurrent summary edit instead of overwriting it',
     await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
     assert.match(calls.errors[0], /changed since/);
     assert.equal((await library.readEntry(root, added.id)).recording.promptSummaries[0], 'Other editor');
+});
+
+test('AI authoring summarizes multiple selected prompts with individual consent and review', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await fixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Bulk authoring', inspection.sha256));
+    const before = (await library.readEntry(root, added.id)).recording.turns;
+    const { api, calls } = authoringAPI({ allPrompts: true });
+    await activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run();
+    assert.equal(calls.requests, 2);
+    assert.equal(calls.consent, 2);
+    assert.equal(calls.saved.length, 2);
+    assert.equal(calls.errors.length, 0);
+    const after = await library.readEntry(root, added.id);
+    assert.deepEqual(after.recording.promptSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.turns, before);
+});
+
+test('canceling a later batch suggestion preserves only earlier reviewed summaries', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await fixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Canceled batch', inspection.sha256));
+    const { api, calls } = authoringAPI({ allPrompts: true, cancelReviewAt: 2 });
+    await activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run();
+    assert.equal(calls.saved.length, 1);
+    assert.equal(calls.errors.length, 0);
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, ['Reviewed shorter query', null]);
 });
 
 test('AI authoring enforces the 90-second deadline without saving a stalled request', async context => {

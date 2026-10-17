@@ -34,12 +34,16 @@ $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $Applicatio
 $xaml = $ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.StringConstantExpressionAst] -and
-    $node.Value -like '<Window*Title="Capture Conversation"*'
+    $node.Value -like '<Window*Title="Find interaction"*'
 }, $true) | Select-Object -First 1
 if (-not $xaml) { throw 'Capture dialog XAML was not found.' }
 $dialog = New-DemoDialog $xaml.Value $null
 try {
     $grid = $dialog.FindName('Sessions')
+    Assert-Equal $dialog.FindName('PickerTabs').SelectedIndex 0 'Agent conversations are the default entry'
+    Assert-Equal $dialog.FindName('PickerTabs').Items.Count 2 'Saved selections share the same picker'
+    Assert-Equal $dialog.FindName('Save').Content 'Use selected exchanges' 'Primary action describes the user goal'
+    Assert-Equal $dialog.FindName('SavedActions').IsExpanded $false 'Library management is secondary'
     Assert-Equal $grid.GetType().Name 'DataGrid' 'History uses a table'
     Assert-Equal $grid.Columns.Count 9 'All metadata columns exist'
     Assert-Equal $grid.IsReadOnly $true 'History rows cannot edit source metadata'
@@ -126,7 +130,7 @@ try {
     $reviewed.IsChecked = $true
     Assert-Equal $save.IsEnabled $true 'Valid reviewed available selection enables Save'
     $title.Text = ' '
-    Assert-Equal $save.IsEnabled $false 'Blank title disables Save'
+    Assert-Equal $save.IsEnabled $true 'Blank title uses an automatic name'
     $title.Text = 'Valid title'
     Assert-Equal $save.IsEnabled $true 'Corrected title enables Save'
     $reviewed.IsChecked = $false
@@ -169,6 +173,43 @@ try {
     & $previewTick
     $reviewed.IsChecked = $true
     Assert-Equal $save.IsEnabled $true 'Exactly 100 available reviewed exchanges can be saved'
+    $title.Text = ''
+    & $updateSaveState
+    Assert-Equal $save.IsEnabled $true 'Naming is optional'
+    Assert-Equal $dialog.FindName('SelectionAiSummaries').IsEnabled $true 'AI summaries are available before leaving selection'
+    Assert-Equal $dialog.FindName('SelectionSummaries').IsEnabled $true 'Manual review is available before leaving selection'
+    $prepareSelection = Get-CaptureBlock 'prepareSelection'
+    $dialog.Tag.Inspection | Add-Member -NotePropertyName sha256 -NotePropertyValue 'reviewed-source-hash'
+    $script:preparedRequests = [System.Collections.Generic.List[object]]::new()
+    $script:sourceHash = 'reviewed-source-hash'
+    $script:savedSelection = [pscustomobject]@{ id = 'synthetic-selection'; recording = [pscustomobject]@{ promptSummaries = @('Original summary') } }
+    function Invoke-DemoLibrary {
+        param($Request, $Owner)
+        $script:preparedRequests.Add($Request)
+        switch ($Request.command) {
+            'capture' { return $script:savedSelection }
+            'read' { return $script:savedSelection }
+            'inspect' { return [pscustomobject]@{ sha256 = $script:sourceHash } }
+            default { throw ('Unexpected test request: ' + $Request.command) }
+        }
+    }
+    $result = & $prepareSelection
+    Assert-Equal $result.id 'synthetic-selection' 'Preparing creates a playback selection'
+    Assert-Equal $script:preparedRequests[0].title 'Boundary conversation' 'Blank name preserves automatic conversation title'
+    Assert-Equal ($script:preparedRequests[0].indices -join ',') ((0..99) -join ',') 'Exactly the selected exchanges are saved in source order'
+    $script:savedSelection.recording.promptSummaries[0] = 'Reviewed updated summary'
+    $result = & $prepareSelection
+    Assert-Equal @($script:preparedRequests | Where-Object command -eq 'capture').Count 1 'Summary preparation and playback reuse one saved copy'
+    Assert-Equal $result.recording.promptSummaries[0] 'Reviewed updated summary' 'Reuse reads latest reviewed summaries without reselection'
+    $script:sourceHash = 'changed-source-hash'
+    $failure = $null
+    try { & $prepareSelection | Out-Null } catch { $failure = $_.Exception.Message }
+    Assert-Equal ($failure -match 'source changed') $true 'Reusing a selection still refuses changed source bytes'
+    $script:sourceHash = 'reviewed-source-hash'
+    $reviewed.IsChecked = $false
+    $failure = $null
+    try { & $prepareSelection | Out-Null } catch { $failure = $_.Exception.Message }
+    Assert-Equal ($failure -match 'Review the selected content') $true 'Preparing summaries cannot bypass review'
     $dialog.Tag.Inspection = $null
     & $updateSaveState
     Assert-Equal $save.IsEnabled $false 'Save requires a loaded inspection'
@@ -193,4 +234,85 @@ foreach ($raw in @($false, $true)) {
 }
 Assert-Equal $large.Turn.content.Length 1000000 'Preview does not modify captured content'
 Assert-Equal (Get-DemoSelectionPreview @() $false) '' 'Empty selection clears the preview'
+
+# Exercise both sets of production handlers in their actual nested scopes, without showing a window.
+$libraryFunction = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-InteractionPickerWindow'
+}, $true)
+$statements = $libraryFunction.Body.EndBlock.Statements
+$initializeSaved = ($statements[0..($statements.Count - 3)] | ForEach-Object { $_.Extent.Text }) -join "`n"
+${function:Show-InteractionPickerWindow} = [scriptblock]::Create("param(`$dialog)`n" + $initializeSaved + "`n& `$script:exercisePicker")
+$script:pickerEntries = @()
+$script:pickerCaptures = 0
+$script:pickerAiId = $null
+$script:pickerInspection = [pscustomobject]@{
+    title = 'Synthetic agent conversation'; sha256 = 'synthetic-hash'
+    turns = @([pscustomobject]@{ index = 0; prompt = 'Original long prompt'; content = 'Original prompt and answer' })
+}
+function Invoke-DemoLibrary {
+    param($Request, $Owner)
+    switch ($Request.command) {
+        'list' { return $script:pickerEntries }
+        'inspect' { return $script:pickerInspection }
+        'capture' {
+            $script:pickerCaptures++
+            $script:pickerEntries = @([pscustomobject]@{ id = 'picker-entry'; title = $Request.title; count = 1; createdAt = '2026-10-17'; source = 'Synthetic agent'; preview = 'Original long prompt'; notice = 'Synthetic only' })
+            return $script:pickerEntries[0]
+        }
+        'read' { return [pscustomobject]@{ id = 'picker-entry'; recording = [pscustomobject]@{ promptSummaries = @('Latest reviewed summary') } } }
+        default { throw ('Unexpected picker request: ' + $Request.command) }
+    }
+}
+function Show-DemoError($Owner, $Failure) { throw $Failure }
+function Show-DemoSummaryDialog($Owner, $Id) {
+    Assert-Equal $Id 'picker-entry' 'Inline summary editor receives the prepared selection'
+    return $true
+}
+function Show-DemoSummaryAuthoringNotice($Owner, $Id) { $script:pickerAiId = $Id }
+$script:exercisePicker = {
+    try {
+        Assert-Equal $dialog.FindName('PickerTabs').SelectedIndex 0 'Live picker starts with agent history'
+        $dialog.FindName('Source').Text = 'synthetic.jsonl'
+        $dialog.FindName('Load').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $dialog.FindName('Turns').SelectedItems.Count 1 'Live load selects available exchanges'
+        $previewTimer.Stop()
+        & $previewTick
+        $dialog.FindName('Reviewed').IsChecked = $true
+        Assert-Equal $dialog.FindName('SelectionSummaries').IsEnabled $true 'Live review enables inline summaries'
+        $dialog.FindName('SelectionSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $script:pickerCaptures 1 'Inline summary preparation saves once'
+        Assert-Equal $dialog.FindName('Demos').Items.Count 1 'Prepared selection appears in the other tab immediately'
+        $dialog.FindName('SelectionAiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $script:pickerAiId 'picker-entry' 'Inline AI authoring targets the same selection'
+        Assert-Equal $script:pickerCaptures 1 'AI preparation reuses the saved selection'
+        $result = & $prepareSelection
+        Assert-Equal $result.recording.promptSummaries[0] 'Latest reviewed summary' 'Playback preparation reloads reviewed AI results'
+        $dialog.FindName('PickerTabs').SelectedIndex = 1
+        $dialog.FindName('Demos').SelectedIndex = 0
+        Assert-Equal $dialog.FindName('SavedTitle').Text 'Synthetic agent conversation' 'Saved selection has an automatic title'
+        Assert-Equal $dialog.FindName('Title').Text 'Synthetic agent conversation' 'Saved-tab selection does not overwrite the conversation draft'
+        Assert-Equal $dialog.FindName('Select').IsEnabled $true 'Saved selection can be used without a management step'
+        $dialog.FindName('SavedSearch').Text = 'No matching selection'
+        Assert-Equal $dialog.FindName('Demos').Items.Count 0 'Saved search uses its own list'
+        Assert-Equal $dialog.FindName('Select').IsEnabled $false 'No-match search disables the saved selection action'
+        $dialog.FindName('Source').Text = 'different.jsonl'
+        Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Changing source disables playback preparation'
+        Assert-Equal $dialog.FindName('SelectionAiSummaries').IsEnabled $false 'Changing source also disables AI preparation'
+    } finally { $dialog.Close() }
+}
+Show-InteractionPicker $null | Out-Null
+$controllerAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ApplicationRoot 'Show-ReplayController.ps1'), [ref]$null, [ref]$null)
+$controllerXaml = $controllerAst.Find({
+    param($node)
+    $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -like '<Window*'
+}, $true)
+$controller = New-DemoDialog $controllerXaml.Value $null
+try {
+    Assert-Equal $controller.FindName('ChooseDemo').Content 'Find interaction...' 'Controller has one task-focused entry point'
+    Assert-Equal ($null -eq $controller.FindName('Capture')) $true 'Controller no longer exposes Capture'
+    Assert-Equal ($null -eq $controller.FindName('Library')) $true 'Controller no longer exposes Manage Demos'
+    Assert-Equal $controller.FindName('PrimaryLabel').Text 'Open' 'Preparing a target stays separate from playback'
+    Assert-Equal $controller.FindName('PlayPause').IsEnabled $false 'Playback requires a selected interaction'
+} finally { $controller.Close() }
 Write-Output ('HISTORY FILTER/SELECTION/XAML CHECKS PASSED: ' + $count + ' assertions; no desktop window was displayed.')
