@@ -203,7 +203,7 @@ try {
     $sdkRow = $sessionList.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $rowCondition)
     ([System.Windows.Automation.SelectionItemPattern]$sdkRow.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Invoke-Button $capture 'Load'
-    $turnList = Find-Element $capture 'Id' 'CaptureTurns'
+    $turnList = Wait-Until { Find-Element $capture 'Id' 'CaptureTurns' } 'SDK exchange list after loading'
     Wait-Until { $turnList.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 2 } 'SDK conversation loads two exchanges' | Out-Null
     $rawPayload = Find-Element $capture 'Id' 'CaptureRawPayload'
     $sdkTurn = $turnList.FindFirst([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
@@ -247,7 +247,7 @@ try {
     [IO.File]::WriteAllText($largeSource, ($largeSnapshot | ConvertTo-Json -Depth 15 -Compress) + "`n", $utf8)
     ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($largeSource)
     Invoke-Button $capture 'Load'
-    $turnList = Find-Element $capture 'Id' 'CaptureTurns'
+    $turnList = Wait-Until { Find-Element $capture 'Id' 'CaptureTurns' } 'large exchange list after loading'
     $selection = [System.Windows.Automation.SelectionPattern]$turnList.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '100 of 100 exchanges selected' } 'all 100 exchanges selected by default' 35 | Out-Null
     if ($selection.Current.GetSelection().Count -ne 100) { throw 'Default selection must include every exchange.' }
