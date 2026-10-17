@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('New', 'Check', 'List', 'Ready', 'RegisterCaptain')]
     [string]$Action,
-    [string]$RepositoryRoot = $PSScriptRoot,
+    [string]$RepositoryRoot,
     [string]$TaskId,
     [string]$Owner,
     [string]$Scope,
@@ -13,6 +13,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $RepositoryRoot) { $RepositoryRoot = $PSScriptRoot }
 
 function Invoke-WorktreeGit([string[]]$GitArguments, [string]$Directory = $script:repository) {
     $preference = $ErrorActionPreference

@@ -51,8 +51,8 @@ try {
     foreach ($id in @('alpha', 'beta')) {
         $output = Join-Path $scratch ($id + '.json')
         $process = Start-Process powershell.exe -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $manager + '"'),
-            '-RepositoryRoot', ('"' + $repo + '"'), '-Action', 'New', '-TaskId', $id,
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + (Join-Path $repo 'Manage-AgentWorktree.ps1') + '"'),
+            '-Action', 'New', '-TaskId', $id,
             '-Owner', ('fixture-' + $id), '-Scope', 'parallel-fixture',
             '-WorktreePath', ('"' + (Join-Path $scratch ($id + ' worktree')) + '"')
         ) -RedirectStandardOutput $output -RedirectStandardError (Join-Path $scratch ($id + '.error')) -PassThru
