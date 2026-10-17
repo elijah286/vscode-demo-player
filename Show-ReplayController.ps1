@@ -46,7 +46,7 @@ if (-not $script:standalone) {
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
     <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
-    <Button x:Name="ChooseDemo" Content="Select a demo..." HorizontalContentAlignment="Left" Padding="8,0"
+    <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
@@ -72,8 +72,7 @@ if (-not $script:standalone) {
     </Grid>
     <Grid Grid.Row="4">
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-      <Button x:Name="Capture" Content="Capture Conversation" AutomationProperties.AutomationId="CaptureConversation"/>
-      <Button x:Name="Library" Grid.Column="2" Content="Manage Demos" AutomationProperties.AutomationId="ManageDemos"/>
+      <TextBlock Grid.ColumnSpan="3" Text="Find an interaction, then Open and Play." VerticalAlignment="Center" Foreground="#555555"/>
     </Grid>
         <CheckBox x:Name="ShowPrompt" Grid.Row="6" Content="Show prompt summary" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
@@ -109,8 +108,6 @@ $primaryLabel = $window.FindName('PrimaryLabel')
 $nextStep = $window.FindName('NextStep')
 $stop = $window.FindName('Stop')
 $chooseDemo = $window.FindName('ChooseDemo')
-$capture = $window.FindName('Capture')
-$library = $window.FindName('Library')
 $checkUpdates = $window.FindName('CheckUpdates')
 $updateNotice = $window.FindName('UpdateNotice')
 $showPrompt = $window.FindName('ShowPrompt')
@@ -146,9 +143,9 @@ $windowMode.SelectedIndex = 0
 
 function Set-IdleView {
     $script:lastView = $script:selectedDemo.presentation
-    $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Select or capture a conversation' }
+    $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Find an agent interaction to replay' }
     $status.ToolTip = $status.Text
-    $chooseDemo.Content = if ($script:selectedDemo) { $script:selectedDemo.title } else { 'Select a demo...' }
+    $chooseDemo.Content = if ($script:selectedDemo) { $script:selectedDemo.title } else { 'Find interaction...' }
     $chooseDemo.ToolTip = $chooseDemo.Content
     $playPause.IsEnabled = [bool]$script:selectedDemo
     $playPause.ToolTip = 'Open'
@@ -158,8 +155,6 @@ function Set-IdleView {
     $nextStep.IsEnabled = $false
     $stop.IsEnabled = $false
     $chooseDemo.IsEnabled = $true
-    $capture.IsEnabled = $true
-    $library.IsEnabled = $true
     $windowMode.IsEnabled = $true
     Update-ReplayOverlays
 }
@@ -202,14 +197,12 @@ function Start-DemoReplay {
     $nextStep.IsEnabled = $false
     $stop.IsEnabled = $true
     $chooseDemo.IsEnabled = $false
-    $capture.IsEnabled = $false
-    $library.IsEnabled = $false
     $windowMode.IsEnabled = $false
 }
 
 $openLibrary = {
     try {
-        $selected = Show-DemoLibraryDialog $window
+        $selected = Show-InteractionPicker $window
         if ($selected) { $script:selectedDemo = $selected }
         $entries = @(Invoke-DemoLibrary @{ command = 'list' })
         if ($script:selectedDemo) { $script:selectedDemo = $entries | Where-Object id -eq $script:selectedDemo.id | Select-Object -First 1 }
@@ -218,13 +211,6 @@ $openLibrary = {
     } catch { Show-DemoError $window $_ }
 }
 $chooseDemo.Add_Click($openLibrary)
-$library.Add_Click($openLibrary)
-$capture.Add_Click({
-    try {
-        $selected = Show-CaptureDialog $window
-        if ($selected) { $script:selectedDemo = $selected; $script:lastFault = $null; Set-IdleView }
-    } catch { Show-DemoError $window $_ }
-})
 
 function Show-PairedReplayWindow {
     $process = [System.Diagnostics.Process]::GetProcessById($ReplayProcessId)
@@ -484,8 +470,6 @@ if ($script:standalone) { Set-IdleView; $window.Show() }
 else {
     $chooseDemo.IsEnabled = $false
     $chooseDemo.Content = 'Selected transcript'
-    $capture.IsEnabled = $false
-    $library.IsEnabled = $false
 }
 $timer.Start()
 $application.Run() | Out-Null

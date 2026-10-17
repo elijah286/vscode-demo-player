@@ -8,9 +8,11 @@
 1. Download and run **VSCodeDemoPlayer-Setup.exe**. This is a per-user install;
    administrator access is not required.
 2. Open **VS Code Demo Player** from the Windows Start menu.
-3. Use **Capture Conversation** for a local saved chat, or **Manage Demos >
-   Import Recording** for an exported `.demo-recording.json` package.
-4. Select the demo and press **Open** to prepare its isolated VS Code target.
+3. Click **Find interaction...**, find a local agent conversation, load it,
+   select exchanges, and review the preview. Optionally summarize long prompts,
+   then click **Use selected exchanges**. Previous selections are in the same
+   picker's **Saved selections** tab; import is under **Selection actions**.
+4. Press **Open** to prepare its isolated VS Code target.
    Once ready, press **Play** to start the first recorded exchange.
 
 Requires x64 Windows 10/11 and compatible desktop VS Code 1.140 or later.
@@ -286,9 +288,10 @@ remain visible for inspection; the status reports how many were excluded and
 the first reason. Use **Select all** or
 **Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
 to adjust the selection. **Select available** excludes genuinely unreadable
-exchanges, including after using Select all. Save Demo stays disabled for empty,
+exchanges, including after using Select all. Use selected exchanges stays disabled for empty,
 unavailable, or oversized selections, until the current preview is ready and
-reviewed and the title is nonblank. A demo can contain up to 100 exchanges; larger
+reviewed. The conversation title is used automatically; a custom selection name
+is optional. A selection can contain up to 100 exchanges; larger
 selections show an explicit warning rather than being silently reduced.
 Review the readable prompt/response preview. Exchange rows use short labels and
 recycled containers; preview updates are coalesced over 75 ms and limited to
@@ -297,8 +300,11 @@ Enable **Show full saved payload** to preview original tool data and metadata.
 An explicit notice identifies previews that exceed the display budget; select
 fewer exchanges or inspect the source file to review oversized content.
 Capture always preserves the full selected content, not the shortened preview.
-Give the demo a title, acknowledge the privacy/asset
-notice, and Save Demo. UI capture follows source order; the underlying capture
+Acknowledge the privacy/asset notice, optionally use **Summarize prompts with AI...**
+or **Review / edit summaries...**, then **Use selected exchanges**.
+Selections are saved locally for reuse without a separate capture/save step.
+Preparing summaries and then using the same selection reuses its saved copy.
+UI capture follows source order; the underlying capture
 API also accepts explicitly ordered distinct indices. Partial or unsupported
 native exchanges are marked unavailable with a reason; nothing is silently dropped.
 An absent/incomplete request error identifies missing saved fields (request
@@ -336,9 +342,13 @@ two-turn recording with large XML edit/event payloads, checks that each activity
 starts collapsed and expands on demand, and exercises retained history and
 Start Over. It does not use the demo library or change recorded target files.
 
-The selected-demo button and **Manage Demos** open a custom searchable library,
-not a system dropdown. Select, rename, delete, import, or export a recording.
-Delete requires confirmation and affects only that library copy. Exports never
+The controller has one selection entry point: **Find interaction...** (or the
+current interaction title). It opens a single picker, starting with searchable
+agent history and a side-by-side exchange list/readable preview.
+The **Saved selections** tab searches previously prepared selections.
+Rename, import, export, and remove live in its collapsed **Selection actions**
+section, not in competing controller workflows. Removal requires confirmation
+and affects only that library copy. Exports never
 overwrite an existing destination, even after the standard save dialog's
 overwrite confirmation; choose a new filename.
 
@@ -373,13 +383,14 @@ keeps text accessible in a short window. Your chosen dimensions survive prompt
 updates, checkbox changes, Stop, and mode switches within that controller session.
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
-original prompt. Under **Manage Demos > Edit prompt summaries...**, select an
+original prompt. In the interaction picker, use **Review / edit summaries...**, select an
 exchange and write or edit its overlay text (one line, up to 200 characters).
 Leave an entry blank to use its original excerpt, then **Save summaries** and
-**Select Demo**. Local playlists can also supply one reviewed `promptSummaries`
+**Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn.
 
-**Manage Demos > Summarize prompts with AI...** opens a separate, isolated VS Code
+**Summarize prompts with AI...**, available beside the selection action and
+on the **Saved selections** tab, opens a separate, isolated VS Code
 authoring window, never the playback window or your normal editor profile.
 Install/enable an AI Language Model provider such as GitHub Copilot and sign in
 in that window. Copilot uses your existing account/allowance: a separate API
@@ -388,15 +399,17 @@ still apply. The isolated profile does not inherit your normal VS Code sign-in
 or installed extensions. If no model is available, an explicit error explains
 setup; manual summaries still work.
 
-Choose an exchange, review its original prompt, consent to sending that prompt
+Choose one or more exchanges (including a batch of long prompts), review each original prompt, consent to sending that prompt
 to the provider, and select a model. Only the selected query and summarization
 instructions are sent, not the recorded answer, tools, or other exchanges.
 Generation is cancellable and limited to 90 seconds. Over-context input and
 invalid/overlong output are reported, not silently truncated. Review/edit the
-suggestion before saving; canceling leaves the saved summary unchanged.
+suggestion before saving; canceling leaves that summary unchanged and stops
+the remaining batch. Previously reviewed and saved summaries remain saved.
 Use **Demo Player: Summarize Prompt** in that window's Command Palette for
-another exchange. Back in Manage Demos, click **Refresh** and **Select Demo** to
-load the saved summaries before opening playback. Close the authoring window
+another exchange. Return to the picker and click **Use selected exchanges**
+or **Use saved selection**; either reads the latest saved summaries without
+a refresh/reselection ritual. Close the authoring window
 when finished. Its private temporary profile remains under the Windows temp
 directory (`historical-summary-authoring-*`); it is not shipped or committed.
 

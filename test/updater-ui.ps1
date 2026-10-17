@@ -152,8 +152,9 @@ try {
     Close-Window $dialog
     if ($InstallUpdate) {
         if (-not $available) { throw 'A newer published version is required for the real update test.' }
-        Click-Control $window 'ManageDemos'
-        $libraryWindow = Wait-Until { Get-Window 'Demo Library' } 'demo library'
+        Click-Control $window 'ChooseDemo'
+        $libraryWindow = Wait-Until { Get-Window 'Find interaction' } 'interaction picker'
+        ([System.Windows.Automation.SelectionItemPattern](Find-Control $libraryWindow 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
         $list = Find-Control $libraryWindow 'DemoList'
         $items = $list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
         ([Windows.Automation.SelectionItemPattern]$items[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)).Select()
@@ -185,7 +186,7 @@ try {
 } finally {
     Close-Window (Get-Window 'Install Demo Player update?')
     Close-Window (Get-Window 'Demo Player Updates')
-    Close-Window (Get-Window 'Demo Library')
+    Close-Window (Get-Window 'Find interaction')
     Close-Window (Get-Window 'Demo Player')
     $remaining = Get-Process -Id $script:controllerId -ErrorAction SilentlyContinue
     if ($remaining -and -not $remaining.WaitForExit(20000)) { Write-Warning 'The updater test app did not finish closing normally.' }

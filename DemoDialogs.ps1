@@ -156,15 +156,17 @@ function Get-DemoSelectionPreview([object[]]$Items, [bool]$RawPayload) {
     return $text.ToString()
 }
 
-function Show-CaptureDialog($Owner) {
+function Show-InteractionPicker($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
- xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Capture Conversation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Find interaction"
  Width="1180" Height="820" MinWidth="850" MinHeight="620" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
- <Grid Margin="16">
+ <TabControl x:Name="PickerTabs" Margin="12" SelectedIndex="0">
+ <TabItem Header="Agent conversations" AutomationProperties.AutomationId="AgentConversationsTab">
+ <Grid Margin="8">
   <Grid.RowDefinitions>
-   <RowDefinition Height="Auto"/><RowDefinition Height="170"/><RowDefinition Height="Auto"/>
-   <RowDefinition Height="120"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/><RowDefinition Height="2*" MinHeight="90"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="3*" MinHeight="120"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
   <StackPanel Margin="0,0,0,8">
   <DockPanel>
@@ -182,7 +184,8 @@ function Show-CaptureDialog($Owner) {
    <ComboBox x:Name="AgentFilter" Width="150" DisplayMemberPath="Label" Margin="0,0,10,0" AutomationProperties.AutomationId="CaptureAgentFilter"/>
    <Button x:Name="ClearFilters" Content="Clear filters" Padding="8,2" AutomationProperties.AutomationId="CaptureClearFilters"/>
   </WrapPanel>
-  <WrapPanel Margin="0,7,0,0">
+  <Expander x:Name="MoreFilters" Header="More filters: activity, source, status, prompt count and duration" Margin="0,7,0,0" AutomationProperties.AutomationId="MoreFilters">
+  <WrapPanel Margin="0,5,0,0">
    <TextBlock Text="Activity from" VerticalAlignment="Center" Margin="0,0,5,0"/>
    <DatePicker x:Name="DateFrom" Width="120" Margin="0,0,7,0" AutomationProperties.AutomationId="CaptureDateFrom"/>
    <TextBlock Text="to" VerticalAlignment="Center" Margin="0,0,5,0"/>
@@ -194,6 +197,7 @@ function Show-CaptureDialog($Owner) {
    <TextBlock Text="Min duration (s)" VerticalAlignment="Center" Margin="0,0,5,0"/>
    <TextBox x:Name="MinDuration" Width="60" AutomationProperties.AutomationId="CaptureMinDuration"/>
   </WrapPanel>
+  </Expander>
   <DockPanel Margin="0,5,0,0">
    <Button x:Name="Details" Content="Discovery details" DockPanel.Dock="Right" Padding="6,1"/>
    <TextBlock x:Name="HistoryCount" Text="Click column headers to sort. Duration is recorded activity span, not working time." TextWrapping="Wrap"/>
@@ -220,34 +224,77 @@ function Show-CaptureDialog($Owner) {
   </DockPanel>
   <Grid Grid.Row="3">
    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-   <DockPanel Margin="0,0,0,4">
-    <Button x:Name="ClearSelection" Content="Clear selection" DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureClearSelection"/>
-    <Button x:Name="SelectAvailable" Content="Select available" DockPanel.Dock="Right" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureSelectAvailable"/>
-    <Button x:Name="SelectAll" Content="Select all (Ctrl+A)" DockPanel.Dock="Right" Padding="8,2" AutomationProperties.AutomationId="CaptureSelectAll"/>
+   <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
+   <StackPanel Margin="0,0,0,4">
     <TextBlock x:Name="SelectionCount" VerticalAlignment="Center" AutomationProperties.AutomationId="CaptureSelectionCount"/>
-   </DockPanel>
+    <WrapPanel Margin="0,4,0,0">
+     <Button x:Name="SelectAll" Content="Select all (Ctrl+A)" Padding="8,2" AutomationProperties.AutomationId="CaptureSelectAll"/>
+     <Button x:Name="SelectAvailable" Content="Select available" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureSelectAvailable"/>
+     <Button x:Name="ClearSelection" Content="Clear selection" Padding="8,2" Margin="6,0,0,0" AutomationProperties.AutomationId="CaptureClearSelection"/>
+    </WrapPanel>
+   </StackPanel>
    <ListBox x:Name="Turns" Grid.Row="1" SelectionMode="Extended" DisplayMemberPath="Label" AutomationProperties.AutomationId="CaptureTurns"
     VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
     ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+   <TextBox x:Name="Preview" Grid.Column="1" Grid.RowSpan="2" Margin="12,0,0,0" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
   </Grid>
-  <TextBox x:Name="Preview" Grid.Row="4" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="CapturePreview"/>
-  <StackPanel Grid.Row="5">
+  <StackPanel Grid.Row="4" Margin="0,8,0,0">
    <CheckBox x:Name="RawPayload" Content="Show full saved payload (tools and metadata)" Margin="0,0,0,6" AutomationProperties.AutomationId="CaptureRawPayload"/>
-   <TextBlock Text="Available exchanges are selected on load; unavailable entries remain visible for inspection. Use Ctrl+A or Ctrl/Shift to adjust; save up to 100 in source order. Large previews are limited; captured content is unchanged." TextWrapping="Wrap"/>
-   <TextBox x:Name="Title" Margin="0,5,0,8" MaxLength="160" AutomationProperties.AutomationId="CaptureTitle"/>
+   <TextBlock Text="1. Find a conversation. 2. Load and select up to 100 exchanges. 3. Review or summarize prompts. 4. Use for playback. Selections are saved locally for reuse; originals are never changed." TextWrapping="Wrap"/>
+   <Expander Header="Selection name (optional)" Margin="0,5,0,8">
+    <TextBox x:Name="Title" MaxLength="160" AutomationProperties.AutomationId="CaptureTitle"/>
+   </Expander>
    <CheckBox x:Name="Reviewed" Content="I reviewed the selected content for secrets. External assets are not bundled; playback uses saved payloads only." AutomationProperties.AutomationId="CaptureReviewed"/>
   </StackPanel>
-  <DockPanel Grid.Row="6" Margin="0,12,0,0">
-   <Button x:Name="Save" Content="Save Demo" IsEnabled="False" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
-   <TextBlock x:Name="CaptureStatus" TextWrapping="Wrap" Margin="0,0,12,0"/>
+  <StackPanel Grid.Row="5" Margin="0,12,0,0">
+   <TextBlock x:Name="CaptureStatus" TextWrapping="Wrap" Margin="0,0,0,8"/>
+   <WrapPanel HorizontalAlignment="Right">
+    <Button x:Name="SelectionSummaries" Content="Review / edit summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionSummaries"/>
+    <Button x:Name="SelectionAiSummaries" Content="Summarize prompts with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
+    <Button x:Name="Save" Content="Use selected exchanges" IsEnabled="False" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
+   </WrapPanel>
+  </StackPanel>
+ </Grid>
+ </TabItem>
+ <TabItem Header="Saved selections" AutomationProperties.AutomationId="SavedSelectionsTab">
+ <Grid Margin="12">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Margin="0,0,0,10">
+   <Button x:Name="SavedRefresh" Content="Refresh" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="RefreshDemos"/>
+   <TextBlock Text="Search saved selections" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0"/>
+   <TextBox x:Name="SavedSearch" ToolTip="Search titles, sources, and opening prompts" VerticalContentAlignment="Center" AutomationProperties.AutomationId="DemoSearch"/>
+  </DockPanel>
+  <ListBox x:Name="Demos" Grid.Row="1" DisplayMemberPath="Label" AutomationProperties.AutomationId="DemoList"/>
+  <TextBox x:Name="SavedPreview" Grid.Row="2" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+  <Expander x:Name="SavedActions" Grid.Row="3" Header="Selection actions: rename, import, export, remove" Margin="0,0,0,10" AutomationProperties.AutomationId="SavedActions">
+   <StackPanel>
+    <DockPanel Margin="0,8">
+     <Button x:Name="Rename" Content="Rename" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0"/>
+     <TextBox x:Name="SavedTitle" MaxLength="160" ToolTip="Edit the selected title"/>
+    </DockPanel>
+    <StackPanel Orientation="Horizontal">
+     <Button x:Name="Import" Content="Import recording..." Padding="12,6"/>
+     <Button x:Name="Export" Content="Export..." Padding="12,6" Margin="8,0,0,0"/>
+     <Button x:Name="Delete" Content="Remove saved selection" Padding="12,6" Margin="8,0,0,0"/>
+    </StackPanel>
+   </StackPanel>
+  </Expander>
+  <DockPanel Grid.Row="4">
+   <Button x:Name="Select" Content="Use saved selection" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SelectDemo"/>
+   <Button x:Name="Summaries" Content="Review / edit summaries..." DockPanel.Dock="Left" Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
+   <Button x:Name="AiSummaries" Content="Summarize prompts with AI..." DockPanel.Dock="Left" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
+   <TextBlock x:Name="Count" VerticalAlignment="Center" Margin="12,0"/>
   </DockPanel>
  </Grid>
+ </TabItem>
+ </TabControl>
 </Window>
 '@ $Owner
     $dialog.Width = [Math]::Min($dialog.Width, [System.Windows.SystemParameters]::WorkArea.Width - 24)
     $dialog.Height = [Math]::Min($dialog.Height, [System.Windows.SystemParameters]::WorkArea.Height - 24)
     $dialog.Tag = @{
         File = $null; Inspection = $null; Result = $null; Scan = $null; Locations = @()
+        PreparedKey = $null; PreparedEntry = $null; Entries = @()
         Rows = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
         Warnings = [System.Collections.Generic.List[string]]::new()
         UpdatingFilters = $false; FilterError = ''; Filters = @{}; UpdatingTurns = $false
@@ -445,7 +492,7 @@ function Show-CaptureDialog($Owner) {
             $turns.ItemsSource = $null
             $preview.Text = ''
             $reviewed.IsChecked = $false
-            $captureStatus.Text = 'Load this conversation to preview it before capture.'
+            $captureStatus.Text = 'Load this conversation to preview and select exchanges.'
         }
     })
     $sessions.Add_SelectionChanged({
@@ -469,6 +516,8 @@ function Show-CaptureDialog($Owner) {
             Select-DemoAvailableTurns $turns
         } finally { $dialog.Tag.UpdatingTurns = $false }
         $displayTitle = if ($sessions.SelectedItem -and $sessions.SelectedItem.File -eq $File) { $sessions.SelectedItem.Title } else { $inspection.title }
+        if ([string]::IsNullOrWhiteSpace($displayTitle)) { $displayTitle = 'Agent interaction' }
+        $dialog.Tag.DefaultTitle = $displayTitle
         $title.Text = if ($displayTitle.Length -gt 160) { $displayTitle.Substring(0,160) } else { $displayTitle }
         $reviewed.IsChecked = $false
         & $updatePreview
@@ -493,9 +542,11 @@ function Show-CaptureDialog($Owner) {
         $dialog.FindName('Save').IsEnabled = (
             $null -ne $dialog.Tag.Inspection -and
             $turns.SelectedItems.Count -ge 1 -and $turns.SelectedItems.Count -le 100 -and
-            $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true -and
-            -not [string]::IsNullOrWhiteSpace($title.Text)
+            $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true
         )
+        foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries')) {
+            $dialog.FindName($name).IsEnabled = $dialog.FindName('Save').IsEnabled
+        }
     }
     $reviewed.Add_Checked($updateSaveState)
     $reviewed.Add_Unchecked($updateSaveState)
@@ -520,15 +571,15 @@ function Show-CaptureDialog($Owner) {
         $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
         $sourceUnavailable = @($turns.Items | Where-Object { $_.Turn.error })
         $captureStatus.Text = if ($turns.SelectedItems.Count -gt 100) {
-            'A demo supports at most 100 exchanges. Reduce the selection before saving.'
+            'Playback supports at most 100 exchanges. Reduce the selection.'
         } elseif ($unavailable.Count) {
             $first = $unavailable[0].Turn
-            $unavailable.Count.ToString() + ' selected exchanges cannot be captured. Use Select available. Exchange ' + ($first.index + 1) + ': ' + $first.error
+            $unavailable.Count.ToString() + ' selected exchanges cannot be used for playback. Use Select available. Exchange ' + ($first.index + 1) + ': ' + $first.error
         } elseif (-not $turns.SelectedItems.Count) {
             if (-not $turns.Items.Count) { 'This conversation has no saved exchanges.' }
-            elseif ($sourceUnavailable.Count -eq $turns.Items.Count) { 'No available exchanges can be captured from this saved conversation.' }
+            elseif ($sourceUnavailable.Count -eq $turns.Items.Count) { 'No available exchanges can be replayed from this saved conversation.' }
             else { 'Select 1 to 100 available exchanges.' }
-        } else { 'Review the selected saved content, then Save Demo.' }
+        } else { 'Review the selected content, optionally summarize prompts, then Use selected exchanges.' }
         if ($sourceUnavailable.Count -and -not $unavailable.Count) {
             $first = $sourceUnavailable[0].Turn
             $captureStatus.Text += ' ' + $sourceUnavailable.Count + ' unavailable exchanges excluded; still visible for inspection. Exchange ' + ($first.index + 1) + ': ' + $first.error
@@ -557,24 +608,51 @@ function Show-CaptureDialog($Owner) {
     $turns.Add_SelectionChanged($updatePreview)
     $dialog.FindName('RawPayload').Add_Checked($updatePreview)
     $dialog.FindName('RawPayload').Add_Unchecked($updatePreview)
+    $prepareSelection = {
+        if (-not $dialog.Tag.Inspection) { throw 'Load a conversation first.' }
+        if (-not $reviewed.IsChecked) { throw 'Review the selected content and acknowledge the privacy and asset notice.' }
+        $selected = @($turns.SelectedItems | Sort-Object { $_.Turn.index })
+        if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 exchanges.' }
+        $unavailable = @($selected | Where-Object { $_.Turn.error })
+        if ($unavailable.Count) {
+            $first = $unavailable[0].Turn
+            throw ('Use Select available to exclude ' + $unavailable.Count + ' unavailable exchanges. Exchange ' + ($first.index + 1) + ': ' + $first.error)
+        }
+        $indices = @($selected | ForEach-Object { [int]$_.Turn.index })
+        $selectionTitle = if ([string]::IsNullOrWhiteSpace($title.Text)) { $dialog.Tag.DefaultTitle } else { $title.Text }
+        if ($selectionTitle.Length -gt 160) { $selectionTitle = $selectionTitle.Substring(0,160) }
+        $key = @($dialog.Tag.File, $dialog.Tag.Inspection.sha256, $selectionTitle, ($indices -join ',')) | ConvertTo-Json -Compress
+        if ($dialog.Tag.PreparedKey -eq $key) {
+            $current = Invoke-DemoLibrary @{ command = 'inspect'; file = $dialog.Tag.File } $dialog
+            if ($current.sha256 -ne $dialog.Tag.Inspection.sha256) { throw 'The source changed. Reload and review it before continuing.' }
+            return Invoke-DemoLibrary @{ command = 'read'; id = $dialog.Tag.PreparedEntry.id } $dialog
+        }
+        $entry = Invoke-DemoLibrary @{ command = 'capture'; file = $dialog.Tag.File; sha256 = $dialog.Tag.Inspection.sha256; title = $selectionTitle; indices = $indices } $dialog
+        $dialog.Tag.PreparedKey = $key
+        $dialog.Tag.PreparedEntry = $entry
+        return $entry
+    }
+    $dialog.FindName('SelectionSummaries').Add_Click({
+        try {
+            $entry = & $prepareSelection
+            Show-DemoSummaryDialog $dialog $entry.id | Out-Null
+            & $refresh
+        } catch { Show-DemoError $dialog $_ }
+    })
+    $dialog.FindName('SelectionAiSummaries').Add_Click({
+        try {
+            $entry = & $prepareSelection
+            Show-DemoSummaryAuthoringNotice $dialog $entry.id
+            & $refresh
+        } catch { Show-DemoError $dialog $_ }
+    })
     $dialog.FindName('Save').Add_Click({
         try {
-            if (-not $dialog.Tag.Inspection) { throw 'Load a conversation first.' }
-            if (-not $reviewed.IsChecked) { throw 'Review the selected content and acknowledge the privacy and asset notice.' }
-            $selected = @($turns.SelectedItems | Sort-Object { $_.Turn.index })
-            if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 exchanges.' }
-            $unavailable = @($selected | Where-Object { $_.Turn.error })
-            if ($unavailable.Count) {
-                $first = $unavailable[0].Turn
-                throw ('Use Select available to exclude ' + $unavailable.Count + ' unavailable exchanges. Exchange ' + ($first.index + 1) + ': ' + $first.error)
-            }
-            $indices = @($selected | ForEach-Object { [int]$_.Turn.index })
-            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'capture'; file = $dialog.Tag.File; sha256 = $dialog.Tag.Inspection.sha256; title = $title.Text; indices = $indices } $dialog
+            $dialog.Tag.Result = & $prepareSelection
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
-    if ($dialog.ShowDialog()) { return $dialog.Tag.Result }
-    return $null
+    return Show-InteractionPickerWindow $dialog
 }
 
 function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
@@ -654,42 +732,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
     return $dialog.ShowDialog()
 }
 
-function Show-DemoLibraryDialog($Owner) {
-    $dialog = New-DemoDialog @'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
- xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Demo Library"
- Width="780" Height="580" MinWidth="650" MinHeight="500" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
- <Grid Margin="16">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <DockPanel Margin="0,0,0,10">
-   <Button x:Name="Capture" Content="Capture Conversation" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="CaptureConversation"/>
-   <Button x:Name="Import" Content="Import Recording" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0"/>
-   <Button x:Name="Refresh" Content="Refresh" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="RefreshDemos"/>
-   <TextBlock Text="Search" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0"/>
-   <TextBox x:Name="Search" ToolTip="Search demos by title, source, or opening prompt" VerticalContentAlignment="Center" AutomationProperties.AutomationId="DemoSearch"/>
-  </DockPanel>
-  <ListBox x:Name="Demos" Grid.Row="1" DisplayMemberPath="Label" AutomationProperties.AutomationId="DemoList"/>
-  <TextBox x:Name="Preview" Grid.Row="2" Margin="0,8,0,8" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
-  <DockPanel Grid.Row="3" Margin="0,0,0,10">
-   <Button x:Name="Rename" Content="Rename" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0"/>
-   <TextBox x:Name="Title" MaxLength="160" ToolTip="Edit the selected demo title"/>
-  </DockPanel>
-  <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,10">
-   <Button x:Name="Summaries" Content="Edit prompt summaries..." Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
-   <Button x:Name="AiSummaries" Content="Summarize prompts with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
-  </StackPanel>
-  <DockPanel Grid.Row="5">
-   <Button x:Name="Select" Content="Select Demo" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SelectDemo"/>
-   <Button x:Name="Export" Content="Export..." DockPanel.Dock="Left" Padding="12,6"/>
-   <Button x:Name="Delete" Content="Delete" DockPanel.Dock="Left" Padding="12,6" Margin="8,0,0,0"/>
-   <TextBlock x:Name="Count" VerticalAlignment="Center" Margin="12,0,12,0"/>
-  </DockPanel>
- </Grid>
-</Window>
-'@ $Owner
-    $dialog.Tag = @{ Entries = @(); Result = $null }
+function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Open an isolated VS Code authoring window? Install/enable an AI provider such as GitHub Copilot and sign in there; your normal VS Code sign-in is not inherited. Choose a prompt and model there. Only the chosen prompt is sent after explicit consent. Review and edit each suggestion before saving. Return here when finished; playback reads the latest saved summaries and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+    if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
+}
+
+function Show-InteractionPickerWindow($dialog) {
+    # Keep this scope alive while the shared picker dispatches both tab handlers.
     $list = $dialog.FindName('Demos')
-    $search = $dialog.FindName('Search')
+    $search = $dialog.FindName('SavedSearch')
     $filter = {
         $selectedId = if ($list.SelectedItem) { $list.SelectedItem.Entry.id } else { $null }
         $list.Items.Clear()
@@ -700,14 +751,14 @@ function Show-DemoLibraryDialog($Owner) {
             $list.Items.Add($item) | Out-Null
             if ($entry.id -eq $selectedId) { $list.SelectedItem = $item }
         }
-        $dialog.FindName('Count').Text = $list.Items.Count.ToString() + ' demos'
+        $dialog.FindName('Count').Text = $list.Items.Count.ToString() + ' saved selections'
     }
     $refresh = {
         $dialog.Tag.Entries = @(Invoke-DemoLibrary @{ command = 'list' })
         & $filter
     }
     $search.Add_TextChanged({ & $filter })
-    $dialog.FindName('Refresh').Add_Click({
+    $dialog.FindName('SavedRefresh').Add_Click({
         try { & $refresh } catch { Show-DemoError $dialog $_ }
     })
     $dialog.FindName('Summaries').Add_Click({
@@ -719,20 +770,16 @@ function Show-DemoLibraryDialog($Owner) {
     $dialog.FindName('AiSummaries').Add_Click({
         try {
             if (-not $list.SelectedItem) { throw 'Select a demo to summarize.' }
-            $answer = [System.Windows.MessageBox]::Show($dialog, 'Open an isolated VS Code authoring window? Install/enable an AI provider such as GitHub Copilot and sign in there; your normal VS Code sign-in is not inherited. Generation requires consent and provider allowance, but no separate Copilot API token. Review each suggestion before saving. Then click Refresh here and reselect the demo. Playback never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
-            if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $list.SelectedItem.Entry.id $dialog }
+            Show-DemoSummaryAuthoringNotice $dialog $list.SelectedItem.Entry.id
         } catch { Show-DemoError $dialog $_ }
     })
     $list.Add_SelectionChanged({
         $entry = if ($list.SelectedItem) { $list.SelectedItem.Entry } else { $null }
-        $dialog.FindName('Title').Text = if ($entry) { $entry.title } else { '' }
-        $dialog.FindName('Preview').Text = if ($entry) { $entry.source + "`r`n" + $entry.preview + "`r`n" + $entry.notice } else { '' }
-    })
-    $dialog.FindName('Capture').Add_Click({
-        try {
-            $result = Show-CaptureDialog $dialog
-            if ($result) { & $refresh }
-        } catch { Show-DemoError $dialog $_ }
+        $dialog.FindName('SavedTitle').Text = if ($entry) { $entry.title } else { '' }
+        $dialog.FindName('SavedPreview').Text = if ($entry) { $entry.source + "`r`n" + $entry.preview + "`r`n" + $entry.notice } else { '' }
+        foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'Rename', 'Export', 'Delete')) {
+            $dialog.FindName($name).IsEnabled = $null -ne $entry
+        }
     })
     $dialog.FindName('Import').Add_Click({
         try {
@@ -746,7 +793,7 @@ function Show-DemoLibraryDialog($Owner) {
     $dialog.FindName('Rename').Add_Click({
         try {
             if (-not $list.SelectedItem) { throw 'Select a demo to rename.' }
-            Invoke-DemoLibrary @{ command = 'rename'; id = $list.SelectedItem.Entry.id; title = $dialog.FindName('Title').Text } | Out-Null
+            Invoke-DemoLibrary @{ command = 'rename'; id = $list.SelectedItem.Entry.id; title = $dialog.FindName('SavedTitle').Text } | Out-Null
             & $refresh
         } catch { Show-DemoError $dialog $_ }
     })
@@ -773,8 +820,15 @@ function Show-DemoLibraryDialog($Owner) {
         } catch { Show-DemoError $dialog $_ }
     })
     $dialog.FindName('Select').Add_Click({
-        if ($list.SelectedItem) { $dialog.Tag.Result = $list.SelectedItem.Entry; $dialog.DialogResult = $true }
+        try {
+            if (-not $list.SelectedItem) { throw 'Choose a saved selection first.' }
+            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'read'; id = $list.SelectedItem.Entry.id } $dialog
+            $dialog.DialogResult = $true
+        } catch { Show-DemoError $dialog $_ }
     })
+    foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'Rename', 'Export', 'Delete')) {
+        $dialog.FindName($name).IsEnabled = $false
+    }
     & $refresh
     if ($dialog.ShowDialog()) { return $dialog.Tag.Result }
     return $null
