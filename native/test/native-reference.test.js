@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { recordedReference, inlineReferenceLabel, savedEditMarkdown } = require('../saved-parts');
+const { recordedReference, inlineReferenceLabel, savedEditText } = require('../saved-parts');
 const { nativeResponsePart } = require('../native-response');
 const { responseTimeline, extractRecording, validateEditorRecording } = require('../replay');
 const library = require('../demo-library');
@@ -24,7 +24,7 @@ function nativeStub() {
         Range: class { constructor(...coordinates) { this.coordinates = coordinates; } },
         Location: class { constructor(uri, range) { this.uri = uri; this.range = range; } },
         ChatResponseAnchorPart: class { constructor(value, title) { this.value = value; this.title = title; calls.push('anchor'); } },
-        ChatToolInvocationPart: class { constructor() { calls.push('tool'); throw new Error('A reference must never become a tool call.'); } }
+        ChatToolInvocationPart: class { constructor(toolName, toolCallId) { this.toolName = toolName; this.toolCallId = toolCallId; calls.push('tool'); } }
     };
     return { vscode, calls };
 }
@@ -107,7 +107,7 @@ test('capture, import, playback, and history timelines retain inline references 
     assert.equal(timeline.filter(event => ['toolPending', 'toolComplete'].includes(event.kind)).length, 0);
 });
 
-test('combined native renderer preserves read-only edit formatting without applying edits or replacing reference anchors', () => {
+test('saved edits use native activity disclosures instead of injecting code into assistant Markdown', () => {
     const { vscode, calls } = nativeStub();
     const part = {
         kind: 'textEditGroup', done: true, uri: { fsPath: 'C:\\Synthetic\\Missing.txt' },
@@ -115,13 +115,55 @@ test('combined native renderer preserves read-only edit formatting without apply
     };
     const before = structuredClone(part);
     const displayed = nativeResponsePart(vscode, { kind: 'textEditGroup', part });
-    assert.ok(displayed instanceof vscode.ChatResponseMarkdownPart);
-    assert.equal(displayed.value.value, savedEditMarkdown(part));
-    assert.equal(displayed.value.isTrusted, false);
-    assert.equal(displayed.value.supportHtml, false);
+    assert.ok(displayed instanceof vscode.ChatToolInvocationPart);
+    assert.equal(displayed.toolName, 'historyReplay.textEditGroup');
+    assert.equal(displayed.pastTenseMessage, 'Recorded code edit - not applied');
+    assert.equal(displayed.isComplete, true);
+    assert.equal(displayed.isConfirmed, true);
+    assert.equal(displayed.toolSpecificData.output, savedEditText(part));
+    assert.match(displayed.toolSpecificData.input, /No tools are executed/);
+    assert.equal(displayed.value, undefined);
     assert.deepEqual(part, before);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls, ['tool']);
     assert.throws(() => nativeResponsePart(vscode, { kind: 'textEditGroup', part: { ...part, done: false } }), /incomplete/);
+});
+
+test('serialized activity remains inspectable without becoming assistant prose or actionable content', () => {
+    const { vscode } = nativeStub();
+    const ids = new Set();
+    for (const kind of ['questionCarousel', 'confirmation', 'progressTaskSerialized', 'workspaceEdit', 'recordedSdkEvent']) {
+        const payload = '```xml\n<Item Name="Synthetic"/>\n```\n[run](command:never.run)\n'.repeat(2000);
+        const part = kind === 'recordedSdkEvent' ? { kind, events: [{ type: 'synthetic', data: { payload } }] } : { kind, payload };
+        const before = structuredClone(part);
+        for (const event of responseTimeline([part, part])) {
+            const displayed = nativeResponsePart(vscode, event);
+            assert.ok(displayed instanceof vscode.ChatToolInvocationPart);
+            assert.equal(displayed.isComplete, true);
+            assert.equal(displayed.isConfirmed, true);
+            assert.match(displayed.pastTenseMessage, /^Recorded .*(read-only|not applied)/);
+            assert.equal(displayed.value, undefined);
+            assert.deepEqual(JSON.parse(displayed.toolSpecificData.output), kind === 'recordedSdkEvent' ? part.events : part);
+            assert.equal(ids.has(displayed.toolCallId), false, 'Repeated identical artifacts must not update or replace each other');
+            ids.add(displayed.toolCallId);
+        }
+        assert.deepEqual(part, before);
+    }
+    assert.throws(() => nativeResponsePart(vscode, { kind: 'recordedSdkEvent', part: { events: null } }), /event array/);
+});
+
+test('assistant narrative and intentional code examples remain verbatim around saved activity', () => {
+    const { vscode } = nativeStub();
+    const prefix = 'I will update the project.\n\n```xml\n<Item Name="Example"/>\n```\n';
+    const suffix = '\nThe recorded update is ready for review.';
+    const activity = { kind: 'workspaceEdit', edits: [{ text: '<Item Name="Saved replacement"/>' }] };
+    const events = responseTimeline([{ value: prefix }, activity, { value: suffix }]);
+    const rendered = events.map(event => nativeResponsePart(vscode, event));
+    assert.equal(rendered.filter(part => part instanceof vscode.ChatResponseMarkdownPart).map(part => part.value.value).join(''), prefix + suffix);
+    assert.equal(rendered.filter(part => part instanceof vscode.ChatToolInvocationPart).length, 1);
+    for (const part of rendered.filter(part => part instanceof vscode.ChatResponseMarkdownPart)) {
+        assert.equal(part.value.isTrusted, false);
+        assert.equal(part.value.supportHtml, false);
+    }
 });
 
 test('unsupported display kinds still fail instead of falling through to a fabricated tool record', () => {

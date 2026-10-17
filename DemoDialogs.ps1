@@ -577,16 +577,94 @@ function Show-CaptureDialog($Owner) {
     return $null
 }
 
+function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
+    Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner | Out-Null
+    $code = Resolve-PlayerVSCode $script:CodePath
+    $profile = Join-Path ([IO.Path]::GetTempPath()) ('historical-summary-authoring-' + [guid]::NewGuid().ToString('N'))
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $code
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.Arguments = @(
+        '--new-window', '--user-data-dir', ('"' + $profile + '"'),
+        '--extensions-dir', ('"' + (Join-Path $profile 'extensions') + '"'),
+        ('--extensionDevelopmentPath="' + (Join-Path $PSScriptRoot 'native') + '"'),
+        '--enable-proposed-api=local.historical-transcript-replay',
+        '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--disable-telemetry'
+    ) -join ' '
+    $start.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
+    foreach ($key in @($start.EnvironmentVariables.Keys)) {
+        if ($key -like 'HISTORY_REPLAY_*') { $start.EnvironmentVariables.Remove($key) }
+    }
+    $start.EnvironmentVariables['HISTORY_REPLAY_SUMMARY_ENTRY'] = Join-Path $script:LibraryRoot ($Id + '.demo.json')
+    $process = [Diagnostics.Process]::Start($start)
+    if (-not $process) { throw 'The isolated VS Code summary authoring window could not start.' }
+    $process.Dispose()
+}
+
+function Show-DemoSummaryDialog($Owner, [string]$Id) {
+    $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
+    $dialog = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Prompt Summaries"
+ Width="760" Height="540" MinWidth="500" MinHeight="400" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ <Grid Margin="16">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <TextBlock Text="Summaries change only the floating overlay. Playback keeps the complete original prompts. Blank uses the original excerpt. Summaries are included when exporting." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <ComboBox x:Name="Exchange" Grid.Row="1" Margin="0,0,0,10" AutomationProperties.AutomationId="SummaryExchange"/>
+  <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
+  <TextBlock Grid.Row="3" Text="Overlay summary (up to 200 characters, one line)" Margin="0,12,0,6"/>
+  <TextBox x:Name="Summary" Grid.Row="4" MaxLength="200" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
+  <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+   <Button x:Name="Cancel" Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
+   <Button x:Name="Save" Content="Save summaries" Padding="16,6" AutomationProperties.AutomationId="SaveSummaries"/>
+  </StackPanel>
+ </Grid>
+</Window>
+'@ $Owner
+    $drafts = [object[]]::new($entry.recording.turns.Count)
+    if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
+    $dialog.Tag = @{ Summaries = $drafts; Index = -1 }
+    $exchange = $dialog.FindName('Exchange')
+    $summary = $dialog.FindName('Summary')
+    for ($index = 0; $index -lt $entry.recording.turns.Count; $index++) {
+        $exchange.Items.Add(('Exchange ' + ($index + 1))) | Out-Null
+    }
+    $storeDraft = {
+        if ($dialog.Tag.Index -ge 0) {
+            $dialog.Tag.Summaries[$dialog.Tag.Index] = if ([string]::IsNullOrWhiteSpace($summary.Text)) { $null } else { $summary.Text.Trim() }
+        }
+    }
+    $exchange.Add_SelectionChanged({
+        & $storeDraft
+        $dialog.Tag.Index = $exchange.SelectedIndex
+        if ($exchange.SelectedIndex -ge 0) {
+            $dialog.FindName('Original').Text = $entry.recording.turns[$exchange.SelectedIndex].snapshot.requests[0].message.text
+            $summary.Text = [string]$dialog.Tag.Summaries[$exchange.SelectedIndex]
+        }
+    })
+    $exchange.SelectedIndex = 0
+    $dialog.FindName('Save').Add_Click({
+        try {
+            & $storeDraft
+            Invoke-DemoLibrary @{ command = 'summaries'; id = $Id; summaries = @($dialog.Tag.Summaries); expected = $entry.recording.promptSummaries } $dialog | Out-Null
+            $dialog.DialogResult = $true
+        } catch { Show-DemoError $dialog $_ }
+    })
+    return $dialog.ShowDialog()
+}
+
 function Show-DemoLibraryDialog($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Demo Library"
  Width="780" Height="580" MinWidth="650" MinHeight="500" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <DockPanel Margin="0,0,0,10">
    <Button x:Name="Capture" Content="Capture Conversation" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="CaptureConversation"/>
    <Button x:Name="Import" Content="Import Recording" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0"/>
+   <Button x:Name="Refresh" Content="Refresh" DockPanel.Dock="Right" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="RefreshDemos"/>
    <TextBlock Text="Search" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0"/>
    <TextBox x:Name="Search" ToolTip="Search demos by title, source, or opening prompt" VerticalContentAlignment="Center" AutomationProperties.AutomationId="DemoSearch"/>
   </DockPanel>
@@ -596,7 +674,11 @@ function Show-DemoLibraryDialog($Owner) {
    <Button x:Name="Rename" Content="Rename" DockPanel.Dock="Right" Padding="12,5" Margin="8,0,0,0"/>
    <TextBox x:Name="Title" MaxLength="160" ToolTip="Edit the selected demo title"/>
   </DockPanel>
-  <DockPanel Grid.Row="4">
+  <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,10">
+   <Button x:Name="Summaries" Content="Edit prompt summaries..." Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
+   <Button x:Name="AiSummaries" Content="Summarize prompts with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
+  </StackPanel>
+  <DockPanel Grid.Row="5">
    <Button x:Name="Select" Content="Select Demo" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SelectDemo"/>
    <Button x:Name="Export" Content="Export..." DockPanel.Dock="Left" Padding="12,6"/>
    <Button x:Name="Delete" Content="Delete" DockPanel.Dock="Left" Padding="12,6" Margin="8,0,0,0"/>
@@ -625,6 +707,22 @@ function Show-DemoLibraryDialog($Owner) {
         & $filter
     }
     $search.Add_TextChanged({ & $filter })
+    $dialog.FindName('Refresh').Add_Click({
+        try { & $refresh } catch { Show-DemoError $dialog $_ }
+    })
+    $dialog.FindName('Summaries').Add_Click({
+        try {
+            if (-not $list.SelectedItem) { throw 'Select a demo to edit its prompt summaries.' }
+            if (Show-DemoSummaryDialog $dialog $list.SelectedItem.Entry.id) { & $refresh }
+        } catch { Show-DemoError $dialog $_ }
+    })
+    $dialog.FindName('AiSummaries').Add_Click({
+        try {
+            if (-not $list.SelectedItem) { throw 'Select a demo to summarize.' }
+            $answer = [System.Windows.MessageBox]::Show($dialog, 'Open an isolated VS Code authoring window? Install/enable an AI provider such as GitHub Copilot and sign in there; your normal VS Code sign-in is not inherited. Generation requires consent and provider allowance, but no separate Copilot API token. Review each suggestion before saving. Then click Refresh here and reselect the demo. Playback never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+            if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $list.SelectedItem.Entry.id $dialog }
+        } catch { Show-DemoError $dialog $_ }
+    })
     $list.Add_SelectionChanged({
         $entry = if ($list.SelectedItem) { $list.SelectedItem.Entry } else { $null }
         $dialog.FindName('Title').Text = if ($entry) { $entry.title } else { '' }

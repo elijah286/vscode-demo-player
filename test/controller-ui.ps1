@@ -14,6 +14,20 @@ Add-Type -TypeDefinition @'
 using System.Threading.Tasks;
 using System.Windows.Automation;
 public static class DemoUITest {
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, System.UIntPtr extra);
+    public static void Drag(int x, int y, int dx, int dy) {
+        SetCursorPos(x, y);
+        System.Threading.Thread.Sleep(100);
+        mouse_event(2, 0, 0, 0, System.UIntPtr.Zero);
+        System.Threading.Thread.Sleep(100);
+        try {
+            for (int step = 1; step <= 10; step++) {
+                SetCursorPos(x + dx * step / 10, y + dy * step / 10);
+                System.Threading.Thread.Sleep(30);
+            }
+        } finally { mouse_event(4, 0, 0, 0, System.UIntPtr.Zero); }
+    }
     public static Task Invoke(AutomationElement element) {
         var pattern = (InvokePattern)element.GetCurrentPattern(InvokePattern.Pattern);
         return Task.Run(() => pattern.Invoke());
@@ -308,6 +322,38 @@ try {
     ([System.Windows.Automation.ValuePattern]$renameTitle.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('Renamed UI demo')
     Invoke-Button $dialog 'Rename'
     Wait-Until { @(Invoke-DemoLibrary @{ command = 'list' } | Where-Object title -eq 'Renamed UI demo').Count -eq 1 } 'rename persists' | Out-Null
+    $overlaySummary = 'Explain the recorded interaction and its saved reference and code edits, preserving the original query for playback while showing this shorter, reviewed description to the presentation audience.'
+    Invoke-Button $dialog 'EditPromptSummaries'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'prompt summary editor'
+    $originalPrompt = (Find-Element $summaryDialog 'Id' 'SummaryOriginal').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if ($originalPrompt -cne 'Show the first recorded interaction.') { throw 'Summary editor must display the full original query.' }
+    (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($overlaySummary)
+    Invoke-Button $summaryDialog 'SaveSummaries'
+    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'summary save closes editor' | Out-Null
+    $summaryEntry = @(Invoke-DemoLibrary @{ command = 'list' } | Where-Object title -eq 'Renamed UI demo')[0]
+    if ($summaryEntry.presentation.overlay.promptSummary -cne $overlaySummary) { throw 'Manual summary did not persist through the PowerShell bridge.' }
+    Invoke-Button $dialog 'EditPromptSummaries'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'reopen summary editor'
+    if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $overlaySummary) { throw 'Summary editor did not reload the saved summary.' }
+    (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Unsaved draft')
+    Invoke-Button $summaryDialog 'Cancel'
+    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'cancel summary edit' | Out-Null
+    $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*historical-summary-authoring-*' } | Select-Object -ExpandProperty ProcessId)
+    Invoke-Button $dialog 'AiPromptSummaries'
+    $aiConsent = Wait-Until { Get-AppWindow 'AI Prompt Summaries' } 'AI authoring setup notice'
+    $tasks.Add([DemoUITest]::Invoke((Find-Element $aiConsent 'Name' 'OK')))
+    $authoring = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
+            $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-summary-authoring-*' -and
+            $_.CommandLine -notlike '*--type=*' -and $_.ProcessId -notin $priorAuthoringIds
+        } | Select-Object -First 1
+    } 'separate isolated AI authoring process'
+    $authoringId = [int]$authoring.ProcessId
+    Wait-Until { (Get-Process -Id $authoringId).MainWindowHandle -ne [IntPtr]::Zero } 'AI authoring workbench window' 30 | Out-Null
+    if (-not (Get-Process -Id $authoringId).WaitForInputIdle(5000)) { throw 'AI authoring window did not become responsive.' }
+    (Get-Process -Id $authoringId).CloseMainWindow() | Out-Null
+    Wait-Until { -not (Get-Process -Id $authoringId -ErrorAction SilentlyContinue) } 'close only the synthetic authoring window' 20 | Out-Null
+    $authoringId = 0
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'selected demo ready' | Out-Null
@@ -319,16 +365,29 @@ try {
     ([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay before Open'
-    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -ne 'Show the first recorded interaction.') { throw 'Selected demo prompt preview is incorrect.' }
+    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -cne $overlaySummary) { throw 'Selected demo prompt summary is incorrect or cancel saved an unreviewed draft.' }
     if ((Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:00:00') { throw 'Selected demo timer must start at zero.' }
     if ((Find-Element $overlay 'Id' 'PromptProgress').Current.Name -ne '1/2') { throw 'Selected demo progress preview is incorrect.' }
     Save-WindowImage $overlay 'overlay-before-open.png'
+    $beforeResize = $overlay.Current.BoundingRectangle
+    $beforeText = (Find-Element $overlay 'Id' 'PromptText').Current.BoundingRectangle
+    $grip = (Find-Element $overlay 'Id' 'OverlayResize').Current.BoundingRectangle
+    $cursorBefore = [System.Windows.Forms.Cursor]::Position
+    try { [DemoUITest]::Drag([int]($grip.Left + $grip.Width / 2), [int]($grip.Top + $grip.Height / 2), -280, 140) }
+    finally { [System.Windows.Forms.Cursor]::Position = $cursorBefore }
+    Write-Output ('RESIZE: before=' + $beforeResize + '; grip=' + $grip + '; after=' + $overlay.Current.BoundingRectangle)
+    Save-WindowImage $overlay 'overlay-after-drag.png'
+    Wait-Until { $bounds = $overlay.Current.BoundingRectangle; [Math]::Abs($bounds.Width - ($beforeResize.Width - 280)) -lt 4 -and [Math]::Abs($bounds.Height - ($beforeResize.Height + 140)) -lt 4 } 'bottom-right grip changes both dimensions' | Out-Null
+    $resized = $overlay.Current.BoundingRectangle
+    if ((Find-Element $overlay 'Id' 'PromptText').Current.BoundingRectangle.Height -le $beforeText.Height) { throw 'Summary text did not wrap into more lines after narrowing.' }
+    Save-WindowImage $overlay 'overlay-resized-wrapped.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     } 'isolated replay process'
     $replayId = [int]$replay.ProcessId
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' -and (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'Open prepares target without starting playback' 50 | Out-Null
+    if ([Math]::Abs($overlay.Current.BoundingRectangle.Width - $resized.Width) -gt 2 -or [Math]::Abs($overlay.Current.BoundingRectangle.Height - $resized.Height) -gt 2) { throw 'Playback updates reset the resized overlay.' }
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable before the first exchange.' }
     if (([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On -or
         ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { throw 'Open must preserve presentation choices.' }
@@ -355,8 +414,9 @@ try {
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'Stopped targets must return the primary control to Open.' }
     if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) { throw 'Presentation options must remain available after Stop.' }
     $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay after Stop'
-    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -ne 'Show the first recorded interaction.' -or
+    if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -cne $overlaySummary -or
         (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:00:00') { throw 'Stop must restore the selected demo presentation, not stale playback progress.' }
+    if ([Math]::Abs($overlay.Current.BoundingRectangle.Width - $resized.Width) -gt 2 -or [Math]::Abs($overlay.Current.BoundingRectangle.Height - $resized.Height) -gt 2) { throw 'Stop reset the resized overlay.' }
     Save-WindowImage $window 'controller-after-stop.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
@@ -391,7 +451,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, Open without autoplay, explicit Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, and unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual summary save/reopen/cancel, isolated responsive AI authoring launch/close, bottom-right resize of both dimensions, automatic text wrapping, retained size through playback and Stop, Open without autoplay, explicit Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, and unchanged edit target.'
 } catch {
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())
@@ -406,6 +466,10 @@ try {
     Write-Output $_.ScriptStackTrace
     throw
 } finally {
+    if ($authoringId) {
+        $authoringProcess = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
+        if ($authoringProcess) { $authoringProcess.CloseMainWindow() | Out-Null }
+    }
     foreach ($title in @('Capture Conversation', 'Demo Library')) {
         $child = Get-AppWindow $title
         if ($child) { ([System.Windows.Automation.WindowPattern]$child.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close() }

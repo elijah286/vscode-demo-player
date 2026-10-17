@@ -74,6 +74,7 @@ else { $arguments += @('--disable-extensions', '--disable-extension=github.copil
 if ($RemoteDebuggingPort) { $arguments += @('--remote-debugging-address=127.0.0.1', ('--remote-debugging-port=' + $RemoteDebuggingPort)) }
 $start.Arguments = $arguments -join ' '
 $start.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
+$start.EnvironmentVariables.Remove('HISTORY_REPLAY_SUMMARY_ENTRY')
 $start.EnvironmentVariables['HISTORY_REPLAY_FILE'] = $source
 $start.EnvironmentVariables['HISTORY_REPLAY_REQUEST'] = [string]$RequestIndex
 $start.EnvironmentVariables['HISTORY_REPLAY_REQUEST_COUNT'] = [string]$RequestCount

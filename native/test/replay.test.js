@@ -297,7 +297,7 @@ test('portable demo resume restores completed Editor history without replaying o
     }
     const vscode = {
         StatusBarAlignment: { Left: 0 },
-        MarkdownString: Markdown, ChatResponseMarkdownPart: Part, ChatRequestTurn: Part, ChatResponseTurn2: Part,
+        MarkdownString: Markdown, ChatResponseMarkdownPart: Part, ChatToolInvocationPart: class extends Part {}, ChatRequestTurn: Part, ChatResponseTurn2: Part,
         commands: { registerCommand: () => disposable, executeCommand: async command => {
             invoked.push(command);
             if (failLaunch) throw new Error('Synthetic target readiness failure');
@@ -316,6 +316,9 @@ test('portable demo resume restores completed Editor history without replaying o
     assert.equal(api.state.history.length, 2);
     assert.equal(api.state.selection.demoPath, demoPath);
     assert.deepEqual(api.state.recordings[0].request, request);
+    const activity = api.state.history[1].values[0].find(part => part instanceof vscode.ChatToolInvocationPart);
+    assert.equal(activity.isComplete, true);
+    assert.deepEqual(JSON.parse(activity.toolSpecificData.output), request.response[1]);
     assert.deepEqual(invoked, []);
     failLaunch = true;
     await assert.rejects(api.restart(), /Synthetic target readiness failure/);

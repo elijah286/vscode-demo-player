@@ -110,6 +110,7 @@ function validatePackage(value) {
     titleOf(value.title);
     if (!['vscode-native-jsonl', 'copilot-sdk-jsonl'].includes(value.source?.kind) || typeof value.source.fileName !== 'string' || !value.source.fileName || value.source.fileName.length > 260 || !/^[a-f0-9]{64}$/.test(value.source.sha256) || value.notice !== NOTICE) throw new Error('Invalid demo recording provenance or fidelity notice.');
     if (!Array.isArray(value.turns) || !value.turns.length || value.turns.length > MAX_TURNS) throw new Error('A demo must contain 1 to 100 exchanges.');
+    validatePromptSummaries(value.promptSummaries, value.turns.length);
     const indices = new Set();
     for (const turn of value.turns) {
         if (!Number.isInteger(turn.sourceIndex) || turn.sourceIndex < 0 || indices.has(turn.sourceIndex) || turn.snapshot?.requests?.length !== 1) throw new Error('Invalid or duplicate recorded turn.');
@@ -153,7 +154,33 @@ async function readPackage(file) {
 async function packageRecordings(file) {
     const raw = JSON.parse((await readBounded(file)).toString('utf8'));
     const value = raw.format === FORMAT ? validatePackage(raw) : validateEntry(raw).recording;
-    return value.turns.map(turn => validateEditorRecording(extractRecording(file, turn.snapshot, 0)));
+    return value.turns.map((turn, index) => {
+        const recording = validateEditorRecording(extractRecording(file, turn.snapshot, 0));
+        if (value.promptSummaries?.[index]) recording.promptSummary = value.promptSummaries[index];
+        return recording;
+    });
+}
+
+function validatePromptSummaries(summaries, count) {
+    if (summaries === undefined) return;
+    if (!Array.isArray(summaries) || summaries.length !== count || summaries.some(value =>
+        value !== null && (typeof value !== 'string' || !value.trim() || value.length > 200 || /[\r\n]/.test(value)))) {
+        throw new Error('Supply one summary per exchange: null for the original excerpt, or 1 to 200 characters on one line.');
+    }
+}
+
+async function savePromptSummaries(root, id, summaries, expected) {
+    return withLock(root, async () => {
+        const entry = await readEntry(root, id);
+        validatePromptSummaries(summaries, entry.recording.turns.length);
+        if (summaries === undefined) throw new Error('Supply the summaries to save.');
+        if (JSON.stringify(entry.recording.promptSummaries ?? null) !== JSON.stringify(expected)) {
+            throw new Error('Prompt summaries changed since opening this editor. Reopen it before saving.');
+        }
+        entry.recording.promptSummaries = summaries;
+        await atomicEntry(root, entry, true);
+        return summarize(entry);
+    });
 }
 
 function entryPath(root, id) {
@@ -184,7 +211,11 @@ async function libraryIds(root) {
 }
 
 function summarize(entry) {
-    const recordings = entry.recording.turns.map(turn => extractRecording('', turn.snapshot, 0));
+    const recordings = entry.recording.turns.map((turn, index) => {
+        const recording = extractRecording('', turn.snapshot, 0);
+        if (entry.recording.promptSummaries?.[index]) recording.promptSummary = entry.recording.promptSummaries[index];
+        return recording;
+    });
     const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
     return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
 }
@@ -362,4 +393,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries };

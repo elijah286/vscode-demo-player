@@ -3,23 +3,27 @@ Add-Type -AssemblyName System.Windows.Forms
 [xml]$overlayLayout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Playback overlay" Width="820" MinHeight="132" SizeToContent="Height" WindowStyle="None"
-        AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        Title="Playback overlay" Width="820" Height="180" MinWidth="360" MinHeight="132" WindowStyle="None"
+        AllowsTransparency="True" Background="Transparent" ResizeMode="CanResize"
         ShowInTaskbar="False" ShowActivated="False" Topmost="True"
         WindowStartupLocation="Manual" FontFamily="Segoe UI"
         AutomationProperties.AutomationId="PlaybackOverlay">
+  <Grid>
   <Border x:Name="OverlayFrame" Background="#FFFFFF" BorderBrush="#F5B82E"
           BorderThickness="4" CornerRadius="8" Padding="16,12" Cursor="SizeAll">
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <StackPanel x:Name="PromptPanel" VerticalAlignment="Center">
+      <Grid x:Name="PromptPanel">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <StackPanel Orientation="Horizontal">
           <TextBlock Text="Prompt summary" Foreground="#555555" FontSize="12"/>
           <TextBlock x:Name="PromptProgress" Margin="12,0,0,0" Foreground="#555555" FontSize="12"/>
         </StackPanel>
-        <TextBlock x:Name="PromptText" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,8,0,0">
+        <TextBlock x:Name="PromptText" FontSize="18" FontWeight="SemiBold"
                    Foreground="#202020" TextWrapping="Wrap"/>
-      </StackPanel>
+        </ScrollViewer>
+      </Grid>
       <StackPanel x:Name="TimerPanel" Grid.Column="1" VerticalAlignment="Center" Margin="24,0,0,0"
                   ToolTip="Recorded response time, interpolated during playback. Excludes idle gaps between turns; not model compute time.">
         <TextBlock Text="Working time (HH:MM:SS)" Foreground="#555555" FontSize="11"/>
@@ -28,6 +32,11 @@ Add-Type -AssemblyName System.Windows.Forms
       </StackPanel>
     </Grid>
   </Border>
+  <Thumb x:Name="OverlayResize" Width="20" Height="20" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+         Cursor="SizeNWSE" ToolTip="Drag to resize the overlay" AutomationProperties.AutomationId="OverlayResize">
+    <Thumb.Template><ControlTemplate><Grid Background="Transparent"><Path Data="M 6,16 L 16,6 M 11,16 L 16,11" Stroke="#777777" StrokeThickness="2"/></Grid></ControlTemplate></Thumb.Template>
+  </Thumb>
+  </Grid>
 </Window>
 '@
 $overlayReader = [System.Xml.XmlNodeReader]::new($overlayLayout)
@@ -41,6 +50,14 @@ $timerPanel = $script:overlayWindow.FindName('TimerPanel')
 $promptText = $script:overlayWindow.FindName('PromptText')
 $promptProgress = $script:overlayWindow.FindName('PromptProgress')
 $elapsedText = $script:overlayWindow.FindName('ElapsedText')
+$script:overlayResized = $false
+$script:overlayWindow.FindName('OverlayResize').Add_DragDelta({
+    param($sender, $eventArgs)
+    $script:overlayResized = $true
+    $script:overlayWindow.Width = [Math]::Max($script:overlayWindow.MinWidth, $script:overlayWindow.ActualWidth + $eventArgs.HorizontalChange)
+    $script:overlayWindow.Height = [Math]::Max($script:overlayWindow.MinHeight, $script:overlayWindow.ActualHeight + $eventArgs.VerticalChange)
+    $eventArgs.Handled = $true
+})
 
 function Update-ReplayOverlays {
     $overlay = $script:lastView.overlay
@@ -55,7 +72,11 @@ function Update-ReplayOverlays {
     $elapsedText.Text = $overlay.elapsed
     $timerPanel.Margin = if ($promptVisible) { [System.Windows.Thickness]::new(24,0,0,0) } else { [System.Windows.Thickness]::new(0) }
     $desiredWidth = if ($promptVisible -and $timerVisible) { 820 } elseif ($promptVisible) { 720 } else { 238 }
-    $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
+    $script:overlayWindow.MinWidth = if ($promptVisible -and $timerVisible) { 480 } elseif ($promptVisible) { 280 } else { 238 }
+    if (-not $script:overlayResized) {
+        $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
+        $script:overlayWindow.Height = if ($promptVisible) { 180 } else { 104 }
+    }
     $script:overlayWindow.MinHeight = if ($promptVisible) { 132 } else { 104 }
     if ($promptVisible -or $timerVisible) {
         $script:overlayWindow.Owner = $window
@@ -89,7 +110,7 @@ $showPrompt.Add_Checked({ Update-ReplayOverlays })
 $showPrompt.Add_Unchecked({ Update-ReplayOverlays })
 $showElapsed.Add_Checked({ Update-ReplayOverlays })
 $showElapsed.Add_Unchecked({ Update-ReplayOverlays })
-$script:overlayWindow.Add_MouseLeftButtonDown({ $script:overlayWindow.DragMove() })
+$overlayFrame.Add_MouseLeftButtonDown({ $script:overlayWindow.DragMove() })
 $script:overlayWindow.Add_Closing({
     param($sender, $eventArgs)
     if (-not $script:closeAllowed) { $eventArgs.Cancel = $true; $showPrompt.IsChecked = $false; $showElapsed.IsChecked = $false }

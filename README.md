@@ -243,8 +243,10 @@ with a 30-second helper limit and reentrant controls disabled until done.
 
 SDK event recordings normalize saved prompts, assistant text and tool transitions
 for playback. Original selected events, tool-result data, initial context and
-attachment metadata remain in the raw payload. Other event metadata is shown
-as an inert **Recorded SDK events** archive; no saved tool is executed.
+attachment metadata remain in the raw payload. Other event metadata is available
+in a collapsible native **Recorded SDK events** activity entry, not streamed
+into the assistant's reply as JSON. Expand the entry to inspect its read-only
+output; no saved tool is executed.
 External attachments are not bundled. Saved SDK text, reasoning and tool results
 can be replayed even when a follow-up prompt interrupted the work or no final
 answer was recorded. Unfinished or unmatchable tools stay in the read-only event
@@ -289,16 +291,30 @@ Saved inline file/symbol references are supported in Editor playback as inert,
 escaped labels; linked external content is not fetched or bundled. Completed
 saved text edit groups are supported in Editor capture/playback and labeled
 **Read-only edits**. They display the recorded target, ordered edit batches,
-1-based ranges (exclusive end), and replacement text as inert code blocks marked
-**Recorded code edit - not applied**. Empty replacements and batches are labeled
+1-based ranges (exclusive end), and replacement text in a collapsible native
+activity entry marked **Recorded code edit - not applied**, rather than a large
+code block in the assistant's reply. Expand the entry to inspect the read-only
+output. Empty replacements and batches are labeled
 explicitly. The player neither reads nor modifies the target files and does not
 invent original contents or a before/after diff. Original edit payloads, including
 extra metadata, remain intact through capture, export/import, and playback.
 Missing completion flags, malformed batches, missing replacement text/targets,
 and invalid ranges are rejected with specific errors and remain inspectable in
 the raw preview. Unknown response kinds are also rejected, never silently dropped.
+Serialized confirmations, task progress and workspace edits also use labeled
+read-only activity entries rather than raw JSON in the reply. These completed
+display entries do not execute recorded actions or claim edits were applied.
+Assistant prose, intentional code examples, thinking and actual recorded tool
+transitions keep their original content and native presentation, including when
+completed exchanges are restored as history.
 Question carousels still require the experimental saved-parts renderer and remain
 explicitly unavailable in baseline Editor capture.
+
+To validate saved-activity presentation in a fresh isolated VS Code profile,
+run `node test-native.js --artifacts` from `native`. This generates a synthetic
+two-turn recording with large XML edit/event payloads, checks that each activity
+starts collapsed and expands on demand, and exercises retained history and
+Start Over. It does not use the demo library or change recorded target files.
 
 The selected-demo button and **Manage Demos** open a custom searchable library,
 not a system dropdown. Select, rename, delete, import, or export a recording.
@@ -331,12 +347,55 @@ Opening playback preserves these choices; Stop restores the selected-demo previe
 The timer remains disabled when the saved recording lacks valid timing endpoints.
 Click the **Overlay frame** swatch to use the native Windows color picker. Overlay
 choices and color survive mode switches within that controller session; they
-are not saved as global settings.
+are not saved as global settings. Drag the overlay's bottom-right grip to resize
+its width and height. Text wraps to the available width; a vertical scrollbar
+keeps text accessible in a short window. Your chosen dimensions survive prompt
+updates, checkbox changes, Stop, and mode switches within that controller session.
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
-original prompt. It is not an AI-authored summary. Local playlists can supply
-one reviewed `promptSummaries` entry per turn. Original messages, package hashes,
-and source bytes are unchanged, and no recording-specific summaries are shipped.
+original prompt. Under **Manage Demos > Edit prompt summaries...**, select an
+exchange and write or edit its overlay text (one line, up to 200 characters).
+Leave an entry blank to use its original excerpt, then **Save summaries** and
+**Select Demo**. Local playlists can also supply one reviewed `promptSummaries`
+entry per turn.
+
+**Manage Demos > Summarize prompts with AI...** opens a separate, isolated VS Code
+authoring window, never the playback window or your normal editor profile.
+Install/enable an AI Language Model provider such as GitHub Copilot and sign in
+in that window. Copilot uses your existing account/allowance: a separate API
+token is not required, but a model must be available and provider limits/terms
+still apply. The isolated profile does not inherit your normal VS Code sign-in
+or installed extensions. If no model is available, an explicit error explains
+setup; manual summaries still work.
+
+Choose an exchange, review its original prompt, consent to sending that prompt
+to the provider, and select a model. Only the selected query and summarization
+instructions are sent, not the recorded answer, tools, or other exchanges.
+Generation is cancellable and limited to 90 seconds. Over-context input and
+invalid/overlong output are reported, not silently truncated. Review/edit the
+suggestion before saving; canceling leaves the saved summary unchanged.
+Use **Demo Player: Summarize Prompt** in that window's Command Palette for
+another exchange. Back in Manage Demos, click **Refresh** and **Select Demo** to
+load the saved summaries before opening playback. Close the authoring window
+when finished. Its private temporary profile remains under the Windows temp
+directory (`historical-summary-authoring-*`); it is not shipped or committed.
+
+Summaries are optional package metadata and survive export/import. Concurrent
+summary edits are rejected rather than overwritten; reopen the editor to reload.
+Original prompts, responses, per-turn payload hashes, and source bytes are
+unchanged. Playback always types the full original prompt, never invokes AI,
+and works without sign-in or network access. No recording-specific summaries
+are shipped.
+
+Authoring-only native acceptance uses a synthetic transcript and its captured
+library entry, with no installed AI providers and no model requests:
+
+```powershell
+$env:HISTORY_REPLAY_TEST_SOURCE = 'C:\synthetic-fixture\source.jsonl'
+$env:HISTORY_REPLAY_TEST_SUMMARY_ENTRY = 'C:\synthetic-fixture\library\<entry-id>.demo.json'
+Set-Location native
+node .\test-native.js --summaries
+```
 
 The **HH:MM:SS** stopwatch sums recorded prompt-to-response-completion intervals
 and interpolates each interval during the accelerated output. It holds during

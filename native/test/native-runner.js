@@ -5,8 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { readRecording, kindOf } = require('../replay');
-const { savedEditMarkdown } = require('../saved-parts');
-const { sdkEventMarkdown } = require('../sdk-transcript');
+const { savedEditText } = require('../saved-parts');
 const { controlView } = require('../control-server');
 
 async function run() {
@@ -111,16 +110,56 @@ async function run() {
     }
     const edits = recording.request.response.filter(part => kindOf(part) === 'textEditGroup');
     assert.deepEqual(api.state.emitted.filter(part => part.kind === 'textEditGroup').map(part => part.original), edits, 'Saved code edit payloads are preserved');
+    if (process.env.HISTORY_REPLAY_TEST_ARTIFACTS === '1') {
+        await page.getByText('The recorded project update is ready for review.', { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
+        await page.locator('.interactive-response .completed-response-disclosure').waitFor({ state: 'attached', timeout: 5000 });
+        await page.screenshot({ path: path.join(screenshots, 'native-activity-collapsed.png') });
+    }
+    async function revealActivity(response) {
+        await response.waitFor({ state: 'attached', timeout: 5000 });
+        const disclosures = response.locator('details.completed-response-disclosure');
+        for (const disclosure of await disclosures.all()) {
+            const summary = disclosure.locator(':scope > summary');
+            await summary.scrollIntoViewIfNeeded();
+            if (await disclosure.getAttribute('open') === null) await summary.click();
+            await page.waitForFunction(element => element.open, await disclosure.elementHandle(), { timeout: 5000 });
+        }
+        for (const group of await response.locator('.chat-thinking-box').all()) {
+            const groupButton = group.locator('[aria-expanded]').first();
+            if (await groupButton.getAttribute('aria-expanded') === 'false') await groupButton.click();
+        }
+    }
+    async function checkActivity(label, output) {
+        const retained = api.state.history[1].response.find(part => part instanceof vscode.ChatToolInvocationPart && part.toolSpecificData?.output === output);
+        assert.ok(retained, 'Retained history contains the complete read-only activity output');
+        assert.equal(retained.isComplete, true);
+        const activity = page.locator('.interactive-response .chat-tool-invocation-part').filter({ hasText: label }).last();
+        await revealActivity(page.locator('.interactive-response').last());
+        const button = activity.locator('.chat-confirmation-widget-title');
+        await button.scrollIntoViewIfNeeded();
+        await button.waitFor({ state: 'visible', timeout: 5000 });
+        assert.equal(await button.getAttribute('aria-expanded'), 'false', 'Saved payload is collapsed by default');
+        assert.equal(await activity.locator('.monaco-editor').count(), 0, 'Collapsed activity does not create a large code editor in the reply');
+        await button.click();
+        assert.equal(await button.getAttribute('aria-expanded'), 'true', 'Saved payload can be expanded on demand');
+        await activity.locator('.monaco-editor').last().waitFor({ state: 'visible', timeout: 5000 });
+        assert.equal(await activity.locator('.monaco-editor').count(), 2, 'Read-only input and output are inspectable');
+        assert.equal(await activity.locator('a[href^="command:never.run"], a[href^="command:example.run"]').count(), 0, 'Payload text cannot become a command link');
+        await button.click();
+        assert.equal(await button.getAttribute('aria-expanded'), 'false');
+    }
     for (const edit of edits) {
-        await page.locator('.interactive-response strong').filter({ hasText: 'Recorded code edit - not applied' }).last().waitFor({ state: 'visible', timeout: 5000 });
-        assert.ok(api.state.history[1].response.some(part => part.value?.value === savedEditMarkdown(edit)), 'Retained history uses the same read-only edit renderer');
+        await checkActivity('Recorded code edit - not applied', savedEditText(edit));
     }
     if (edits.length) assert.equal(await page.locator('.interactive-response a[href^="command:example.run"]').count(), 0, 'Recorded replacement text never becomes a command link');
     const sdkArchives = recording.request.response.filter(part => kindOf(part) === 'recordedSdkEvent');
     assert.deepEqual(api.state.emitted.filter(part => part.kind === 'recordedSdkEvent').map(part => part.original), sdkArchives, 'SDK event payloads survive streaming');
     for (const archive of sdkArchives) {
-        await page.locator('.interactive-response strong').filter({ hasText: 'Recorded SDK events - read-only, never executed' }).last().waitFor({ state: 'visible', timeout: 5000 });
-        assert.ok(api.state.history[1].response.some(part => part.value?.value === sdkEventMarkdown(archive)), 'SDK event archive survives retained history');
+        await checkActivity('Recorded SDK events - read-only, never executed', JSON.stringify(archive.events, null, 2));
+    }
+    const activityLabels = { confirmation: 'Recorded confirmation - read-only', progressTaskSerialized: 'Recorded task progress - read-only', workspaceEdit: 'Recorded workspace edit - not applied' };
+    for (const part of recording.request.response.filter(part => Object.hasOwn(activityLabels, kindOf(part)))) {
+        await checkActivity(activityLabels[kindOf(part)], JSON.stringify(part, null, 2));
     }
     if (sdkArchives.length) assert.equal(await page.locator('.interactive-response a[href^="command:never.run"]').count(), 0, 'SDK result text never becomes a command link');
     const typingTime = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
@@ -153,7 +192,16 @@ async function run() {
     assert.equal(api.state.turnIndex, 2);
     assert.equal(api.state.history.length, 4);
     if (edits.length) {
-        await page.locator('.interactive-response').filter({ hasText: 'Recorded code edit - not applied' }).first().waitFor({ state: 'visible', timeout: 5000 });
+        await page.screenshot({ path: path.join(screenshots, 'native-retained-history.png') });
+        const list = page.locator('.interactive-list .monaco-scrollable-element').first();
+        await list.hover();
+        await page.mouse.wheel(0, -20000);
+        await page.screenshot({ path: path.join(screenshots, 'native-retained-history-top.png') });
+        const activity = page.locator('.interactive-response .chat-tool-invocation-part').filter({ hasText: 'Recorded code edit - not applied' }).first();
+        await revealActivity(page.locator('.interactive-response').first());
+        await activity.scrollIntoViewIfNeeded();
+        await activity.waitFor({ state: 'visible', timeout: 5000 });
+        assert.equal(await activity.locator('.chat-confirmation-widget-title').getAttribute('aria-expanded'), 'false', 'Retained history keeps saved payloads collapsed');
     }
     assert.equal(controlView(api.state).button, 'Start Over');
     assert.equal(controlView(api.state).nextEnabled, false);

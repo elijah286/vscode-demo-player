@@ -256,17 +256,19 @@ test('malformed SDK prompt text is still rejected without blocking inspection of
     assert.equal((await library.createPackage(fixture.events, [1], 'Good prompt', inspection.sha256)).turns.length, 1);
 });
 
-test('SDK archives render as untrusted literal content and remain read-only host artifacts', () => {
+test('SDK archives render as native read-only activity and remain read-only host artifacts', () => {
     const part = sdkSnapshot(sdkEvents()).requests[0].response.find(part => part.kind === 'recordedSdkEvent');
     const vscode = {
         MarkdownString: class { constructor(value) { this.value = value; } },
         ChatResponseMarkdownPart: class { constructor(value) { this.value = value; } },
-        ChatToolInvocationPart: class { constructor() { throw new Error('An SDK archive must not execute as a tool.'); } }
+        ChatToolInvocationPart: class {}
     };
     const shown = nativeResponsePart(vscode, { kind: 'recordedSdkEvent', part });
-    assert.equal(shown.value.value, sdkEventMarkdown(part));
-    assert.equal(shown.value.isTrusted, false);
-    assert.equal(shown.value.supportHtml, false);
+    assert.ok(shown instanceof vscode.ChatToolInvocationPart);
+    assert.deepEqual(JSON.parse(shown.toolSpecificData.output), part.events);
+    assert.equal(shown.isComplete, true);
+    assert.match(shown.pastTenseMessage, /read-only, never executed/);
+    assert.equal(shown.value, undefined);
     const request = { message: { text: 'Recorded SDK prompt' }, response: [part] };
     const host = new RecordingAgentHost([{ request }]);
     host.beginTurn(request);

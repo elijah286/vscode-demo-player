@@ -7,6 +7,12 @@ const { packageRecordings } = require('./demo-library');
 const { nativeResponsePart } = require('./native-response');
 
 function activate(context) {
+    if (process.env.HISTORY_REPLAY_SUMMARY_ENTRY) {
+        const authoring = require('./prompt-summary-authoring').activateSummaryAuthoring(context, vscode, process.env.HISTORY_REPLAY_SUMMARY_ENTRY);
+        void vscode.commands.executeCommand('setContext', 'demoPlayer.summaryAuthoring', true)
+            .then(() => authoring.run(), error => vscode.window.showErrorMessage('Prompt summary authoring could not start: ' + error.message));
+        return authoring;
+    }
     const capabilities = {
         nativeSessions: typeof vscode.chat.registerChatSessionContentProvider === 'function',
         nativeToolParts: typeof vscode.ChatToolInvocationPart === 'function',

@@ -20,6 +20,7 @@ async function main() {
         case 'capture': return library.addPackage(root, await library.createPackage(request.file, request.indices, request.title, request.sha256));
         case 'import': return library.addPackage(root, await library.readPackage(request.file));
         case 'rename': return library.renameDemo(root, request.id, request.title);
+        case 'summaries': return library.savePromptSummaries(root, request.id, request.summaries, request.expected);
         case 'delete': return library.deleteDemo(root, request.id);
         case 'export': return library.exportDemo(root, request.id, request.file);
         case 'read': return library.readEntry(root, request.id);

@@ -48,6 +48,11 @@
     ],
     "commands": [
       {
+        "command": "historyReplay.summarizePrompt",
+        "title": "Demo Player: Summarize Prompt",
+        "enablement": "demoPlayer.summaryAuthoring"
+      },
+      {
         "command": "historyReplay.probe",
         "title": "Replay: Check Native APIs"
       },
