@@ -276,7 +276,7 @@ try {
     $sourceBox.SetFocus()
     ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($source)
     Invoke-Button $capture 'Load'
-    $turnList = Find-Element $capture 'Id' 'CaptureTurns'
+    $turnList = Wait-Until { Find-Element $capture 'Id' 'CaptureTurns' } 'replacement exchange list after loading'
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 3 exchanges selected' } 'replacement conversation selects only available exchanges by default' | Out-Null
     if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Save must remain disabled before reviewing the replacement selection.' }
     if ((Find-Element $capture 'Id' 'CaptureStatus').Current.Name -notmatch '1 unavailable exchanges excluded.*Missing: completion result') { throw 'Excluded exchange count and missing saved field must be explicit.' }
