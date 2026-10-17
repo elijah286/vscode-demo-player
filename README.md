@@ -38,26 +38,46 @@ original application project. It contains no original conversations, demo
 selections, application source, recorded assets, or generated evidence.
 The original workspace remains untouched.
 
-## Canonical development checkout
+## Parallel development and the canonical checkout
 
 Use the existing `%USERPROFILE%\Documents\GitHub\vscode-demo-player` folder,
 connected to `https://github.com/elijah286/vscode-demo-player.git`. Open it with
-**File > Open Folder** or `code .` from that folder. `main` tracks `origin/main`;
-feature and integration branches live in this same checkout, one writer at a
-time. Legacy `vscode-demo-player-*` siblings are recovery sources, not alternate
-development defaults. Creating more clones/worktrees requires explicit approval.
+**File > Open Folder** or `code .` from that folder for release-captain work.
+`main` tracks `origin/main`. The canonical checkout is captain-only; each feature
+agent uses a separate registered Git worktree, branch and VS Code session.
+Separate branches in one directory do not isolate agents. Legacy siblings remain
+recovery sources, not alternate defaults; independent clones require approval.
 
 Before editing, verify the Git root, branch/status, upstream, and sanitized
-origin. Coordinate existing work before switching branches. Read
+origin. Read
 [AGENTS.md](AGENTS.md) and [the workflow runbook](docs/RELEASING.md).
+Use the launcher below and run its Check action in the assigned worktree before
+editing/committing. The captain integrates committed delivery SHAs while other
+agents continue coding; only the selected release batch is frozen.
 Consolidation is not permission to delete recovery sources, push, or publish.
 The [consolidation checkpoint](docs/CONSOLIDATION.md) records integrated commits,
 preservation, test results, exclusions, and remaining gates.
 
-For source development, install Node.js 22.23.3 with npm, then run:
+For feature work, provision an isolated folder from a committed policy-bearing
+base (replace the example ID, owner/session and scope with the assigned task):
 
 ```powershell
 Set-Location "$env:USERPROFILE\Documents\GitHub\vscode-demo-player"
+.\Manage-AgentWorktree.ps1 -Action New -TaskId example-feature -Owner my-session -Scope 'Implement the assigned feature'
+Set-Location "$env:USERPROFILE\Documents\GitHub\vscode-demo-player-worktrees\example-feature"
+.\Manage-AgentWorktree.ps1 -Action Check -TaskId example-feature -Owner my-session
+code .
+```
+
+Start the agent in that exact folder. New does not copy dirty files or
+dependencies, change the captain's branch, install packages, push, or delete
+anything. Registration lives privately in the shared Git directory, not in
+committed machine-specific files. See the runbook for captain registration,
+Ready handoffs, overlapping files, and recovery of pre-policy work.
+
+For source development, install Node.js 22.23.3 with npm. In the assigned worktree:
+
+```powershell
 Set-Location native
 npm ci
 npm run test:unit
@@ -66,7 +86,7 @@ Set-Location ..
 .\Start-DemoPlayer.ps1 -NodePath (Get-Command node.exe).Source
 ```
 
-Install dependencies in this checkout; never borrow another project's
+Install dependencies separately in each worktree; never borrow another project's
 `node_modules` through a junction. Keep recordings/settings, generated evidence,
 and temporary helpers outside tracked application source. Use synthetic libraries
 and isolated profiles for the validation commands below, not the real demo library.

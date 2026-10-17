@@ -5,6 +5,9 @@
 - Branch, base SHA, delivery SHA(s):
 - Owned files and overlap with other workstreams:
 - Dependencies and required integration order:
+- Registration/task ID and current policy acknowledgment:
+- Ready handoff SHA (immutable; later work belongs to another task):
+- Shared desktop/installer test slot, if needed:
 
 ## Behavior and acceptance
 
@@ -24,6 +27,7 @@
 
 Captain records before integration:
 
+- Fixed batch ID and selected workstream/delivery SHAs (other agents keep coding):
 - Exact user-approved branch/commit set and approval reference:
 - Conflicts and resolutions confirmed with owners:
 - Combined verification SHA and results:

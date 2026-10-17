@@ -42,3 +42,6 @@ jobs:
       - name: Check history filters and bounded selection previews
         shell: powershell
         run: .\test\history-filters.ps1
+      - name: Check isolated agent worktree ownership and handoffs
+        shell: powershell
+        run: .\test\agent-worktrees.ps1
