@@ -49,7 +49,7 @@
     "commands": [
       {
         "command": "historyReplay.summarizePrompt",
-        "title": "Demo Player: Summarize Prompt",
+        "title": "Demo Player: Summarize Long Prompts",
         "enablement": "demoPlayer.summaryAuthoring"
       },
       {

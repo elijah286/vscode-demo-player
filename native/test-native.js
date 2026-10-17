@@ -6,10 +6,24 @@ const { runTests } = require('@vscode/test-electron');
 
 async function main() {
     const summaryTest = process.argv.includes('--summaries');
-    if (summaryTest && !process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY) throw new Error('Set HISTORY_REPLAY_TEST_SUMMARY_ENTRY to an isolated synthetic demo library entry.');
     const artifacts = process.argv.includes('--artifacts');
     const profile = process.env.HISTORY_REPLAY_TEST_PROFILE ?? fs.mkdtempSync(path.join(os.tmpdir(), 'native-replay-test-'));
-    const source = artifacts ? path.join(profile, 'synthetic-artifacts.jsonl') : process.env.HISTORY_REPLAY_TEST_SOURCE;
+    let source = artifacts ? path.join(profile, 'synthetic-artifacts.jsonl') : process.env.HISTORY_REPLAY_TEST_SOURCE;
+    let summaryEntry = process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY;
+    if (summaryTest && !summaryEntry) {
+        fs.mkdirSync(profile, { recursive: true });
+        source = path.join(profile, 'synthetic-summary-source.jsonl');
+        fs.writeFileSync(source, JSON.stringify({ kind: 0, v: { requests: [
+            { result: {}, message: { text: 'First synthetic long prompt. '.repeat(12) }, response: [{ value: 'Original synthetic answer.' }] },
+            { result: {}, message: { text: 'Second synthetic long prompt. '.repeat(12) }, response: [{ value: 'Second original answer.' }] },
+            { result: {}, message: { text: 'Short prompt' }, response: [{ value: 'Short answer.' }] }
+        ] } }) + '\n');
+        const library = require('./demo-library');
+        const inspection = await library.inspectTranscript(source);
+        const root = path.join(profile, 'synthetic-library');
+        const added = await library.addPackage(root, await library.createPackage(source, [0, 1, 2], 'Synthetic batch summaries', inspection.sha256));
+        summaryEntry = path.join(root, added.id + '.demo.json');
+    }
     if (artifacts) {
         fs.mkdirSync(profile, { recursive: true });
         const payload = Array.from({ length: 2000 }, (_, index) => '<Item Name="Synthetic saved payload ' + index + '"/>').join('\n') +
@@ -47,7 +61,7 @@ async function main() {
             HISTORY_REPLAY_CDP_PORT: String(port),
             HISTORY_REPLAY_TEST_SOURCE: path.resolve(source),
             HISTORY_REPLAY_TEST_REQUEST: String(requestIndex),
-            HISTORY_REPLAY_SUMMARY_ENTRY: summaryTest ? path.resolve(process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY) : '',
+            HISTORY_REPLAY_SUMMARY_ENTRY: summaryTest ? path.resolve(summaryEntry) : '',
             ...(artifacts ? { HISTORY_REPLAY_TEST_ARTIFACTS: '1' } : {}),
             ...(process.env.HISTORY_REPLAY_BACKEND_PROBE === '1' ? { HISTORY_REPLAY_BACKEND_PROBE: '1' } : {})
         },

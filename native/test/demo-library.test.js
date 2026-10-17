@@ -135,7 +135,7 @@ test('AI request contains only the query and validates exact output limits and m
 });
 
 function authoringAPI(options = {}) {
-    const calls = { errors: [], saved: [], requests: 0, consent: 0, reviews: 0 };
+    const calls = { errors: [], saved: [], requests: 0, consent: 0, models: 0, picks: 0, reviews: 0, messages: [], documents: [], progress: [] };
     class CancellationTokenSource {
         constructor() {
             this.listeners = new Set();
@@ -153,13 +153,14 @@ function authoringAPI(options = {}) {
     const model = {
         name: 'Synthetic model', vendor: 'test', id: 'synthetic', maxInputTokens: 10000,
         countTokens: async () => 100,
-        sendRequest: async () => {
+        sendRequest: async messages => {
             calls.requests++;
+            calls.messages.push(messages);
             options.onRequest?.();
             if (options.stall) return new Promise(() => {});
-            if (options.providerFailure) throw new Error('Synthetic provider failure');
-            if (options.cancel) options.cancelSource.cancel();
-            return { text: (async function* () { yield 'Generated paraphrase'; })() };
+            if (options.providerFailure || calls.requests === options.failAt) throw new Error('Synthetic provider failure');
+            if (options.cancel || calls.requests === options.cancelAt) options.cancelSource.cancel();
+            return { text: (async function* () { yield options.output ?? 'Generated paraphrase'; })() };
         }
     };
     const api = {
@@ -167,20 +168,30 @@ function authoringAPI(options = {}) {
         CancellationTokenSource,
         LanguageModelChatMessage: { User: content => ({ content }) },
         ProgressLocation: { Notification: 1 },
-        workspace: { openTextDocument: async document => document },
-        lm: { selectChatModels: async () => options.noModels ? [] : [model] },
+        workspace: { openTextDocument: async options => {
+            const document = { ...options, getText() { return this.content; } };
+            calls.documents.push(document);
+            return document;
+        } },
+        lm: { selectChatModels: async () => { calls.models++; return options.noModels ? [] : [model]; } },
         window: {
-            showQuickPick: async (items, picker) => picker.canPickMany ? (options.allPrompts ? items : [items[0]]) : items[0],
+            showQuickPick: async items => { calls.picks++; return options.cancelModel ? undefined : items[0]; },
             showTextDocument: async () => {},
-            showWarningMessage: async () => { calls.consent++; return options.decline ? undefined : 'Generate summary'; },
-            withProgress: async (_options, callback) => {
-                options.cancelSource = new CancellationTokenSource();
-                return callback({}, options.cancelSource.token);
-            },
-            showInputBox: async () => {
+            showWarningMessage: async (_message, action) => {
+                if (action === 'Generate summaries') {
+                    calls.consent++;
+                    return options.decline ? undefined : action;
+                }
                 calls.reviews++;
                 if (options.beforeReview) await options.beforeReview();
-                return options.cancelReview || options.cancelReviewAt === calls.reviews ? undefined : 'Reviewed shorter query';
+                const document = calls.documents.at(-1);
+                document.content = options.reviewText ?? JSON.stringify(JSON.parse(document.content).map(turn => ({ ...turn, summary: 'Reviewed shorter query' })));
+                return options.cancelReview ? undefined : action;
+            },
+            withProgress: async (_options, callback) => {
+                options.cancelSource = new CancellationTokenSource();
+                if (options.preCanceled) options.cancelSource.cancel();
+                return callback({ report: value => calls.progress.push(value) }, options.cancelSource.token);
             },
             showErrorMessage: async message => calls.errors.push(message),
             showInformationMessage: async message => calls.saved.push(message)
@@ -189,18 +200,27 @@ function authoringAPI(options = {}) {
     return { api, calls };
 }
 
+async function authoringFixture(context, prompts = ['Long original query '.repeat(15)]) {
+    const result = await fixture(context);
+    await fs.writeFile(result.source, JSON.stringify({ kind: 0, v: { requests: prompts.map(text => ({
+        result: {}, message: { text }, response: [{ value: 'Original unchanged answer' }]
+    })) } }) + '\n');
+    result.inspection = await library.inspectTranscript(result.source);
+    return result;
+}
+
 test('AI authoring requires consent, a model, and review before persistence; failures leave bytes unchanged', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
-    const { source, root, inspection } = await fixture(context);
+    const { source, root, inspection } = await authoringFixture(context);
     const added = await library.addPackage(root, await library.createPackage(source, [0], 'Authoring', inspection.sha256));
     const file = path.join(root, added.id + '.demo.json');
     const before = await fs.readFile(file);
-    for (const options of [{ decline: true }, { noModels: true }, { cancelReview: true }, { providerFailure: true }, { cancel: true }]) {
+    for (const options of [{ decline: true }, { noModels: true }, { cancelModel: true }, { preCanceled: true }, { cancelReview: true }, { providerFailure: true }, { cancel: true }]) {
         const { api, calls } = authoringAPI(options);
         await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
         assert.deepEqual(await fs.readFile(file), before);
         assert.equal(calls.saved.length, 0);
-        assert.equal(calls.requests, options.decline || options.noModels ? 0 : 1);
+        assert.equal(calls.requests, options.decline || options.noModels || options.cancelModel || options.preCanceled ? 0 : 1);
         if (options.noModels) assert.match(calls.errors[0], /No VS Code AI model/);
         if (options.providerFailure) assert.match(calls.errors[0], /Synthetic provider failure/);
         if (options.cancel) assert.match(calls.errors[0], /canceled/);
@@ -214,7 +234,7 @@ test('AI authoring requires consent, a model, and review before persistence; fai
 
 test('AI authoring refuses a concurrent summary edit instead of overwriting it', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
-    const { source, root, inspection } = await fixture(context);
+    const { source, root, inspection } = await authoringFixture(context);
     const added = await library.addPackage(root, await library.createPackage(source, [0], 'Concurrent authoring', inspection.sha256));
     const file = path.join(root, added.id + '.demo.json');
     const { api, calls } = authoringAPI({ beforeReview: () => library.savePromptSummaries(root, added.id, ['Other editor'], null) });
@@ -223,36 +243,40 @@ test('AI authoring refuses a concurrent summary edit instead of overwriting it',
     assert.equal((await library.readEntry(root, added.id)).recording.promptSummaries[0], 'Other editor');
 });
 
-test('AI authoring summarizes multiple selected prompts with individual consent and review', async context => {
+test('AI authoring handles the 100-exchange selection limit with one consent and review', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
-    const { source, root, inspection } = await fixture(context);
-    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Bulk authoring', inspection.sha256));
+    const { source, root, inspection } = await authoringFixture(context, Array.from({ length: 100 }, (_, index) => 'Exchange ' + index + ': ' + 'original prompt '.repeat(20)));
+    const added = await library.addPackage(root, await library.createPackage(source, Array.from({ length: 100 }, (_, index) => index), 'Bulk authoring', inspection.sha256));
     const before = (await library.readEntry(root, added.id)).recording.turns;
-    const { api, calls } = authoringAPI({ allPrompts: true });
+    const { api, calls } = authoringAPI();
     await activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run();
-    assert.equal(calls.requests, 2);
-    assert.equal(calls.consent, 2);
-    assert.equal(calls.saved.length, 2);
+    assert.equal(calls.requests, 100);
+    assert.equal(calls.consent, 1);
+    assert.equal(calls.reviews, 1);
+    assert.equal(calls.saved.length, 1);
     assert.equal(calls.errors.length, 0);
     const after = await library.readEntry(root, added.id);
-    assert.deepEqual(after.recording.promptSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.promptSummaries, Array(100).fill('Reviewed shorter query'));
     assert.deepEqual(after.recording.turns, before);
 });
 
-test('canceling a later batch suggestion preserves only earlier reviewed summaries', async context => {
+test('canceling batch review preserves previously saved summaries without adding new ones', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
-    const { source, root, inspection } = await fixture(context);
+    const { source, root, inspection } = await authoringFixture(context, ['first '.repeat(50), 'second '.repeat(50)]);
     const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Canceled batch', inspection.sha256));
-    const { api, calls } = authoringAPI({ allPrompts: true, cancelReviewAt: 2 });
+    await library.savePromptSummaries(root, added.id, [null, 'Previously saved summary'], null);
+    const { api, calls } = authoringAPI({ cancelReview: true });
     await activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run();
-    assert.equal(calls.saved.length, 1);
+    assert.equal(calls.requests, 1);
+    assert.equal(calls.reviews, 1);
+    assert.equal(calls.saved.length, 0);
     assert.equal(calls.errors.length, 0);
-    assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, ['Reviewed shorter query', null]);
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, [null, 'Previously saved summary']);
 });
 
 test('AI authoring enforces the 90-second deadline without saving a stalled request', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
-    const { source, root, inspection } = await fixture(context);
+    const { source, root, inspection } = await authoringFixture(context);
     const added = await library.addPackage(root, await library.createPackage(source, [0], 'Deadline', inspection.sha256));
     const file = path.join(root, added.id + '.demo.json');
     const before = await fs.readFile(file);
@@ -268,6 +292,91 @@ test('AI authoring enforces the 90-second deadline without saving a stalled requ
     await run;
     assert.match(calls.errors[0], /exceeded 90 seconds/);
     assert.deepEqual(await fs.readFile(file), before);
+});
+
+test('batch authoring summarizes every eligible prompt once with one consent/model/review and preserves short prompts and existing summaries', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const prompts = [' \r\n' + 'x'.repeat(200) + '\t  ', 'y'.repeat(201), 'short\r\n  query', 'third long '.repeat(30), 'saved long '.repeat(30), ' whitespace '.repeat(30)];
+    const { source, root, inspection } = await authoringFixture(context, prompts);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1, 2, 3, 4, 5], 'Batch', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const existing = [null, null, null, null, 'Keep this manual summary', null];
+    await library.savePromptSummaries(root, added.id, existing, null);
+    const before = await library.readEntry(root, added.id);
+    const { api, calls } = authoringAPI();
+    await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+    assert.deepEqual(calls.errors, []);
+    assert.equal(calls.requests, 3);
+    assert.equal(calls.consent, 1);
+    assert.equal(calls.models, 1);
+    assert.equal(calls.picks, 1, 'No per-prompt chooser');
+    assert.equal(calls.reviews, 1, 'No per-prompt save');
+    assert.deepEqual(JSON.parse(calls.documents.at(-1).getText()).map(turn => turn.exchange), [2, 4, 6]);
+    const after = await library.readEntry(root, added.id);
+    assert.deepEqual(after.recording.promptSummaries, [null, 'Reviewed shorter query', null, 'Reviewed shorter query', 'Keep this manual summary', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.turns, before.recording.turns);
+    assert.deepEqual(after.recording.source, before.recording.source);
+    for (const [index, promptIndex] of [1, 3, 5].entries()) {
+        assert.ok(calls.messages[index][0].content.endsWith(JSON.stringify(prompts[promptIndex])));
+    }
+    const again = authoringAPI();
+    await activateSummaryAuthoring({ subscriptions: [] }, again.api, file).run();
+    assert.equal(again.calls.requests, 0);
+    assert.equal(again.calls.consent, 0);
+    assert.match(again.calls.saved[0], /No overlong prompts/);
+    await library.savePromptSummaries(root, added.id, prompts.map(() => null), after.recording.promptSummaries);
+    const cleared = await library.readEntry(root, added.id);
+    assert.deepEqual(cleared.recording.turns, before.recording.turns);
+    assert.deepEqual(cleared.recording.source, before.recording.source);
+    const replay = await library.packageRecordings(file);
+    assert.ok(replay[1].promptSummary.startsWith('y'.repeat(177)), 'Clearing restores the default excerpt');
+    const regenerated = authoringAPI();
+    await activateSummaryAuthoring({ subscriptions: [] }, regenerated.api, file).run();
+    assert.equal(regenerated.calls.requests, 4, 'Cleared summaries can be regenerated in one batch');
+});
+
+test('batch failures, invalid review and cancellation never save partial results', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context, ['first '.repeat(50), 'second '.repeat(50)]);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Atomic batch', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    for (const options of [
+        { failAt: 2 }, { cancelAt: 2 }, { cancelReview: true }, { output: 'x'.repeat(201) },
+        { reviewText: 'not json' }, { reviewText: '[]' },
+        { reviewText: '[{"exchange":1,"summary":"valid"},{"exchange":1,"summary":"duplicate"}]' },
+        { reviewText: '[{"exchange":2,"summary":"second"},{"exchange":1,"summary":"first"}]' },
+        { reviewText: '[{"exchange":1,"summary":null},{"exchange":2,"summary":"second"}]' },
+        { reviewText: JSON.stringify([{ exchange: 1, summary: 'valid' }, { exchange: 2, summary: 'x'.repeat(201) }]) }
+    ]) {
+        const { api, calls } = authoringAPI(options);
+        await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+        assert.deepEqual(await fs.readFile(file), before);
+        assert.equal(calls.saved.length, 0);
+        if (!options.cancelReview) assert.equal(calls.errors.length, 1);
+        if (options.cancelAt) {
+            assert.equal(calls.requests, 2);
+            assert.equal(calls.reviews, 0);
+            assert.match(calls.errors[0], /canceled/);
+        }
+    }
+});
+
+test('clearing summaries while a batch is reviewed prevents stale AI results restoring them', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context, ['first '.repeat(50), 'second '.repeat(50)]);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Clear during review', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const existing = [null, 'Existing summary'];
+    await library.savePromptSummaries(root, added.id, existing, null);
+    const { api, calls } = authoringAPI({
+        beforeReview: () => library.savePromptSummaries(root, added.id, [null, null], existing)
+    });
+    await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+    assert.equal(calls.requests, 1);
+    assert.match(calls.errors[0], /changed since/);
+    assert.equal(calls.saved.length, 0);
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, [null, null]);
 });
 
 test('selected demo presentation is ready before opening playback and survives missing sources', async context => {

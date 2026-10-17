@@ -250,7 +250,8 @@ function Show-InteractionPicker($Owner) {
    <TextBlock x:Name="CaptureStatus" TextWrapping="Wrap" Margin="0,0,0,8"/>
    <WrapPanel HorizontalAlignment="Right">
     <Button x:Name="SelectionSummaries" Content="Review / edit summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionSummaries"/>
-    <Button x:Name="SelectionAiSummaries" Content="Summarize prompts with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
+    <Button x:Name="SelectionAiSummaries" Content="Summarize long prompts with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
+    <Button x:Name="SelectionClearSummaries" Content="Clear all summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionClearSummaries"/>
     <Button x:Name="Save" Content="Use selected exchanges" IsEnabled="False" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
    </WrapPanel>
   </StackPanel>
@@ -279,12 +280,17 @@ function Show-InteractionPicker($Owner) {
     </StackPanel>
    </StackPanel>
   </Expander>
-  <DockPanel Grid.Row="4">
-   <Button x:Name="Select" Content="Use saved selection" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SelectDemo"/>
-   <Button x:Name="Summaries" Content="Review / edit summaries..." DockPanel.Dock="Left" Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
-   <Button x:Name="AiSummaries" Content="Summarize prompts with AI..." DockPanel.Dock="Left" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
-   <TextBlock x:Name="Count" VerticalAlignment="Center" Margin="12,0"/>
-  </DockPanel>
+  <StackPanel Grid.Row="4">
+   <WrapPanel Margin="0,0,0,8">
+    <Button x:Name="Summaries" Content="Review / edit summaries..." Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
+    <Button x:Name="AiSummaries" Content="Summarize long prompts with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
+    <Button x:Name="ClearSummaries" Content="Clear all summaries..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="ClearPromptSummaries"/>
+   </WrapPanel>
+   <DockPanel>
+    <Button x:Name="Select" Content="Use saved selection" DockPanel.Dock="Right" Padding="18,6" AutomationProperties.AutomationId="SelectDemo"/>
+    <TextBlock x:Name="Count" VerticalAlignment="Center" Margin="12,0"/>
+   </DockPanel>
+  </StackPanel>
  </Grid>
  </TabItem>
  </TabControl>
@@ -544,7 +550,7 @@ function Show-InteractionPicker($Owner) {
             $turns.SelectedItems.Count -ge 1 -and $turns.SelectedItems.Count -le 100 -and
             $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true
         )
-        foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries')) {
+        foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
             $dialog.FindName($name).IsEnabled = $dialog.FindName('Save').IsEnabled
         }
     }
@@ -646,6 +652,12 @@ function Show-InteractionPicker($Owner) {
             & $refresh
         } catch { Show-DemoError $dialog $_ }
     })
+    $dialog.FindName('SelectionClearSummaries').Add_Click({
+        try {
+            $entry = & $prepareSelection
+            if (Show-DemoClearSummariesNotice $dialog $entry.id) { & $refresh }
+        } catch { Show-DemoError $dialog $_ }
+    })
     $dialog.FindName('Save').Add_Click({
         try {
             $dialog.Tag.Result = & $prepareSelection
@@ -694,6 +706,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
   <TextBlock Grid.Row="3" Text="Overlay summary (up to 200 characters, one line)" Margin="0,12,0,6"/>
   <TextBox x:Name="Summary" Grid.Row="4" MaxLength="200" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
   <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+   <Button x:Name="Clear" Content="Clear all summaries" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="ClearSummaryDrafts"/>
    <Button x:Name="Cancel" Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
    <Button x:Name="Save" Content="Save summaries" Padding="16,6" AutomationProperties.AutomationId="SaveSummaries"/>
   </StackPanel>
@@ -722,6 +735,10 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
         }
     })
     $exchange.SelectedIndex = 0
+    $dialog.FindName('Clear').Add_Click({
+        $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
+        $summary.Text = ''
+    })
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
@@ -733,8 +750,16 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 }
 
 function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Open an isolated VS Code authoring window? Install/enable an AI provider such as GitHub Copilot and sign in there; your normal VS Code sign-in is not inherited. Choose a prompt and model there. Only the chosen prompt is sent after explicit consent. Review and edit each suggestion before saving. Return here when finished; playback reads the latest saved summaries and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 200-character summary budget in this selection. Short prompts and existing summaries are preserved. An isolated VS Code authoring window opens; enable an AI provider and sign in there if needed. One consent and model selection cover the batch, with one provider request per long prompt. Review and save the whole batch once. Return here to use the selection; playback reads the latest summaries and never calls AI. Clear all summaries restores original excerpts.', 'AI Prompt Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
+}
+
+function Show-DemoClearSummariesNotice($Owner, [string]$Id) {
+    $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Clear all saved summaries for this selection, including AI-generated and manually edited summaries? Original prompts, responses and recordings are unchanged. The overlay will use the default prompt excerpts.', 'Clear Prompt Summaries', 'OKCancel', 'Question')
+    if ($answer -ne 'OK') { return $false }
+    Invoke-DemoLibrary @{ command = 'summaries'; id = $Id; summaries = @([object[]]::new($entry.recording.turns.Count)); expected = $entry.recording.promptSummaries } $Owner | Out-Null
+    return $true
 }
 
 function Show-InteractionPickerWindow($dialog) {
@@ -773,11 +798,17 @@ function Show-InteractionPickerWindow($dialog) {
             Show-DemoSummaryAuthoringNotice $dialog $list.SelectedItem.Entry.id
         } catch { Show-DemoError $dialog $_ }
     })
+    $dialog.FindName('ClearSummaries').Add_Click({
+        try {
+            if (-not $list.SelectedItem) { throw 'Select a demo to clear its summaries.' }
+            if (Show-DemoClearSummariesNotice $dialog $list.SelectedItem.Entry.id) { & $refresh }
+        } catch { Show-DemoError $dialog $_ }
+    })
     $list.Add_SelectionChanged({
         $entry = if ($list.SelectedItem) { $list.SelectedItem.Entry } else { $null }
         $dialog.FindName('SavedTitle').Text = if ($entry) { $entry.title } else { '' }
         $dialog.FindName('SavedPreview').Text = if ($entry) { $entry.source + "`r`n" + $entry.preview + "`r`n" + $entry.notice } else { '' }
-        foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'Rename', 'Export', 'Delete')) {
+        foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
             $dialog.FindName($name).IsEnabled = $null -ne $entry
         }
     })
@@ -826,7 +857,7 @@ function Show-InteractionPickerWindow($dialog) {
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
-    foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'Rename', 'Export', 'Delete')) {
+    foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
         $dialog.FindName($name).IsEnabled = $false
     }
     & $refresh

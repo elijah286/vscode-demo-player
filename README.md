@@ -413,7 +413,14 @@ Leave an entry blank to use its original excerpt, then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn.
 
-**Summarize prompts with AI...**, available beside the selection action and
+Use **Clear all summaries...** in the interaction picker to remove all saved overlay
+summaries, including AI-generated and manually edited summaries, after
+confirmation. Default prompt excerpts return; original prompts/responses and
+per-turn hashes are unchanged. In the manual editor, **Clear all summaries**
+clears the drafts for every exchange; **Save summaries** applies that change,
+while **Cancel** discards it.
+
+**Summarize long prompts with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate, isolated VS Code
 authoring window, never the playback window or your normal editor profile.
 Install/enable an AI Language Model provider such as GitHub Copilot and sign in
@@ -423,17 +430,26 @@ still apply. The isolated profile does not inherit your normal VS Code sign-in
 or installed extensions. If no model is available, an explicit error explains
 setup; manual summaries still work.
 
-Choose one or more exchanges (including a batch of long prompts), review each original prompt, consent to sending that prompt
-to the provider, and select a model. Only the selected query and summarization
-instructions are sent, not the recorded answer, tools, or other exchanges.
-Generation is cancellable and limited to 90 seconds. Over-context input and
-invalid/overlong output are reported, not silently truncated. Review/edit the
-suggestion before saving; canceling leaves that summary unchanged and stops
-the remaining batch. Previously reviewed and saved summaries remain saved.
-Use **Demo Player: Summarize Prompt** in that window's Command Palette for
-another exchange. Return to the picker and click **Use selected exchanges**
-or **Use saved selection**; either reads the latest saved summaries without
-a refresh/reselection ritual. Close the authoring window
+There is no per-exchange chooser: one batch covers every prompt that exceeds
+the 200-character summary budget after whitespace normalization and does not
+already have a saved summary. Exactly 200 characters fits; 201 needs a summary.
+This is a stable text budget, not a guarantee that text fits every resized
+window without scrolling. Short prompts and existing summaries are preserved.
+The full eligible queries are shown for review before one batch consent and
+one model selection. Each query is sent separately with summarization
+instructions, never recorded answers or tool payloads.
+Progress identifies the current exchange. The batch is cancellable, with a
+90-second limit per request. Failures, cancellation, over-context input, and
+invalid/overlong output leave the entire library unchanged; no partial results
+are saved. Once generation completes, review all suggestions in one JSON
+document, optionally edit its summary strings, and choose **Save summaries**
+once. Dismissing review cancels without saving. Invalid JSON, altered exchange
+order/count or invalid summary strings are reported without saving.
+Use **Demo Player: Summarize Long Prompts** in that window's Command Palette to
+retry a canceled batch. To regenerate saved summaries, clear them first.
+Return to the picker and click **Use selected exchanges** or **Use saved selection**;
+either reads the latest saved summaries without refreshing or reselecting.
+Close the authoring window
 when finished. Its private temporary profile remains under the Windows temp
 directory (`historical-summary-authoring-*`); it is not shipped or committed.
 
@@ -444,12 +460,11 @@ unchanged. Playback always types the full original prompt, never invokes AI,
 and works without sign-in or network access. No recording-specific summaries
 are shipped.
 
-Authoring-only native acceptance uses a synthetic transcript and its captured
-library entry, with no installed AI providers and no model requests:
+Authoring-only native acceptance creates a synthetic multi-prompt recording
+and library entry in an isolated profile when no fixture is supplied, with no
+installed AI providers and no model requests:
 
 ```powershell
-$env:HISTORY_REPLAY_TEST_SOURCE = 'C:\synthetic-fixture\source.jsonl'
-$env:HISTORY_REPLAY_TEST_SUMMARY_ENTRY = 'C:\synthetic-fixture\library\<entry-id>.demo.json'
 Set-Location native
 node .\test-native.js --summaries
 ```

@@ -246,6 +246,7 @@ ${function:Show-InteractionPickerWindow} = [scriptblock]::Create("param(`$dialog
 $script:pickerEntries = @()
 $script:pickerCaptures = 0
 $script:pickerAiId = $null
+$script:pickerClearId = $null
 $script:pickerInspection = [pscustomobject]@{
     title = 'Synthetic agent conversation'; sha256 = 'synthetic-hash'
     turns = @([pscustomobject]@{ index = 0; prompt = 'Original long prompt'; content = 'Original prompt and answer' })
@@ -270,6 +271,7 @@ function Show-DemoSummaryDialog($Owner, $Id) {
     return $true
 }
 function Show-DemoSummaryAuthoringNotice($Owner, $Id) { $script:pickerAiId = $Id }
+function Show-DemoClearSummariesNotice($Owner, $Id) { $script:pickerClearId = $Id; return $true }
 $script:exercisePicker = {
     try {
         Assert-Equal $dialog.FindName('PickerTabs').SelectedIndex 0 'Live picker starts with agent history'
@@ -286,6 +288,10 @@ $script:exercisePicker = {
         $dialog.FindName('SelectionAiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         Assert-Equal $script:pickerAiId 'picker-entry' 'Inline AI authoring targets the same selection'
         Assert-Equal $script:pickerCaptures 1 'AI preparation reuses the saved selection'
+        Assert-Equal $dialog.FindName('SelectionClearSummaries').IsEnabled $true 'Reviewed selection enables clearing summaries'
+        $dialog.FindName('SelectionClearSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $script:pickerClearId 'picker-entry' 'Inline clear targets the same prepared selection'
+        Assert-Equal $script:pickerCaptures 1 'Clear preparation reuses the saved selection'
         $result = & $prepareSelection
         Assert-Equal $result.recording.promptSummaries[0] 'Latest reviewed summary' 'Playback preparation reloads reviewed AI results'
         $dialog.FindName('PickerTabs').SelectedIndex = 1
@@ -293,12 +299,18 @@ $script:exercisePicker = {
         Assert-Equal $dialog.FindName('SavedTitle').Text 'Synthetic agent conversation' 'Saved selection has an automatic title'
         Assert-Equal $dialog.FindName('Title').Text 'Synthetic agent conversation' 'Saved-tab selection does not overwrite the conversation draft'
         Assert-Equal $dialog.FindName('Select').IsEnabled $true 'Saved selection can be used without a management step'
+        Assert-Equal $dialog.FindName('ClearSummaries').IsEnabled $true 'Saved selection enables clearing summaries'
+        $script:pickerClearId = $null
+        $dialog.FindName('ClearSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $script:pickerClearId 'picker-entry' 'Saved-tab clear targets the chosen selection'
         $dialog.FindName('SavedSearch').Text = 'No matching selection'
         Assert-Equal $dialog.FindName('Demos').Items.Count 0 'Saved search uses its own list'
         Assert-Equal $dialog.FindName('Select').IsEnabled $false 'No-match search disables the saved selection action'
+        Assert-Equal $dialog.FindName('ClearSummaries').IsEnabled $false 'No-match search disables clearing'
         $dialog.FindName('Source').Text = 'different.jsonl'
         Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Changing source disables playback preparation'
         Assert-Equal $dialog.FindName('SelectionAiSummaries').IsEnabled $false 'Changing source also disables AI preparation'
+        Assert-Equal $dialog.FindName('SelectionClearSummaries').IsEnabled $false 'Changing source also disables clearing'
     } finally { $dialog.Close() }
 }
 Show-InteractionPicker $null | Out-Null
@@ -315,4 +327,64 @@ try {
     Assert-Equal $controller.FindName('PrimaryLabel').Text 'Open' 'Preparing a target stays separate from playback'
     Assert-Equal $controller.FindName('PlayPause').IsEnabled $false 'Playback requires a selected interaction'
 } finally { $controller.Close() }
+$summaryFunction = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-DemoSummaryDialog'
+}, $true)
+$summaryXaml = $summaryFunction.Find({
+    param($node)
+    $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -like '<Window*Title="Prompt Summaries"*'
+}, $true)
+$dialog = New-DemoDialog $summaryXaml.Value $null
+try {
+    $entry = [pscustomobject]@{ recording = [pscustomobject]@{
+        turns = @(
+            [pscustomobject]@{ snapshot = [pscustomobject]@{ requests = @([pscustomobject]@{ message = [pscustomobject]@{ text = 'First original query' } }) } },
+            [pscustomobject]@{ snapshot = [pscustomobject]@{ requests = @([pscustomobject]@{ message = [pscustomobject]@{ text = 'Second original query' } }) } }
+        )
+        promptSummaries = @('First saved summary', 'Second saved summary')
+    } }
+    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Index = -1 }
+    $exchange = $dialog.FindName('Exchange')
+    $summary = $dialog.FindName('Summary')
+    $exchange.Items.Add('Exchange 1') | Out-Null
+    $exchange.Items.Add('Exchange 2') | Out-Null
+    $storeNode = $summaryFunction.Find({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$storeDraft'
+    }, $true)
+    $storeDraft = $storeNode.Right.Expression.ScriptBlock.GetScriptBlock()
+    $selectionNode = $summaryFunction.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Member.Value -eq 'Add_SelectionChanged'
+    }, $true)
+    $exchange.Add_SelectionChanged($selectionNode.Arguments[0].ScriptBlock.GetScriptBlock())
+    $exchange.SelectedIndex = 0
+    Assert-Equal $summary.Text 'First saved summary' 'Summary editor loads saved text'
+    $clearNode = $summaryFunction.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Member.Value -eq 'Add_Click' -and $node.Expression.Extent.Text -eq '$dialog.FindName(''Clear'')'
+    }, $true)
+    Assert-Equal ($null -ne $clearNode) $true 'Production clear-drafts handler exists'
+    & ($clearNode.Arguments[0].ScriptBlock.GetScriptBlock())
+    Assert-Equal $summary.Text '' 'Clear empties the current summary'
+    Assert-Equal $dialog.Tag.Summaries.Count 2 'Clear keeps one draft slot per exchange'
+    Assert-Equal (@($dialog.Tag.Summaries | Where-Object { $null -ne $_ }).Count) 0 'Clear empties every draft'
+    $exchange.SelectedIndex = 1
+    Assert-Equal $summary.Text '' 'Changing exchanges does not restore cleared drafts'
+    Assert-Equal $dialog.FindName('Original').Text 'Second original query' 'Clear preserves original query display'
+    $exchange.SelectedIndex = 0
+    Assert-Equal $summary.Text '' 'Returning to first exchange keeps cleared draft'
+    $request = @{ command = 'summaries'; summaries = @($dialog.Tag.Summaries); expected = $entry.recording.promptSummaries }
+    $roundtrip = $request | ConvertTo-Json -Compress | ConvertFrom-Json
+    Assert-Equal $roundtrip.summaries.Count 2 'Cleared drafts serialize as a full array'
+    Assert-Equal (@($roundtrip.summaries | Where-Object { $null -ne $_ }).Count) 0 'Cleared draft slots serialize as null'
+    Assert-Equal $entry.recording.promptSummaries[0] 'First saved summary' 'Clearing drafts alone does not change saved metadata'
+    Assert-Equal $entry.recording.promptSummaries[1] 'Second saved summary' 'Unselected saved metadata is also unchanged'
+    $summary.Text = 'Replacement draft'
+    & $storeDraft
+    Assert-Equal $dialog.Tag.Summaries[0] 'Replacement draft' 'Editing after clear can save a new summary'
+    Assert-Equal ($null -eq $dialog.Tag.Summaries[1]) $true 'Editing one draft keeps other drafts cleared'
+} finally { $dialog.Close() }
 Write-Output ('HISTORY FILTER/SELECTION/XAML CHECKS PASSED: ' + $count + ' assertions; no desktop window was displayed.')

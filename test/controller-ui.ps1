@@ -346,6 +346,28 @@ try {
     (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Unsaved draft')
     Invoke-Button $summaryDialog 'Cancel'
     Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'cancel summary edit' | Out-Null
+    Invoke-Button $dialog 'EditPromptSummaries'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'summary clear draft editor'
+    Invoke-Button $summaryDialog 'ClearSummaryDrafts'
+    if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '') { throw 'Clear all did not empty the summary draft.' }
+    Invoke-Button $summaryDialog 'Cancel'
+    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'cancel clear draft' | Out-Null
+    $preserved = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    if ($preserved.recording.promptSummaries[0] -cne $overlaySummary) { throw 'Canceling clear changed saved summaries.' }
+    Invoke-Button $dialog 'ClearPromptSummaries'
+    $clearConsent = Wait-Until { Get-AppWindow 'Clear Prompt Summaries' } 'clear summaries confirmation'
+    $tasks.Add([DemoUITest]::Invoke((Find-Element $clearConsent 'Name' 'Cancel')))
+    Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'declined clear leaves summaries' | Out-Null
+    if ((Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }).recording.promptSummaries[0] -cne $overlaySummary) { throw 'Declining clear changed the summary.' }
+    Invoke-Button $dialog 'ClearPromptSummaries'
+    $clearConsent = Wait-Until { Get-AppWindow 'Clear Prompt Summaries' } 'confirmed clear summaries'
+    $tasks.Add([DemoUITest]::Invoke((Find-Element $clearConsent 'Name' 'OK')))
+    Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'clear confirmation closes' | Out-Null
+    $cleared = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    if (@($cleared.recording.promptSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left saved summaries.' }
+    if (($preserved.recording.turns | ConvertTo-Json -Depth 60 -Compress) -cne ($cleared.recording.turns | ConvertTo-Json -Depth 60 -Compress)) { throw 'Clearing changed original exchanges.' }
+    if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
+    Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
     $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*historical-summary-authoring-*' } | Select-Object -ExpandProperty ProcessId)
     Invoke-Button $dialog 'AiPromptSummaries'
     $aiConsent = Wait-Until { Get-AppWindow 'AI Prompt Summaries' } 'AI authoring setup notice'
@@ -388,6 +410,10 @@ try {
     Wait-Until { $bounds = $overlay.Current.BoundingRectangle; [Math]::Abs($bounds.Width - ($beforeResize.Width - 280)) -lt 4 -and [Math]::Abs($bounds.Height - ($beforeResize.Height + 140)) -lt 4 } 'bottom-right grip changes both dimensions' | Out-Null
     $resized = $overlay.Current.BoundingRectangle
     if ((Find-Element $overlay 'Id' 'PromptText').Current.BoundingRectangle.Height -le $beforeText.Height) { throw 'Summary text did not wrap into more lines after narrowing.' }
+    $narrowTimer = (Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle
+    $narrowPrompt = (Find-Element $overlay 'Id' 'PromptText').Current.BoundingRectangle
+    if ($narrowTimer.Bottom -ge $narrowPrompt.Top) { throw 'Narrow overlay timer is not above the summary.' }
+    if ($narrowPrompt.Width -lt $resized.Width - 70) { throw 'Narrow overlay did not give the text the full available width.' }
     Save-WindowImage $overlay 'overlay-resized-wrapped.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
