@@ -12,7 +12,7 @@ $helper = @'
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
-    const request = JSON.parse(input);
+    const request = JSON.parse(input.replace(/^\uFEFF/, ''));
     if (request.command === 'timeout') return setTimeout(() => {}, 60000);
     setTimeout(() => {
         const failed = request.command === 'failure';

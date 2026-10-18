@@ -1,12 +1,13 @@
 const library = require('./demo-library');
 
 async function main() {
+    process.stdin.setEncoding('utf8');
     let input = '';
     for await (const chunk of process.stdin) {
         input += chunk;
         if (input.length > 1024 * 1024) throw new Error('Library command exceeds 1 MiB.');
     }
-    const request = JSON.parse(input);
+    const request = JSON.parse(input.replace(/^\uFEFF/, ''));
     const root = request.root || library.defaultLibraryRoot();
     switch (request.command) {
         case 'list': return library.listDemos(root);

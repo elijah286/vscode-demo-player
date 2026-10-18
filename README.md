@@ -288,6 +288,10 @@ Output alone does not confirm success if the helper remains running. Timeout
 errors identify the operation and whether it stalled sending the request or
 waiting for helper exit, without adding recording paths, titles or content.
 The helper is stopped and its exit awaited before controls are restored.
+Library requests use UTF-8 streaming decoding, including split Unicode characters
+and the optional leading byte-order mark emitted by some Windows PowerShell
+console encodings. Malformed JSON still fails explicitly; task completion does
+not add extra values to the returned library results.
 Timeout/cancellation is not a rollback: a write may already have reached disk.
 Refresh the library before retrying; no automatic retry or lock removal occurs.
 

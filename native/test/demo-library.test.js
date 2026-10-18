@@ -27,6 +27,40 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('library CLI accepts optional UTF-8 BOM and split Unicode without masking malformed requests', async context => {
+    const { directory, source, inspection } = await fixture(context);
+    const root = path.join(directory, 'library-\u03bb\u6f22\u5b57');
+    const saved = await library.addPackage(root, await library.createPackage(source, [0], 'Synthetic Unicode request', inspection.sha256));
+    const expected = await library.readEntry(root, saved.id);
+    const cli = path.join(__dirname, '..', 'library-cli.js');
+    const preload = path.join(directory, 'split-stdin.cjs');
+    for (const prefix of ['', '\uFEFF']) {
+        const input = prefix + JSON.stringify({ command: 'read', root, id: saved.id });
+        for (const split of [false, true]) {
+            await fs.writeFile(preload, `
+                const bytes = Buffer.from(${JSON.stringify(input)}, 'utf8');
+                Object.defineProperty(process, 'stdin', { value: require('node:stream').Readable.from(
+                    Array.from(bytes, byte => Buffer.from([byte]))) });
+            `);
+            const result = spawnSync(process.execPath, [...(split ? ['--require', preload] : []), cli], {
+                input, encoding: 'utf8', timeout: 30000
+            });
+            assert.ifError(result.error);
+            assert.equal(result.status, 0, result.stdout);
+            assert.deepEqual(JSON.parse(result.stdout), { ok: true, result: expected });
+        }
+        const invalid = spawnSync(process.execPath, [cli], {
+            input: prefix + '{"command":', encoding: 'utf8', timeout: 30000
+        });
+        assert.ifError(invalid.error);
+        assert.equal(invalid.status, 1);
+        const response = JSON.parse(invalid.stdout);
+        assert.equal(response.ok, false);
+        assert.equal(typeof response.error, 'string');
+        assert.ok(response.error.length);
+    }
+});
+
 test('inspection CLI handles the 10,000-turn boundary and rejects excess turns and SDK events explicitly', async context => {
     const { directory, root } = await fixture(context);
     const source = path.join(directory, 'many-turns.jsonl');
