@@ -277,6 +277,19 @@ details** shows errors and limits; row tooltips explain partial, unavailable
 and unsupported sources. Chat titles use the VS Code index where available.
 Loading reconstructs and validates the full selected recording (100 MiB maximum)
 with a 30-second helper limit and reentrant controls disabled until done.
+The isolated helper check exercises the real inspect/capture/read commands with
+a synthetic multi-megabyte response, then checks delayed success, explicit
+failure, UI responsiveness and the unchanged 30-second timeout:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\capture-helper.ps1 -NodePath 'C:\Tools\node\node.exe'
+```
+
+It uses a temporary library, does not show windows or access real recordings,
+and removes its fixtures afterward. A passing check does not diagnose a timeout
+on a different recording; record which action failed (load, save, library
+refresh, etc.) and reproduce with a sanitized synthetic fixture before
+changing the timeout.
 
 SDK event recordings normalize saved prompts, assistant text and tool transitions
 for playback. Original selected events, tool-result data, initial context and
