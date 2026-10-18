@@ -33,7 +33,7 @@ function Start-DemoLibraryProcess([hashtable]$Request) {
 
 function Complete-DemoLibraryInput($State) {
     if (-not $State.InputClosed -and $State.Input.IsCompleted) {
-        $State.Input.GetAwaiter().GetResult()
+        $null = $State.Input.GetAwaiter().GetResult()
         $State.Process.StandardInput.BaseStream.Close()
         $State.InputClosed = $true
     }

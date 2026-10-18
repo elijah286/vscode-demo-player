@@ -54,11 +54,15 @@ try {
     $previousContext = [Threading.SynchronizationContext]::Current
     try {
         [Threading.SynchronizationContext]::SetSynchronizationContext([Windows.Threading.DispatcherSynchronizationContext]::new())
-        $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+        $readResults = @(Invoke-DemoLibrary @{ command = 'read'; id = $saved.id })
+        if ($readResults.Count -ne 1) { throw 'A no-owner read emitted values other than its single response.' }
+        $entry = $readResults[0]
         if ($entry.recording.turns[0].snapshot.requests[0].response[0].value -ne $answer) { throw 'Dispatcher library read lost saved response content.' }
     } finally { [Threading.SynchronizationContext]::SetSynchronizationContext($previousContext) }
     $listed = @(Invoke-DemoLibrary @{ command = 'list' } $owner)
     if ($listed.Count -ne 1 -or $listed[0].id -ne $saved.id) { throw 'Actual list did not return the captured entry.' }
+    $listed = @(Invoke-DemoLibrary @{ command = 'list' })
+    if ($listed.Count -ne 1 -or $listed[0].id -ne $saved.id) { throw 'A no-owner list emitted values other than its captured entry.' }
     $renamed = Invoke-DemoLibrary @{ command = 'rename'; id = $saved.id; title = 'Renamed synthetic demo' } $owner
     if ($renamed.title -ne 'Renamed synthetic demo') { throw 'Actual rename was not confirmed.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $saved.id; summaries = @('Synthetic reviewed summary'); expected = $null } $owner | Out-Null
@@ -71,6 +75,7 @@ try {
         if ($imported.presentation.overlay.promptSummary -ne 'Synthetic reviewed summary') { throw 'Actual import/export lost reviewed summaries.' }
         Invoke-DemoLibrary @{ command = 'delete'; id = $imported.id } $owner | Out-Null
         if (@(Invoke-DemoLibrary @{ command = 'list' } $owner).Count) { throw 'Actual delete did not remove the imported entry.' }
+        if (@(Invoke-DemoLibrary @{ command = 'list' }).Count) { throw 'An empty no-owner list emitted an unexpected result.' }
     } finally { $script:LibraryRoot = $originalLibrary }
     $storage = Join-Path $scratch 'workspaceStorage'
     $workspace = Join-Path $storage ('a' * 32)
