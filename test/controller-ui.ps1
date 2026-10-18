@@ -102,8 +102,10 @@ function Get-AppWindow([string]$Title) {
 }
 
 function Invoke-Button($Parent, [string]$Id) {
-    $element = Find-Element $Parent 'Id' $Id
-    if (-not $element -or -not $element.Current.IsEnabled) { throw ('UI button is unavailable: ' + $Id) }
+    $element = Wait-Until {
+        $candidate = Find-Element $Parent 'Id' $Id
+        if ($candidate -and $candidate.Current.IsEnabled) { return $candidate }
+    } ('enabled UI button: ' + $Id)
     $script:tasks.Add([DemoUITest]::Invoke($element))
 }
 
