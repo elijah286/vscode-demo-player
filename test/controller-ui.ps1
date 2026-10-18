@@ -388,17 +388,22 @@ try {
     $authoringId = 0
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
-    Wait-Until {
+    $selectedControls = Wait-Until {
+        $controls = @{}
         foreach ($id in @('PlayPause', 'ShowPrompt', 'ShowElapsed')) {
             $control = Find-Element $window 'Id' $id
             if (-not $control -or -not $control.Current.IsEnabled) { return $false }
+            $controls[$id] = $control
         }
-        return $true
-    } 'selected demo and both presentation controls ready' | Out-Null
-    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
-    $showPrompt = Find-Element $window 'Id' 'ShowPrompt'
-    $showElapsed = Find-Element $window 'Id' 'ShowElapsed'
-    if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) { throw 'Selected demo presentation options must be enabled before Open.' }
+        return $controls
+    } 'selected demo and both presentation controls ready'
+    if ($selectedControls.PlayPause.Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
+    $showPrompt = $selectedControls.ShowPrompt
+    $showElapsed = $selectedControls.ShowElapsed
+    if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) {
+        throw ('Selected demo presentation options must be enabled before Open. Prompt: ' + ($showPrompt | Out-String).Trim() +
+            '; elapsed: ' + ($showElapsed | Out-String).Trim() + '; controller enabled: ' + $window.Current.IsEnabled)
+    }
     if (Get-AppWindow 'Playback overlay') { throw 'Presentation must default to hidden.' }
     ([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
