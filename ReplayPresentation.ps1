@@ -92,7 +92,7 @@ function Update-ReplayOverlays {
     $script:overlayWindow.MinWidth = if ($promptVisible) { 280 } else { 238 }
     if (-not $script:overlayResized) {
         $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
-        $script:overlayWindow.Height = if ($promptVisible) { 180 } else { 104 }
+        $script:overlayWindow.Height = if ($promptVisible) { Get-OverlayPromptHeight $script:overlayWindow.Width $timerVisible } else { 104 }
     }
     $script:overlayWindow.MinHeight = if ($promptVisible) { 132 } else { 104 }
     Update-OverlayLayout
@@ -100,6 +100,23 @@ function Update-ReplayOverlays {
         $script:overlayWindow.Owner = $window
         if (-not $script:overlayWindow.IsVisible) { $script:overlayWindow.Show() }
     } else { $script:overlayWindow.Hide() }
+}
+
+function Get-OverlayPromptHeight([double]$Width, [bool]$WithTimer) {
+    $timerPanel.Measure([System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+    $stacked = $WithTimer -and $Width -lt 640
+    $textWidth = $Width - 40
+    if ($WithTimer -and -not $stacked) { $textWidth -= $timerPanel.DesiredSize.Width + 24 }
+    $measurement = [System.Windows.Controls.TextBlock]::new()
+    $measurement.FontFamily = $promptText.FontFamily
+    $measurement.FontSize = $promptText.FontSize
+    $measurement.FontWeight = $promptText.FontWeight
+    $measurement.TextWrapping = 'Wrap'
+    $measurement.Text = $promptText.Text
+    $measurement.Measure([System.Windows.Size]::new([Math]::Max(1, $textWidth), [double]::PositiveInfinity))
+    $height = 32 + 24 + [Math]::Ceiling($measurement.DesiredSize.Height)
+    if ($stacked) { $height += $timerPanel.DesiredSize.Height + 12 }
+    return [Math]::Min([Math]::Max(180, $height), [Math]::Max(132, $area.Height - 32))
 }
 
 function Set-OverlayFrameColor([System.Windows.Media.Color]$Color) {

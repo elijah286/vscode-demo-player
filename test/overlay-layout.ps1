@@ -66,7 +66,21 @@ try {
     Assert-Layout ($narrowTextHeight -gt $promptText.DesiredSize.Height) 'Text did not rewrap when narrowing the stacked layout.'
     Assert-Layout ($promptText.TextWrapping -eq 'Wrap') 'Wrapping was disabled.'
     Assert-Layout ($elapsedText.Text -eq '00:00:00' -and $promptProgress.Text -eq '1/24') 'Layout modified timing or progress.'
-    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; real WPF measure/arrange, 280-820 widths, 132-500 heights, exact 639/640 breakpoint, full remaining text area, wrapping, wide restoration and single-option layouts. No windows shown."
+    $scroll = @($promptPanel.Children | Where-Object { $_ -is [System.Windows.Controls.ScrollViewer] })[0]
+    foreach ($text in @(('W' * 300), ('A faithful synthetic summary of the original request. ' * 6).Substring(0,300), ([string][char]0x754C * 300))) {
+        $promptText.Text = $text
+        foreach ($layout in @(@{ Width = 720; Timer = $false }, @{ Width = 820; Timer = $true }, @{ Width = 480; Timer = $true }, @{ Width = 280; Timer = $true })) {
+            Arrange-Overlay $layout.Width 500 $true $layout.Timer
+            $height = Get-OverlayPromptHeight $layout.Width $layout.Timer
+            Arrange-Overlay $layout.Width $height $true $layout.Timer
+            Assert-Layout ($promptText.Text.Length -eq 300) 'The exact summary budget was shortened.'
+            Assert-Layout ($scroll.ScrollableHeight -lt 1) "A 300-character summary does not fit the auto-sized ${height} high overlay at width $($layout.Width), timer $($layout.Timer). Scrollable height $($scroll.ScrollableHeight)."
+            Assert-Layout ($height -le $area.Height - 32) 'Automatic sizing exceeds the work area.'
+        }
+    }
+    Arrange-Overlay 280 132
+    Assert-Layout ($scroll.ScrollableHeight -gt 0) 'A manually shortened overlay must scroll instead of truncating.'
+    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; real WPF measure/arrange, 280-820 widths, 132-500 heights, exact 639/640 breakpoint, wrapping and toggles; exact 300-character wide-Latin, prose and CJK summaries fit measured automatic heights with/without timer; manually shortened windows scroll. No windows shown."
 } finally {
     $script:closeAllowed = $true
     $script:overlayWindow.Close()

@@ -703,13 +703,14 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
   <TextBlock Text="Summaries change only the floating overlay. Playback keeps the complete original prompts. Blank uses the original excerpt. Summaries are included when exporting." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <ComboBox x:Name="Exchange" Grid.Row="1" Margin="0,0,0,10" AutomationProperties.AutomationId="SummaryExchange"/>
   <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
-  <TextBlock Grid.Row="3" Text="Overlay summary (up to 200 characters, one line)" Margin="0,12,0,6"/>
-  <TextBox x:Name="Summary" Grid.Row="4" MaxLength="200" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
-  <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+  <TextBlock Grid.Row="3" Text="Overlay summary (up to 300 characters, one line)" Margin="0,12,0,6"/>
+  <TextBox x:Name="Summary" Grid.Row="4" MaxLength="300" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
+  <WrapPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
    <Button x:Name="Clear" Content="Clear all summaries" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="ClearSummaryDrafts"/>
+   <Button x:Name="DeleteSummary" Content="Delete this summary" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="DeletePromptSummary"/>
    <Button x:Name="Cancel" Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
    <Button x:Name="Save" Content="Save summaries" Padding="16,6" AutomationProperties.AutomationId="SaveSummaries"/>
-  </StackPanel>
+  </WrapPanel>
  </Grid>
 </Window>
 '@ $Owner
@@ -739,6 +740,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
         $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
         $summary.Text = ''
     })
+    $dialog.FindName('DeleteSummary').Add_Click({ $summary.Text = '' })
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
@@ -750,7 +752,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 }
 
 function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 200-character summary budget in this selection. Short prompts and existing summaries are preserved. An isolated VS Code authoring window opens; enable an AI provider and sign in there if needed. One consent and model selection cover the batch, with one provider request per long prompt. Review and save the whole batch once. Return here to use the selection; playback reads the latest summaries and never calls AI. Clear all summaries restores original excerpts.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 300-character summary budget in this selection. Short prompts and existing summaries are preserved. An isolated VS Code authoring window opens; enable an AI provider and sign in there if needed. One consent and model selection cover the batch, with one provider request per long prompt. After generation a review panel opens automatically: compare originals, edit, approve individually, delete only summaries, or approve all. Save the reviewed batch, return here to use the selection, and enable Show prompt summary in the controller. Playback keeps the full original prompts and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
 }
 

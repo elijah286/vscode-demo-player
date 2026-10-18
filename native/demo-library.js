@@ -3,7 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { fileURLToPath } = require('node:url');
 const { sdkSnapshot } = require('./sdk-transcript');
-const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf } = require('./replay');
+const { applyTranscriptRecord, extractRecording, validateEditorRecording, kindOf, MAX_PROMPT_SUMMARY_LENGTH } = require('./replay');
 const { INTERNAL_PARTS, inlineReferenceLabel, savedEditText } = require('./saved-parts');
 const { controlView } = require('./control-server');
 
@@ -164,8 +164,8 @@ async function packageRecordings(file) {
 function validatePromptSummaries(summaries, count) {
     if (summaries === undefined) return;
     if (!Array.isArray(summaries) || summaries.length !== count || summaries.some(value =>
-        value !== null && (typeof value !== 'string' || !value.trim() || value.length > 200 || /[\r\n]/.test(value)))) {
-        throw new Error('Supply one summary per exchange: null for the original excerpt, or 1 to 200 characters on one line.');
+        value !== null && (typeof value !== 'string' || !value.trim() || value.length > MAX_PROMPT_SUMMARY_LENGTH || /[\r\n]/.test(value)))) {
+        throw new Error('Supply one summary per exchange: null for the original excerpt, or 1 to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters on one line.');
     }
 }
 

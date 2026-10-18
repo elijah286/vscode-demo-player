@@ -397,6 +397,8 @@ its width and height. Text wraps to the available width; a vertical scrollbar
 keeps text accessible in a short window. With both options enabled, widths below
 640 WPF layout units place the timer at the top and give the summary the full
 width and remaining height below it. Wider windows keep the side-by-side layout.
+Until you manually resize, the overlay measures the actual summary font and
+available width and adjusts its height to fit, bounded by the screen work area.
 Your chosen dimensions survive prompt
 updates, checkbox changes, Stop, and mode switches within that controller session.
 
@@ -408,7 +410,7 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layo
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
 original prompt. In the interaction picker, use **Review / edit summaries...**, select an
-exchange and write or edit its overlay text (one line, up to 200 characters).
+exchange and write or edit its overlay text (one line, up to 300 characters).
 Leave an entry blank to use its original excerpt, then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn.
@@ -418,7 +420,8 @@ summaries, including AI-generated and manually edited summaries, after
 confirmation. Default prompt excerpts return; original prompts/responses and
 per-turn hashes are unchanged. In the manual editor, **Clear all summaries**
 clears the drafts for every exchange; **Save summaries** applies that change,
-while **Cancel** discards it.
+while **Cancel** discards it. **Delete this summary** clears only the current
+exchange's summary draft, never its original prompt.
 
 **Summarize long prompts with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate, isolated VS Code
@@ -431,8 +434,8 @@ or installed extensions. If no model is available, an explicit error explains
 setup; manual summaries still work.
 
 There is no per-exchange chooser: one batch covers every prompt that exceeds
-the 200-character summary budget after whitespace normalization and does not
-already have a saved summary. Exactly 200 characters fits; 201 needs a summary.
+the 300-character summary budget after whitespace normalization and does not
+already have a saved summary. Exactly 300 characters fits; 301 needs a summary.
 This is a stable text budget, not a guarantee that text fits every resized
 window without scrolling. Short prompts and existing summaries are preserved.
 The full eligible queries are shown for review before one batch consent and
@@ -441,28 +444,44 @@ instructions, never recorded answers or tool payloads.
 Progress identifies the current exchange. The batch is cancellable, with a
 90-second limit per request. Failures, cancellation, over-context input, and
 invalid/overlong output leave the entire library unchanged; no partial results
-are saved. Once generation completes, review all suggestions in one JSON
-document, optionally edit its summary strings, and choose **Save summaries**
-once. Dismissing review cancels without saving. Invalid JSON, altered exchange
-order/count or invalid summary strings are reported without saving.
+are saved. Once generation completes, a **Review prompt summaries** panel opens
+automatically, with an exchange list, the full read-only original prompt and an
+editable summary with a live character count. Use **Previous** / **Next** or
+the list to compare exchanges. **Approve & next** approves one summary;
+**Delete summary & next** removes only the summary (the overlay reverts to the
+original excerpt). **Approve all remaining** preserves deletions. Editing an
+approved or deleted summary makes it pending again. Blank, multiline and
+over-budget summaries cannot be approved; delete the summary instead.
+**Save reviewed summaries for playback** is available only after every draft
+has been approved or deleted. It saves the reviewed batch once.
+**Cancel** or closing the panel leaves the library unchanged. Switching editor
+tabs retains review edits. Invalid decisions or changed exchange order/count
+are rejected without saving.
 Use **Demo Player: Summarize Long Prompts** in that window's Command Palette to
 retry a canceled batch. To regenerate saved summaries, clear them first.
 Return to the picker and click **Use selected exchanges** or **Use saved selection**;
 either reads the latest saved summaries without refreshing or reselecting.
+Enable **Show prompt summary** in the controller to display them; this toggle
+stays off by default. The native chat prompt itself intentionally remains full-length.
 Close the authoring window
 when finished. Its private temporary profile remains under the Windows temp
 directory (`historical-summary-authoring-*`); it is not shipped or committed.
 
 Summaries are optional package metadata and survive export/import. Concurrent
 summary edits are rejected rather than overwritten; reopen the editor to reload.
+Packages or playlists with summaries above 200 characters require this update;
+older players enforce their earlier limit and reject them.
 Original prompts, responses, per-turn payload hashes, and source bytes are
 unchanged. Playback always types the full original prompt, never invokes AI,
 and works without sign-in or network access. No recording-specific summaries
 are shipped.
 
 Authoring-only native acceptance creates a synthetic multi-prompt recording
-and library entry in an isolated profile when no fixture is supplied, with no
-installed AI providers and no model requests:
+and library entry in an isolated profile when no fixture is supplied. It tests
+missing-provider guidance, then supplies an in-process synthetic provider to
+exercise the real consent/progress/review webview, approval/edit/delete/all
+actions, 300-character playback fidelity and cancellation. No external AI
+requests or real-library/profile changes occur:
 
 ```powershell
 Set-Location native

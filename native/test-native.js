@@ -16,12 +16,14 @@ async function main() {
         fs.writeFileSync(source, JSON.stringify({ kind: 0, v: { requests: [
             { result: {}, message: { text: 'First synthetic long prompt. '.repeat(12) }, response: [{ value: 'Original synthetic answer.' }] },
             { result: {}, message: { text: 'Second synthetic long prompt. '.repeat(12) }, response: [{ value: 'Second original answer.' }] },
+            { result: {}, message: { text: 'Third synthetic long prompt. '.repeat(12) }, response: [{ value: 'Third original answer.' }] },
+            { result: {}, message: { text: 'Fourth synthetic long prompt. </script><script>throw new Error("Recorded data must not run")</script> '.repeat(5) }, response: [{ value: 'Fourth original answer.' }] },
             { result: {}, message: { text: 'Short prompt' }, response: [{ value: 'Short answer.' }] }
         ] } }) + '\n');
         const library = require('./demo-library');
         const inspection = await library.inspectTranscript(source);
         const root = path.join(profile, 'synthetic-library');
-        const added = await library.addPackage(root, await library.createPackage(source, [0, 1, 2], 'Synthetic batch summaries', inspection.sha256));
+        const added = await library.addPackage(root, await library.createPackage(source, [0, 1, 2, 3, 4], 'Synthetic batch summaries', inspection.sha256));
         summaryEntry = path.join(root, added.id + '.demo.json');
     }
     if (artifacts) {

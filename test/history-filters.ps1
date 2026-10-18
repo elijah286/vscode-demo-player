@@ -361,6 +361,21 @@ try {
     $exchange.Add_SelectionChanged($selectionNode.Arguments[0].ScriptBlock.GetScriptBlock())
     $exchange.SelectedIndex = 0
     Assert-Equal $summary.Text 'First saved summary' 'Summary editor loads saved text'
+    Assert-Equal $summary.MaxLength 300 'Manual editor uses the shared 300-character budget'
+    $summary.Text = 'x' * 300
+    & $storeDraft
+    Assert-Equal $dialog.Tag.Summaries[0].Length 300 'A full-budget manual summary is preserved'
+    $deleteNode = $summaryFunction.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+        $node.Member.Value -eq 'Add_Click' -and $node.Expression.Extent.Text -eq '$dialog.FindName(''DeleteSummary'')'
+    }, $true)
+    Assert-Equal ($null -ne $deleteNode) $true 'Individual delete-summary handler exists'
+    & ($deleteNode.Arguments[0].ScriptBlock.GetScriptBlock())
+    & $storeDraft
+    Assert-Equal ($null -eq $dialog.Tag.Summaries[0]) $true 'Individual deletion clears only the current summary'
+    Assert-Equal $dialog.Tag.Summaries[1] 'Second saved summary' 'Individual deletion preserves other summaries'
+    Assert-Equal $dialog.FindName('Original').Text 'First original query' 'Individual deletion never deletes the original prompt'
     $clearNode = $summaryFunction.Find({
         param($node)
         $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
