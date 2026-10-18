@@ -47,6 +47,13 @@ jobs:
       - name: Check history filters and bounded selection previews
         shell: powershell
         run: .\test\history-filters.ps1
+      - name: Check library helper deadlines and lifecycle without showing windows
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\capture-helper.ps1 -NodePath (Get-Command node.exe).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\library-helper-lifecycle.ps1 -NodePath (Get-Command node.exe).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check responsive overlay layout without showing windows
         shell: powershell
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layout.ps1

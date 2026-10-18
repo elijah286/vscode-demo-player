@@ -277,6 +277,36 @@ details** shows errors and limits; row tooltips explain partial, unavailable
 and unsupported sources. Chat titles use the VS Code index where available.
 Loading reconstructs and validates the full selected recording (100 MiB maximum)
 with a 30-second helper limit and reentrant controls disabled until done.
+The same responsive, disabled-owner wait is used for saved-library refresh,
+import, rename, delete and export. The budget includes sending the request:
+a helper that stops reading stdin cannot freeze the window before the watchdog
+starts. Closing the owning window cancels and stops that helper. History
+discovery retains its separate 60-second budget and streamed progress.
+
+Success requires a complete successful response **and** a zero-exit helper.
+Output alone does not confirm success if the helper remains running. Timeout
+errors identify the operation and whether it stalled sending the request or
+waiting for helper exit, without adding recording paths, titles or content.
+The helper is stopped and its exit awaited before controls are restored.
+Timeout/cancellation is not a rollback: a write may already have reached disk.
+Refresh the library before retrying; no automatic retry or lock removal occurs.
+
+The isolated helper checks exercise all 11 real CLI commands with synthetic
+recordings and reviewed summaries, including a multi-megabyte response.
+They also check delayed success, explicit failure, responsive saved refresh,
+blocked stdin, output without process exit, streamed history and owner-close
+cancellation against the unchanged 30-second deadline:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\capture-helper.ps1 -NodePath 'C:\Tools\node\node.exe'
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\library-helper-lifecycle.ps1 -NodePath 'C:\Tools\node\node.exe'
+```
+
+These checks use temporary libraries, do not show windows or access real recordings,
+and remove their fixtures afterward. A passing check does not diagnose a timeout
+on a different recording; record which action failed (load, save, library
+refresh, etc.) and reproduce with a sanitized synthetic fixture before
+changing the timeout.
 
 SDK event recordings normalize saved prompts, assistant text and tool transitions
 for playback. Original selected events, tool-result data, initial context and
