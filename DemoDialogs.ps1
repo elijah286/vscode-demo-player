@@ -3,6 +3,8 @@ function Start-DemoLibraryProcess([hashtable]$Request) {
         $script:NodePath = Resolve-PlayerNode
     }
     $Request.root = $script:LibraryRoot
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(($Request | ConvertTo-Json -Depth 10 -Compress))
+    $operation = if ($Request.command -in @('list', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read')) { $Request.command } else { 'unknown' }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $script:NodePath
     $start.Arguments = '"' + (Join-Path $PSScriptRoot 'native\library-cli.js') + '"'
@@ -13,61 +15,105 @@ function Start-DemoLibraryProcess([hashtable]$Request) {
     $start.RedirectStandardError = $true
     $start.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $start.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $process = [System.Diagnostics.Process]::Start($start)
-    if (-not $process) { throw 'The demo library helper could not start.' }
+    $state = @{
+        Process = $null; Input = $null; InputClosed = $false; Cancelled = $false
+        Operation = $operation; Clock = [Diagnostics.Stopwatch]::StartNew()
+    }
     try {
-        $writer = [System.IO.StreamWriter]::new($process.StandardInput.BaseStream, [System.Text.UTF8Encoding]::new($false), 4096, $true)
-        try { $writer.Write(($Request | ConvertTo-Json -Depth 10 -Compress)); $writer.Flush() }
-        finally { $writer.Dispose() }
-        $process.StandardInput.Close()
-        return $process
+        $state.Process = [System.Diagnostics.Process]::Start($start)
+        if (-not $state.Process) { throw 'The demo library helper could not start.' }
+        # Do not block the dispatcher (or the watchdog) on a helper that is not reading stdin.
+        $state.Input = $state.Process.StandardInput.BaseStream.WriteAsync($bytes, 0, $bytes.Length)
+        return $state
     } catch {
-        try { if (-not $process.HasExited) { $process.Kill() } }
-        finally { $process.Dispose() }
+        if ($state.Process) { Stop-DemoLibraryProcess $state } else { $state.Clock.Stop() }
         throw
     }
 }
 
+function Complete-DemoLibraryInput($State) {
+    if (-not $State.InputClosed -and $State.Input.IsCompleted) {
+        $State.Input.GetAwaiter().GetResult()
+        $State.Process.StandardInput.BaseStream.Close()
+        $State.InputClosed = $true
+    }
+}
+
+function Stop-DemoLibraryProcess($State) {
+    try {
+        if (-not $State.Process.HasExited) { $State.Process.Kill() }
+        if (-not $State.Process.WaitForExit(2000)) { throw 'The demo library helper did not exit after it was stopped.' }
+    } finally {
+        try {
+            $State.Process.StandardInput.BaseStream.Dispose()
+            $State.Process.StandardOutput.Dispose()
+            $State.Process.StandardError.Dispose()
+        } finally { $State.Process.Dispose(); $State.Clock.Stop() }
+    }
+}
+
 function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
-    $process = Start-DemoLibraryProcess $Request
+    $state = Start-DemoLibraryProcess $Request
+    $process = $state.Process
+    $timer = $null
+    $onTick = $null
+    $onClosed = $null
+    $ownerStateSaved = $false
     try {
         $output = $process.StandardOutput.ReadToEndAsync()
         $errors = $process.StandardError.ReadToEndAsync()
-        $exited = $false
         if ($Owner) {
             $enabled = $Owner.IsEnabled
             $cursor = $Owner.Cursor
+            $ownerStateSaved = $true
             $frame = [System.Windows.Threading.DispatcherFrame]::new()
             $timer = [System.Windows.Threading.DispatcherTimer]::new()
             $timer.Interval = [TimeSpan]::FromMilliseconds(50)
-            $elapsed = [Diagnostics.Stopwatch]::StartNew()
-            $timer.Add_Tick({
-                if ($process.HasExited -or $elapsed.ElapsedMilliseconds -ge 30000) { $frame.Continue = $false }
-            })
-            try {
-                $Owner.IsEnabled = $false
-                $Owner.Cursor = [System.Windows.Input.Cursors]::Wait
-                $timer.Start()
-                [System.Windows.Threading.Dispatcher]::PushFrame($frame)
-                $exited = $process.HasExited
-            } finally {
-                $timer.Stop()
-                $elapsed.Stop()
-                $Owner.IsEnabled = $enabled
-                $Owner.Cursor = $cursor
-            }
-        } else { $exited = $process.WaitForExit(30000) }
-        if (-not $exited) {
-            $process.Kill()
-            throw 'The demo library operation exceeded 30 seconds. No success was confirmed. Refresh the library before retrying.'
+            $completeInput = ${function:Complete-DemoLibraryInput}
+            $onTick = {
+                try {
+                    & $completeInput $state
+                    if ($state.Process.HasExited -or $state.Clock.ElapsedMilliseconds -ge 30000) { $frame.Continue = $false }
+                } catch { $state.Failure = $_; $frame.Continue = $false }
+            }.GetNewClosure()
+            $onClosed = { $state.Cancelled = $true; $frame.Continue = $false }.GetNewClosure()
+            $timer.Add_Tick($onTick)
+            $Owner.Add_Closed($onClosed)
+            $Owner.IsEnabled = $false
+            $Owner.Cursor = [System.Windows.Input.Cursors]::Wait
+            $timer.Start()
+            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+        } else {
+            do {
+                Complete-DemoLibraryInput $state
+                if ($process.HasExited) { break }
+                $process.WaitForExit(50) | Out-Null
+            } while ($state.Clock.ElapsedMilliseconds -lt 30000)
         }
+        if ($state.Cancelled) {
+            throw ("The demo library operation '" + $state.Operation + "' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.")
+        }
+        if ($state.Failure) { throw $state.Failure }
+        if (-not $process.HasExited) {
+            $phase = if ($state.InputClosed) { 'waiting for helper exit' } else { 'sending the request' }
+            throw ("The demo library operation '" + $state.Operation + "' exceeded 30 seconds while " + $phase + '. No success was confirmed. Refresh the library before retrying.')
+        }
+        Complete-DemoLibraryInput $state
+        if (-not $state.InputClosed) { throw 'The demo library helper exited before the request was sent. No success was confirmed.' }
         if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($output, $errors), 2000)) { throw 'Timed out reading the library helper output.' }
         $text = $output.GetAwaiter().GetResult()
         if (-not $text) { throw ('The demo library helper returned no result. ' + $errors.GetAwaiter().GetResult()) }
         $response = ConvertFrom-Json -InputObject $text
         if (-not $response.ok -or $process.ExitCode -ne 0) { throw $response.error }
         return $response.result
-    } finally { $process.Dispose() }
+    } finally {
+        if ($timer) { $timer.Stop(); $timer.Remove_Tick($onTick) }
+        if ($onClosed) { $Owner.Remove_Closed($onClosed) }
+        try { Stop-DemoLibraryProcess $state }
+        finally {
+            if ($ownerStateSaved) { $Owner.IsEnabled = $enabled; $Owner.Cursor = $cursor }
+        }
+    }
 }
 
 function New-DemoDialog([string]$Xaml, $Owner) {
@@ -398,20 +444,20 @@ function Show-InteractionPicker($Owner) {
         $scanTimer.Stop()
         $scan = $dialog.Tag.Scan
         if ($scan) {
-            try { if ($Cancel -and -not $scan.Process.HasExited) { $scan.Process.Kill() } }
-            finally { $scan.Process.Dispose(); $scan.Clock.Stop(); $dialog.Tag.Scan = $null }
+            try { Stop-DemoLibraryProcess $scan }
+            finally { $dialog.Tag.Scan = $null }
         }
         foreach ($name in @('Refresh', 'AddLocation', 'Load', 'Browse')) { $dialog.FindName($name).IsEnabled = $true }
     }
     $startScan = {
         if ($dialog.Tag.Scan) { return }
         try {
-            $process = Start-DemoLibraryProcess @{ command = 'history'; locations = @($dialog.Tag.Locations); progress = $true }
-            $dialog.Tag.Scan = @{
-                Process = $process; Line = $process.StandardOutput.ReadLineAsync()
-                Errors = $process.StandardError.ReadToEndAsync(); Clock = [Diagnostics.Stopwatch]::StartNew()
-                Result = $null; End = $false
-            }
+            $scan = Start-DemoLibraryProcess @{ command = 'history'; locations = @($dialog.Tag.Locations); progress = $true }
+            $dialog.Tag.Scan = $scan
+            $scan.Line = $scan.Process.StandardOutput.ReadLineAsync()
+            $scan.Errors = $scan.Process.StandardError.ReadToEndAsync()
+            $scan.Result = $null
+            $scan.End = $false
             $dialog.Tag.Rows.Clear()
             $dialog.Tag.Warnings.Clear()
             foreach ($name in @('Refresh', 'AddLocation', 'Load', 'Browse')) { $dialog.FindName($name).IsEnabled = $false }
@@ -428,6 +474,7 @@ function Show-InteractionPicker($Owner) {
             $scan = $dialog.Tag.Scan
             if (-not $scan) { return }
             if ($scan.Clock.Elapsed.TotalSeconds -ge 60) { throw 'History discovery exceeded 60 seconds. Partial rows remain visible; refresh to retry.' }
+            Complete-DemoLibraryInput $scan
             for ($read = 0; $read -lt 50 -and -not $scan.End -and $scan.Line.IsCompleted; $read++) {
                 $line = $scan.Line.GetAwaiter().GetResult()
                 if ($null -eq $line) { $scan.End = $true; break }
@@ -754,7 +801,7 @@ function Show-InteractionPickerWindow($dialog) {
         $dialog.FindName('Count').Text = $list.Items.Count.ToString() + ' saved selections'
     }
     $refresh = {
-        $dialog.Tag.Entries = @(Invoke-DemoLibrary @{ command = 'list' })
+        $dialog.Tag.Entries = @(Invoke-DemoLibrary @{ command = 'list' } $dialog)
         & $filter
     }
     $search.Add_TextChanged({ & $filter })
@@ -786,14 +833,14 @@ function Show-InteractionPickerWindow($dialog) {
             $file = Select-DemoFile $dialog 'Demo recording packages (*.demo-recording.json)|*.demo-recording.json|JSON files (*.json)|*.json'
             if ($file) {
                 $answer = [System.Windows.MessageBox]::Show($dialog, 'Import this local recording? It may contain sensitive content. Review it before sharing. No recorded tools will execute.', 'Import Recording', 'YesNo', 'Warning')
-                if ($answer -eq 'Yes') { Invoke-DemoLibrary @{ command = 'import'; file = $file } | Out-Null; & $refresh }
+                if ($answer -eq 'Yes') { Invoke-DemoLibrary @{ command = 'import'; file = $file } $dialog | Out-Null; & $refresh }
             }
         } catch { Show-DemoError $dialog $_ }
     })
     $dialog.FindName('Rename').Add_Click({
         try {
             if (-not $list.SelectedItem) { throw 'Select a demo to rename.' }
-            Invoke-DemoLibrary @{ command = 'rename'; id = $list.SelectedItem.Entry.id; title = $dialog.FindName('SavedTitle').Text } | Out-Null
+            Invoke-DemoLibrary @{ command = 'rename'; id = $list.SelectedItem.Entry.id; title = $dialog.FindName('SavedTitle').Text } $dialog | Out-Null
             & $refresh
         } catch { Show-DemoError $dialog $_ }
     })
@@ -802,7 +849,7 @@ function Show-InteractionPickerWindow($dialog) {
             if (-not $list.SelectedItem) { throw 'Select a demo to delete.' }
             $entry = $list.SelectedItem.Entry
             if ([System.Windows.MessageBox]::Show($dialog, ('Delete "' + $entry.title + '" from this library? Original conversation storage and exported copies will not be changed.'), 'Delete Demo', 'YesNo', 'Warning') -eq 'Yes') {
-                Invoke-DemoLibrary @{ command = 'delete'; id = $entry.id } | Out-Null
+                Invoke-DemoLibrary @{ command = 'delete'; id = $entry.id } $dialog | Out-Null
                 & $refresh
             }
         } catch { Show-DemoError $dialog $_ }
@@ -814,7 +861,7 @@ function Show-InteractionPickerWindow($dialog) {
             $picker.Filter = 'Demo recording packages (*.demo-recording.json)|*.demo-recording.json'
             $picker.FileName = 'recording.demo-recording.json'
             if ($picker.ShowDialog($dialog)) {
-                Invoke-DemoLibrary @{ command = 'export'; id = $list.SelectedItem.Entry.id; file = $picker.FileName } | Out-Null
+                Invoke-DemoLibrary @{ command = 'export'; id = $list.SelectedItem.Entry.id; file = $picker.FileName } $dialog | Out-Null
                 [System.Windows.MessageBox]::Show($dialog, 'Recording exported. Review the package for sensitive content before sharing.', 'Demo Player') | Out-Null
             }
         } catch { Show-DemoError $dialog $_ }

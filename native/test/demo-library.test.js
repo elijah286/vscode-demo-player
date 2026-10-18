@@ -27,6 +27,34 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('inspection CLI handles the 10,000-turn boundary and rejects excess turns and SDK events explicitly', async context => {
+    const { directory, root } = await fixture(context);
+    const source = path.join(directory, 'many-turns.jsonl');
+    const request = { result: {}, message: { text: 'Synthetic prompt' }, response: [{ value: 'Synthetic answer' }] };
+    const inspect = () => {
+        const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'library-cli.js')], {
+            input: JSON.stringify({ command: 'inspect', root, file: source }), encoding: 'utf8',
+            timeout: 30000, maxBuffer: 32 * 1024 * 1024
+        });
+        assert.ifError(result.error);
+        return { status: result.status, ...JSON.parse(result.stdout) };
+    };
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests: Array(10000).fill(request) } }));
+    const accepted = inspect();
+    assert.equal(accepted.status, 0);
+    assert.equal(accepted.result.turns.length, 10000);
+    assert.equal(accepted.result.turns[9999].index, 9999);
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests: Array(10001).fill(request) } }));
+    const turns = inspect();
+    assert.equal(turns.status, 1);
+    assert.match(turns.error, /10,000-turn inspection limit/);
+    const start = JSON.stringify({ type: 'session.start', data: { version: 1, sessionId: 'synthetic-events' } });
+    await fs.writeFile(source, start + '\n' + (JSON.stringify({ type: 'assistant.turn_end', data: {} }) + '\n').repeat(100000));
+    const events = inspect();
+    assert.equal(events.status, 1);
+    assert.match(events.error, /100,000-event limit/);
+});
+
 test('capture reconstructs final state, preserves payloads and order, and excludes unselected turns', async context => {
     const { source, inspection, tool } = await fixture(context);
     const before = await fs.readFile(source);

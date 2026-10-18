@@ -31,6 +31,13 @@ Assert-Equal (Test-DemoHistoryRow $row '' '*' '*' '*' '*' ([datetime]'2026-10-16
 Assert-Equal (Test-DemoHistoryRow $row '' '*' '*' '*' '*' $null $null 0 0) $false 'Unknown numbers are not coerced to zero'
 
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ApplicationRoot 'DemoDialogs.ps1'), [ref]$null, [ref]$null)
+foreach ($call in $ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-DemoLibrary'
+}, $true)) {
+    Assert-Equal $call.CommandElements.Count 3 'Every dialog library operation supplies its owner'
+    Assert-Equal ($call.CommandElements[2].Extent.Text -in @('$dialog', '$Owner')) $true 'Every dialog library operation routes through its current owner'
+}
 $xaml = $ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.StringConstantExpressionAst] -and

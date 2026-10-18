@@ -57,6 +57,33 @@ try {
         $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
         if ($entry.recording.turns[0].snapshot.requests[0].response[0].value -ne $answer) { throw 'Dispatcher library read lost saved response content.' }
     } finally { [Threading.SynchronizationContext]::SetSynchronizationContext($previousContext) }
+    $listed = @(Invoke-DemoLibrary @{ command = 'list' } $owner)
+    if ($listed.Count -ne 1 -or $listed[0].id -ne $saved.id) { throw 'Actual list did not return the captured entry.' }
+    $renamed = Invoke-DemoLibrary @{ command = 'rename'; id = $saved.id; title = 'Renamed synthetic demo' } $owner
+    if ($renamed.title -ne 'Renamed synthetic demo') { throw 'Actual rename was not confirmed.' }
+    Invoke-DemoLibrary @{ command = 'summaries'; id = $saved.id; summaries = @('Synthetic reviewed summary'); expected = $null } $owner | Out-Null
+    $export = Join-Path $scratch 'synthetic.demo-recording.json'
+    Invoke-DemoLibrary @{ command = 'export'; id = $saved.id; file = $export } $owner | Out-Null
+    $originalLibrary = $script:LibraryRoot
+    $script:LibraryRoot = Join-Path $scratch 'import-library'
+    try {
+        $imported = Invoke-DemoLibrary @{ command = 'import'; file = $export } $owner
+        if ($imported.presentation.overlay.promptSummary -ne 'Synthetic reviewed summary') { throw 'Actual import/export lost reviewed summaries.' }
+        Invoke-DemoLibrary @{ command = 'delete'; id = $imported.id } $owner | Out-Null
+        if (@(Invoke-DemoLibrary @{ command = 'list' } $owner).Count) { throw 'Actual delete did not remove the imported entry.' }
+    } finally { $script:LibraryRoot = $originalLibrary }
+    $storage = Join-Path $scratch 'workspaceStorage'
+    $workspace = Join-Path $storage ('a' * 32)
+    $sessions = Join-Path $workspace 'chatSessions'
+    $project = Join-Path $scratch 'project'
+    [IO.Directory]::CreateDirectory($sessions) | Out-Null
+    [IO.Directory]::CreateDirectory($project) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $workspace 'workspace.json'), (@{ folder = $project } | ConvertTo-Json -Compress))
+    Copy-Item -LiteralPath $source -Destination (Join-Path $sessions 'synthetic.jsonl')
+    $discovery = Invoke-DemoLibrary @{ command = 'discover'; storageRoot = $storage; folder = $project } $owner
+    if ($discovery.sessions.Count -ne 1) { throw 'Actual discover did not return the synthetic workspace recording.' }
+    $history = Invoke-DemoLibrary @{ command = 'history'; appData = (Join-Path $scratch 'appdata'); home = (Join-Path $scratch 'home'); locations = @($sessions) } $owner
+    if ($history.sessions.Count -ne 1) { throw 'Actual history did not return the isolated recording.' }
     [IO.File]::WriteAllText((Join-Path $scratch 'native\library-cli.js'), $helper)
     $script:ticks = 0
     $script:disabledTicks = 0
@@ -70,7 +97,7 @@ try {
         catch { if ($_.Exception.Message -notmatch $expected) { throw } }
         if (-not $owner.IsEnabled -or $owner.Cursor) { throw 'The dialog did not restore its enabled state and cursor after a helper error.' }
     }
-    Write-Output 'CAPTURE HELPER PASSED: real inspect/capture/read preserve large payloads with and without a WPF owner; dispatcher remains responsive, reentrant controls are disabled, results/errors propagate, 30-second timeout is enforced, and owner state is restored.'
+    Write-Output 'CAPTURE HELPER PASSED: all 11 real CLI commands preserve isolated recording/summary payloads; reads work with and without a WPF owner; dispatcher remains responsive, controls are disabled, errors propagate, the 30-second timeout is enforced, and owner state is restored.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()
