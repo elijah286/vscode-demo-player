@@ -388,7 +388,13 @@ try {
     $authoringId = 0
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
-    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'selected demo ready' | Out-Null
+    Wait-Until {
+        foreach ($id in @('PlayPause', 'ShowPrompt', 'ShowElapsed')) {
+            $control = Find-Element $window 'Id' $id
+            if (-not $control -or -not $control.Current.IsEnabled) { return $false }
+        }
+        return $true
+    } 'selected demo and both presentation controls ready' | Out-Null
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
     $showPrompt = Find-Element $window 'Id' 'ShowPrompt'
     $showElapsed = Find-Element $window 'Id' 'ShowElapsed'
