@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
-const { readRecording, readRecordings, readSnapshot, applyTranscriptRecord, recordedModel, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('../replay');
+const { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, recordedModel, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('../replay');
 const { controlView, createControlServer } = require('../control-server');
 const { RecordingAgentHost } = require('../recording-agent-host');
 const { WebSocket } = require('ws');
@@ -156,10 +156,35 @@ test('prompt preview is a bounded excerpt separate from original recording conte
     const request = { result: {}, message: { text: '  Exact\r\noriginal ' + 'word '.repeat(80) }, response: [{ value: 'Original answer' }] };
     const file = await fixture(context, request);
     const recording = await readRecording(file, 0);
-    assert.ok(recording.promptSummary.length <= 180);
+    assert.equal(recording.promptSummary.length, 300);
     assert.ok(recording.promptSummary.endsWith('...'));
     assert.match(recording.promptSummary, /^Exact original /);
     assert.deepEqual(recording.request, request);
+});
+
+test('playlist summaries accept the exact 300-character budget and reject 301 without altering full prompts', async context => {
+    const request = { result: {}, message: { text: 'Full original prompt '.repeat(40) }, response: [{ value: 'Original answer' }] };
+    const file = await fixture(context, request);
+    const directory = path.dirname(file);
+    const oldAppData = process.env.APPDATA;
+    process.env.APPDATA = directory;
+    context.after(() => { if (oldAppData === undefined) delete process.env.APPDATA; else process.env.APPDATA = oldAppData; });
+    const workspaceStorageId = 'a'.repeat(32);
+    const sessionId = '11111111-1111-1111-1111-111111111111';
+    const sessions = path.join(directory, 'Code', 'User', 'workspaceStorage', workspaceStorageId, 'chatSessions');
+    await fs.mkdir(sessions, { recursive: true });
+    await fs.copyFile(file, path.join(sessions, sessionId + '.jsonl'));
+    const playlist = path.join(directory, 'synthetic.playlist.json');
+    const manifest = { version: 1, workspaceStorageId, segments: [{ sessionId, requestIndex: 0, requestCount: 1 }], promptSummaries: ['x'.repeat(300)] };
+    await fs.writeFile(playlist, JSON.stringify(manifest));
+    const [recording] = await readPlaylist(playlist);
+    assert.equal(recording.promptSummary, 'x'.repeat(300));
+    assert.deepEqual(recording.request, request);
+    for (const invalid of ['x'.repeat(301), 'a\nb', '']) {
+        manifest.promptSummaries = [invalid];
+        await fs.writeFile(playlist, JSON.stringify(manifest));
+        await assert.rejects(readPlaylist(playlist), /1 to 300 characters/);
+    }
 });
 
 test('private controller accepts only authorized state-appropriate controls', { timeout: 5000 }, async context => {

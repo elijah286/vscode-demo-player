@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { INTERNAL_PARTS, completedQuestions, recordedReference, validateSavedEditGroup } = require('./saved-parts');
 const { sdkSnapshot } = require('./sdk-transcript');
+const MAX_PROMPT_SUMMARY_LENGTH = 300;
 
 function kindOf(part) {
     if (typeof part === 'string') return 'markdown';
@@ -114,7 +115,7 @@ async function readPlaylist(file) {
     }
     if (manifest.expectedTurns !== undefined && recordings.length !== manifest.expectedTurns) throw new Error('Playlist turn count does not match its expected source range.');
     if (manifest.promptSummaries !== undefined) {
-        if (!Array.isArray(manifest.promptSummaries) || manifest.promptSummaries.length !== recordings.length || manifest.promptSummaries.some(summary => typeof summary !== 'string' || !summary.trim() || summary.length > 200 || /[\r\n]/.test(summary))) throw new Error('Expected one concise prompt summary per playlist turn.');
+        if (!Array.isArray(manifest.promptSummaries) || manifest.promptSummaries.length !== recordings.length || manifest.promptSummaries.some(summary => typeof summary !== 'string' || !summary.trim() || summary.length > MAX_PROMPT_SUMMARY_LENGTH || /[\r\n]/.test(summary))) throw new Error('Expected one concise prompt summary per playlist turn (1 to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters, one line).');
         recordings.forEach((recording, index) => { recording.promptSummary = manifest.promptSummaries[index]; });
     }
     return recordings;
@@ -143,10 +144,12 @@ function extractRecording(file, snapshot, requestIndex) {
         if (kindOf(part) === 'textEditGroup') validateSavedEditGroup(part);
     }
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify(request)).digest('hex');
+    const promptExcerpt = request.message.text.replace(/\s+/g, ' ').trim();
     return {
         file,
         requestIndex,
-        promptSummary: request.message.text.replace(/\s+/g, ' ').trim().slice(0, 177) + (request.message.text.replace(/\s+/g, ' ').trim().length > 177 ? '...' : ''),
+        promptSummary: promptExcerpt.length > MAX_PROMPT_SUMMARY_LENGTH ?
+            promptExcerpt.slice(0, MAX_PROMPT_SUMMARY_LENGTH - 3) + '...' : promptExcerpt,
         sessionId: snapshot.sessionId,
         title: snapshot.customTitle,
         responderName: request.agent?.fullName || snapshot.responderUsername,
@@ -268,4 +271,4 @@ class PlaybackClock {
     }
 }
 
-module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, extractRecording, validateEditorRecording, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION };
+module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, extractRecording, validateEditorRecording, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION, MAX_PROMPT_SUMMARY_LENGTH };
