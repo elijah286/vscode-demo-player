@@ -334,27 +334,38 @@ try {
     Invoke-Button $dialog 'Rename'
     Wait-Until { @(Invoke-DemoLibrary @{ command = 'list' } | Where-Object title -eq 'Renamed UI demo').Count -eq 1 } 'rename persists' | Out-Null
     $overlaySummary = 'Explain the recorded interaction and its saved reference and code edits, preserving the original query for playback while showing this shorter, reviewed description to the presentation audience.'
+    $outputSummary = 'The recorded assistant showed an answer, a saved reference and archived code edits.'
     Invoke-Button $dialog 'EditPromptSummaries'
-    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'prompt summary editor'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'input/output summary editor'
     $originalPrompt = (Find-Element $summaryDialog 'Id' 'SummaryOriginal').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     if ($originalPrompt -cne 'Show the first recorded interaction.') { throw 'Summary editor must display the full original query.' }
     (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($overlaySummary)
+    $summaryExchange = Find-Element $summaryDialog 'Id' 'SummaryExchange'
+    $summaryExchange.SetFocus()
+    [System.Windows.Forms.SendKeys]::SendWait('{HOME}{DOWN}{ENTER}')
+    Wait-Until {
+        (Find-Element $summaryDialog 'Id' 'SummaryOriginal').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -like '*First recorded answer*'
+    } 'output summary choice' | Out-Null
+    $outputOriginal = (Find-Element $summaryDialog 'Id' 'SummaryOriginal').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if ($outputOriginal -notlike '*First recorded answer*' -or $outputOriginal -like '*SYNTHETIC_SAVED_REPLACEMENT*') { throw 'Output review must use recorded assistant text, not raw saved edits.' }
+    (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($outputSummary)
     Invoke-Button $summaryDialog 'SaveSummaries'
-    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'summary save closes editor' | Out-Null
+    Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'summary save closes editor' | Out-Null
     $summaryEntry = @(Invoke-DemoLibrary @{ command = 'list' } | Where-Object title -eq 'Renamed UI demo')[0]
     if ($summaryEntry.presentation.overlay.promptSummary -cne $overlaySummary) { throw 'Manual summary did not persist through the PowerShell bridge.' }
+    if ($summaryEntry.presentation.overlay.conversation.outputSummary -cne $outputSummary) { throw 'Manual output summary did not persist through the PowerShell bridge.' }
     Invoke-Button $dialog 'EditPromptSummaries'
-    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'reopen summary editor'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'reopen summary editor'
     if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $overlaySummary) { throw 'Summary editor did not reload the saved summary.' }
     (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Unsaved draft')
     Invoke-Button $summaryDialog 'Cancel'
-    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'cancel summary edit' | Out-Null
+    Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'cancel summary edit' | Out-Null
     Invoke-Button $dialog 'EditPromptSummaries'
-    $summaryDialog = Wait-Until { Get-AppWindow 'Prompt Summaries' } 'summary clear draft editor'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'summary clear draft editor'
     Invoke-Button $summaryDialog 'ClearSummaryDrafts'
     if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '') { throw 'Clear all did not empty the summary draft.' }
     Invoke-Button $summaryDialog 'Cancel'
-    Wait-Until { -not (Get-AppWindow 'Prompt Summaries') } 'cancel clear draft' | Out-Null
+    Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'cancel clear draft' | Out-Null
     $preserved = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
     if ($preserved.recording.promptSummaries[0] -cne $overlaySummary) { throw 'Canceling clear changed saved summaries.' }
     Invoke-Button $dialog 'ClearPromptSummaries'
@@ -368,12 +379,14 @@ try {
     Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'clear confirmation closes' | Out-Null
     $cleared = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
     if (@($cleared.recording.promptSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left saved summaries.' }
+    if (@($cleared.recording.outputSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left output summaries.' }
     if (($preserved.recording.turns | ConvertTo-Json -Depth 60 -Compress) -cne ($cleared.recording.turns | ConvertTo-Json -Depth 60 -Compress)) { throw 'Clearing changed original exchanges.' }
     if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($cleared.recording.outputSummaries) } | Out-Null
     $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) } | Select-Object -ExpandProperty ProcessId)
     Invoke-Button $dialog 'AiPromptSummaries'
-    $aiConsent = Wait-Until { Get-AppWindow 'AI Prompt Summaries' } 'AI authoring setup notice'
+    $aiConsent = Wait-Until { Get-AppWindow 'AI Input / Output Summaries' } 'AI authoring setup notice'
     $tasks.Add([DemoUITest]::Invoke((Find-Element $aiConsent 'Name' 'OK')))
     $authoring = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
@@ -429,6 +442,13 @@ try {
     if ($narrowTimer.Bottom -ge $narrowPrompt.Top) { throw 'Narrow overlay timer is not above the summary.' }
     if ($narrowPrompt.Width -lt $resized.Width - 70) { throw 'Narrow overlay did not give the text the full available width.' }
     Save-WindowImage $overlay 'overlay-resized-wrapped.png'
+    $showOutput = Find-Element $window 'Id' 'ShowOutput'
+    if (([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Output summary must default off.' }
+    ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary } 'conversation starts with Input1' | Out-Null
+    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or $showElapsed.Current.IsEnabled) { throw 'Output mode must label the input and own fixed timer visibility.' }
+    $timerTop = (Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top
+    Save-WindowImage $overlay 'conversation-input1.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
@@ -448,13 +468,33 @@ try {
     Save-WindowImage $window 'controller-paused.png'
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' -and (Find-Element $window 'Id' 'NextStep').Current.IsEnabled } 'first answer review offers restart and next exchange' | Out-Null
+    Wait-Until { (Find-Element $overlay 'Id' 'SecondText').Current.Name -ceq $outputSummary } 'completed Input1 and Output1' | Out-Null
+    if ((Find-Element $overlay 'Id' 'FirstText').Current.Name -cne $overlaySummary -or
+        (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'AI' -or
+        (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:01:01') { throw 'First completion changed input, labels or cumulative recorded timer.' }
+    if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Completion moved the fixed timer.' }
+    Save-WindowImage $overlay 'conversation-input1-output1.png'
     Invoke-Button $window 'NextStep'
+    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $outputSummary -and
+        (Find-Element $overlay 'Id' 'SecondText').Current.Name -ceq 'Show the next recorded interaction.' } 'Output1 replaces Input1 above Input2' | Out-Null
+    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'AI' -or
+        (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'You') { throw 'Next must swap speaker alignment and labels.' }
+    if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Next Step moved the fixed timer.' }
+    Save-WindowImage $overlay 'conversation-output1-input2.png'
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'second answer complete' | Out-Null
+    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq 'Show the next recorded interaction.' -and
+        (Find-Element $overlay 'Id' 'SecondText').Current.Name -like '*summary missing*' } 'Input2 plus explicit missing Output2 replaces previous context' | Out-Null
+    if ((Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:03:03' -or
+        [Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Final output changed fixed cumulative timer semantics.' }
+    Save-WindowImage $overlay 'conversation-input2-missing-output2.png'
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable after the final exchange.' }
     Save-WindowImage $window 'controller-finished.png'
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Start Over restarts the selected demo' | Out-Null
+    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary } 'Start Over resets conversation to Input1' | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'Start Over returns to first exchange' | Out-Null
+    ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Wait-Until { (Find-Element $overlay 'Id' 'PromptText').Current.Name -ceq $overlaySummary -and $showElapsed.Current.IsEnabled } 'output off restores legacy input-only mode and elapsed choice' | Out-Null
     Invoke-Button $window 'Stop'
     Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'scoped replay closes' 20 | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'controller remains available after stop' | Out-Null
@@ -500,7 +540,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual summary save/reopen/cancel, isolated responsive AI authoring launch/close, bottom-right resize of both dimensions, automatic text wrapping, retained size through playback and Stop, Open without autoplay, explicit Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, and unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual input/output save/reopen/cancel/clear, isolated AI authoring launch/close, overlay resize/wrapping/retained size, default-off conversation checkbox, Input1 then Input1+Output1 then Output1+Input2 then Input2+missing-output guidance, labeled You/AI bubbles, fixed top cumulative 00:01:01/00:03:03 timer, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, unchanged edit target.'
 } catch {
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())
@@ -519,7 +559,7 @@ try {
         $authoringProcess = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
         if ($authoringProcess) { $authoringProcess.CloseMainWindow() | Out-Null }
     }
-    foreach ($title in @('Find interaction')) {
+    foreach ($title in @('Input / Output Summaries', 'Find interaction')) {
         $child = Get-AppWindow $title
         if ($child) { ([System.Windows.Automation.WindowPattern]$child.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close() }
     }

@@ -296,7 +296,7 @@ function Show-InteractionPicker($Owner) {
    <TextBlock x:Name="CaptureStatus" TextWrapping="Wrap" Margin="0,0,0,8"/>
    <WrapPanel HorizontalAlignment="Right">
     <Button x:Name="SelectionSummaries" Content="Review / edit summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionSummaries"/>
-    <Button x:Name="SelectionAiSummaries" Content="Summarize long prompts with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
+    <Button x:Name="SelectionAiSummaries" Content="Summarize inputs / outputs with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
     <Button x:Name="SelectionClearSummaries" Content="Clear all summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionClearSummaries"/>
     <Button x:Name="Save" Content="Use selected exchanges" IsEnabled="False" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
    </WrapPanel>
@@ -329,7 +329,7 @@ function Show-InteractionPicker($Owner) {
   <StackPanel Grid.Row="4">
    <WrapPanel Margin="0,0,0,8">
     <Button x:Name="Summaries" Content="Review / edit summaries..." Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
-    <Button x:Name="AiSummaries" Content="Summarize long prompts with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
+    <Button x:Name="AiSummaries" Content="Summarize inputs / outputs with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
     <Button x:Name="ClearSummaries" Content="Clear all summaries..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="ClearPromptSummaries"/>
    </WrapPanel>
    <DockPanel>
@@ -775,13 +775,14 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
 
 function Show-DemoSummaryDialog($Owner, [string]$Id) {
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
+    $outputs = @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner)
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
- xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Prompt Summaries"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Input / Output Summaries"
  Width="760" Height="540" MinWidth="500" MinHeight="400" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Summaries change only the floating overlay. Playback keeps the complete original prompts. Blank uses the original excerpt. Summaries are included when exporting." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock Text="Summaries change only the overlay, not original inputs or outputs. Blank input uses its excerpt; blank output shows a missing-summary notice. Summaries are included when exporting." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <ComboBox x:Name="Exchange" Grid.Row="1" Margin="0,0,0,10" AutomationProperties.AutomationId="SummaryExchange"/>
   <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
   <TextBlock Grid.Row="3" Text="Overlay summary (up to 300 characters, one line)" Margin="0,12,0,6"/>
@@ -797,35 +798,51 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 '@ $Owner
     $drafts = [object[]]::new($entry.recording.turns.Count)
     if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
-    $dialog.Tag = @{ Summaries = $drafts; Index = -1 }
+    $outputDrafts = [object[]]::new($entry.recording.turns.Count)
+    if ($null -ne $entry.recording.outputSummaries) { $outputDrafts = [object[]]$entry.recording.outputSummaries.Clone() }
+    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Index = -1 }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
     for ($index = 0; $index -lt $entry.recording.turns.Count; $index++) {
-        $exchange.Items.Add(('Exchange ' + ($index + 1))) | Out-Null
+        $exchange.Items.Add(('Exchange ' + ($index + 1) + ' - Input (You)')) | Out-Null
+        $exchange.Items.Add(('Exchange ' + ($index + 1) + ' - Output (AI)')) | Out-Null
     }
     $storeDraft = {
         if ($dialog.Tag.Index -ge 0) {
-            $dialog.Tag.Summaries[$dialog.Tag.Index] = if ([string]::IsNullOrWhiteSpace($summary.Text)) { $null } else { $summary.Text.Trim() }
+            $value = if ([string]::IsNullOrWhiteSpace($summary.Text)) { $null } else { $summary.Text.Trim() }
+            $turn = [int][Math]::Floor($dialog.Tag.Index / 2)
+            if ($dialog.Tag.Index % 2 -eq 0) { $dialog.Tag.Summaries[$turn] = $value }
+            else { $dialog.Tag.Outputs[$turn] = $value }
         }
     }
     $exchange.Add_SelectionChanged({
         & $storeDraft
         $dialog.Tag.Index = $exchange.SelectedIndex
         if ($exchange.SelectedIndex -ge 0) {
-            $dialog.FindName('Original').Text = $entry.recording.turns[$exchange.SelectedIndex].snapshot.requests[0].message.text
-            $summary.Text = [string]$dialog.Tag.Summaries[$exchange.SelectedIndex]
+            $turn = [int][Math]::Floor($exchange.SelectedIndex / 2)
+            if ($exchange.SelectedIndex % 2 -eq 0) {
+                $dialog.FindName('Original').Text = $entry.recording.turns[$turn].snapshot.requests[0].message.text
+                $summary.Text = [string]$dialog.Tag.Summaries[$turn]
+            } else {
+                $dialog.FindName('Original').Text = $outputs[$turn]
+                $summary.Text = [string]$dialog.Tag.Outputs[$turn]
+            }
         }
     })
     $exchange.SelectedIndex = 0
     $dialog.FindName('Clear').Add_Click({
         $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
+        $dialog.Tag.Outputs = [object[]]::new($entry.recording.turns.Count)
         $summary.Text = ''
     })
     $dialog.FindName('DeleteSummary').Add_Click({ $summary.Text = '' })
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
-            Invoke-DemoLibrary @{ command = 'summaries'; id = $Id; summaries = @($dialog.Tag.Summaries); expected = $entry.recording.promptSummaries } $dialog | Out-Null
+            Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
+                summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs) }
+                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+            } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
@@ -833,15 +850,18 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 }
 
 function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 300-character summary budget in this selection. Short prompts and existing summaries are preserved. Switch to the dedicated VS Code authoring window for provider setup and review. Its isolated profile retains providers and sign-in across launches, but never inherits your normal editor account or extensions. Install/enable a provider and sign in there yourself if prompted, then choose Retry in the status bar. Nothing is sent until you consent and select a model. After generation compare originals, edit, approve, or delete summaries and save the reviewed batch. Return here to use the selection and enable Show prompt summary. Playback keeps full originals and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing summaries for long inputs and recorded assistant outputs/tool status (300 characters each). Short inputs and existing summaries are preserved. Unsupported output structures require manual summaries; no result is invented. Switch to the dedicated VS Code authoring window for provider setup and review. Its isolated profile retains providers and sign-in, but never inherits your normal editor account or extensions. Install/enable a provider and sign in there yourself if prompted, then choose Retry. Nothing is sent until you review the shown user queries and assistant output, consent, and select a model. Provider terms and limits apply. Do not send private content without permission. Edit, approve, or delete each draft and save the batch. Return here to use the selection and enable Show summary of output. Playback keeps full originals and never calls AI.', 'AI Input / Output Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
 }
 
 function Show-DemoClearSummariesNotice($Owner, [string]$Id) {
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Clear all saved summaries for this selection, including AI-generated and manually edited summaries? Original prompts, responses and recordings are unchanged. The overlay will use the default prompt excerpts.', 'Clear Prompt Summaries', 'OKCancel', 'Question')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Clear all saved input and output summaries for this selection, including AI-generated and manually edited summaries? Original prompts, responses and recordings are unchanged. Inputs use default excerpts; output mode shows missing-summary guidance.', 'Clear Prompt Summaries', 'OKCancel', 'Question')
     if ($answer -ne 'OK') { return $false }
-    Invoke-DemoLibrary @{ command = 'summaries'; id = $Id; summaries = @([object[]]::new($entry.recording.turns.Count)); expected = $entry.recording.promptSummaries } $Owner | Out-Null
+    Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
+        summaries = @{ promptSummaries = @([object[]]::new($entry.recording.turns.Count)); outputSummaries = @([object[]]::new($entry.recording.turns.Count)) }
+        expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+    } $Owner | Out-Null
     return $true
 }
 

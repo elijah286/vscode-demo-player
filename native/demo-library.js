@@ -111,6 +111,7 @@ function validatePackage(value) {
     if (!['vscode-native-jsonl', 'copilot-sdk-jsonl'].includes(value.source?.kind) || typeof value.source.fileName !== 'string' || !value.source.fileName || value.source.fileName.length > 260 || !/^[a-f0-9]{64}$/.test(value.source.sha256) || value.notice !== NOTICE) throw new Error('Invalid demo recording provenance or fidelity notice.');
     if (!Array.isArray(value.turns) || !value.turns.length || value.turns.length > MAX_TURNS) throw new Error('A demo must contain 1 to 100 exchanges.');
     validatePromptSummaries(value.promptSummaries, value.turns.length);
+    validatePromptSummaries(value.outputSummaries, value.turns.length);
     const indices = new Set();
     for (const turn of value.turns) {
         if (!Number.isInteger(turn.sourceIndex) || turn.sourceIndex < 0 || indices.has(turn.sourceIndex) || turn.snapshot?.requests?.length !== 1) throw new Error('Invalid or duplicate recorded turn.');
@@ -157,6 +158,7 @@ async function packageRecordings(file) {
     return value.turns.map((turn, index) => {
         const recording = validateEditorRecording(extractRecording(file, turn.snapshot, 0));
         if (value.promptSummaries?.[index]) recording.promptSummary = value.promptSummaries[index];
+        recording.outputSummary = value.outputSummaries?.[index] ?? null;
         return recording;
     });
 }
@@ -169,15 +171,34 @@ function validatePromptSummaries(summaries, count) {
     }
 }
 
-async function savePromptSummaries(root, id, summaries, expected) {
+async function savePromptSummaries(root, id, summaries, expected, kind = 'input') {
+    if (!['input', 'output'].includes(kind)) throw new Error('Unknown summary kind.');
+    const field = kind === 'input' ? 'promptSummaries' : 'outputSummaries';
     return withLock(root, async () => {
         const entry = await readEntry(root, id);
         validatePromptSummaries(summaries, entry.recording.turns.length);
         if (summaries === undefined) throw new Error('Supply the summaries to save.');
-        if (JSON.stringify(entry.recording.promptSummaries ?? null) !== JSON.stringify(expected)) {
-            throw new Error('Prompt summaries changed since opening this editor. Reopen it before saving.');
+        if (JSON.stringify(entry.recording[field] ?? null) !== JSON.stringify(expected)) {
+            throw new Error('Summaries changed since opening this editor. Reopen it before saving.');
         }
-        entry.recording.promptSummaries = summaries;
+        entry.recording[field] = summaries;
+        await atomicEntry(root, entry, true);
+        return summarize(entry);
+    });
+}
+
+async function saveSummaryBatch(root, id, summaries, expected) {
+    return withLock(root, async () => {
+        const entry = await readEntry(root, id);
+        for (const field of ['promptSummaries', 'outputSummaries']) {
+            validatePromptSummaries(summaries?.[field], entry.recording.turns.length);
+            if (summaries?.[field] === undefined) throw new Error('Supply both input and output summaries.');
+            if (JSON.stringify(entry.recording[field] ?? null) !== JSON.stringify(expected?.[field])) {
+                throw new Error('Summaries changed since opening this editor. Reopen it before saving.');
+            }
+        }
+        entry.recording.promptSummaries = summaries.promptSummaries;
+        entry.recording.outputSummaries = summaries.outputSummaries;
         await atomicEntry(root, entry, true);
         return summarize(entry);
     });
@@ -214,6 +235,7 @@ function summarize(entry) {
     const recordings = entry.recording.turns.map((turn, index) => {
         const recording = extractRecording('', turn.snapshot, 0);
         if (entry.recording.promptSummaries?.[index]) recording.promptSummary = entry.recording.promptSummaries[index];
+        recording.outputSummary = entry.recording.outputSummaries?.[index] ?? null;
         return recording;
     });
     const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
@@ -393,4 +415,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch };

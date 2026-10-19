@@ -436,6 +436,26 @@ available width and adjusts its height to fit, bounded by the screen work area.
 Your chosen dimensions survive prompt
 updates, checkbox changes, Stop, and mode switches within that controller session.
 
+**Show summary of output** is also off by default. Enable it for a bounded
+two-message conversation overlay: a right-aligned blue **You** input bubble and
+a left-aligned neutral **AI** output bubble, each with a contrasting text label.
+This mode includes the input even if **Show prompt summary** is unchecked, and
+always pins working time at the top at every width. **Show elapsed time** is
+temporarily disabled; its prior choice returns when output mode is off.
+Untimed recordings show **Unavailable** rather than a fabricated duration.
+The timer itself never animates or moves with the bubbles.
+
+The first input appears before playback. Only after the entire recorded reply
+finishes, a down arrow and its reviewed output summary appear below that input.
+**Next Step** moves the latest output above the new input; the next completion
+replaces that older context with the current input and output. At most two
+messages are retained, not an accumulating transcript. Brief fade/slide
+transitions honor the Windows client-area animation preference. Polling and
+pause/resume do not replay transitions. Start Over, Stop and a new selection
+reset the conversation deterministically. A missing/deleted output summary
+shows explicit guidance to generate or edit it before playback, never an
+invented success or a paraphrase of the user request.
+
 Run the responsive layout regression without opening interactive windows:
 
 ```powershell
@@ -444,10 +464,13 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layo
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
 original prompt. In the interaction picker, use **Review / edit summaries...**, select an
-exchange and write or edit its overlay text (one line, up to 300 characters).
-Leave an entry blank to use its original excerpt, then **Save summaries** and
+exchange's **Input (You)** or **Output (AI)** and write or edit its overlay text
+(one line, up to 300 characters). Output source previews contain only recorded
+assistant text and tool status, not raw tool payloads. Leave an input blank to
+use its original excerpt; blank output remains explicitly missing. Then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
-entry per turn.
+entry per turn, and optional `outputSummaries` (one string or `null` per turn).
+Legacy packages and playlists without output fields still load.
 
 Use **Clear all summaries...** in the interaction picker to remove all saved overlay
 summaries, including AI-generated and manually edited summaries, after
@@ -457,7 +480,7 @@ clears the drafts for every exchange; **Save summaries** applies that change,
 while **Cancel** discards it. **Delete this summary** clears only the current
 exchange's summary draft, never its original prompt.
 
-**Summarize long prompts with AI...**, available beside the selection action and
+**Summarize inputs / outputs with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate, isolated VS Code
 authoring window, never the playback window or your normal editor profile.
 Install/enable an AI Language Model provider such as GitHub Copilot and sign in
@@ -488,23 +511,31 @@ manual summaries still work. Generation/save failures also use modal errors.
 Discovery has a 15-second limit; a slow provider can be retried after setup.
 Switch to the dedicated authoring window if another player window covers it.
 
-There is no per-exchange chooser: one batch covers every prompt that exceeds
-the 300-character summary budget after whitespace normalization and does not
-already have a saved summary. Exactly 300 characters fits; 301 needs a summary.
+There is no per-exchange chooser: one batch covers every unsummarized input that
+exceeds the 300-character budget after whitespace normalization, plus missing
+output summaries for all exchanges with supported recorded assistant text or
+tool status. Exactly 300 input characters fits; 301 needs a summary.
 This is a stable text budget, not a guarantee that text fits every resized
 window without scrolling. Short prompts and existing summaries are preserved.
-The full eligible queries are shown for review before one batch consent and
-one model selection. Each query is sent separately with summarization
-instructions, never recorded answers or tool payloads.
-Progress identifies the current exchange. The batch is cancellable, with a
+The eligible original user queries and filtered recorded assistant output/tool
+status are shown for privacy review before one explicit batch consent and one
+model selection. Consent covers both sources, provider terms and usage limits.
+Each summary has a separate request; output requests use recorded results, not
+the user's desired outcome. Raw tool arguments/results, reasoning, SDK event
+archives and unsupported structures are omitted with an explicit notice;
+they are not recursively dumped into provider requests. Review displayed text
+for secrets before consenting. If no supported output remains, use the manual
+editor; no successful outcome is assumed. Original full payloads stay local
+and unchanged. No AI calls occur during presentation.
+Progress identifies the exchange and summary kind. The batch is cancellable, with a
 90-second limit per request. Failures, cancellation, over-context input, and
 invalid/overlong output leave the entire library unchanged; no partial results
-are saved. Once generation completes, a **Review prompt summaries** panel opens
-automatically, with an exchange list, the full read-only original prompt and an
+are saved. Once generation completes, a **Review input/output summaries** panel opens
+automatically, with a kind-labeled exchange list, the read-only source and an
 editable summary with a live character count. Use **Previous** / **Next** or
 the list to compare exchanges. **Approve & next** approves one summary;
-**Delete summary & next** removes only the summary (the overlay reverts to the
-original excerpt). **Approve all remaining** preserves deletions. Editing an
+**Delete summary & next** removes only that input or output summary (inputs revert
+to excerpts; outputs show a missing-summary notice). **Approve all remaining** preserves deletions. Editing an
 approved or deleted summary makes it pending again. Blank, multiline and
 over-budget summaries cannot be approved; delete the summary instead.
 **Save reviewed summaries for playback** is available only after every draft
@@ -512,7 +543,7 @@ has been approved or deleted. It saves the reviewed batch once.
 **Cancel** or closing the panel leaves the library unchanged. Switching editor
 tabs retains review edits. Invalid decisions or changed exchange order/count
 are rejected without saving.
-Use **Demo Player: Summarize Long Prompts** in that window's Command Palette to
+Use **Demo Player: Summarize Inputs and Outputs** in that window's Command Palette to
 retry a canceled batch. To regenerate saved summaries, clear them first.
 Return to the picker and click **Use selected exchanges** or **Use saved selection**;
 either reads the latest saved summaries without refreshing or reselecting.
@@ -526,6 +557,8 @@ installation/sign-in and is not established by synthetic-provider tests.
 
 Summaries are optional package metadata and survive export/import. Concurrent
 summary edits are rejected rather than overwritten; reopen the editor to reload.
+Input and output batches save atomically against both opening revisions; a
+concurrent manual output edit or clear cannot be overwritten by stale AI review.
 Packages or playlists with summaries above 200 characters require this update;
 older players enforce their earlier limit and reject them.
 Original prompts, responses, per-turn payload hashes, and source bytes are

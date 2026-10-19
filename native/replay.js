@@ -118,6 +118,13 @@ async function readPlaylist(file) {
         if (!Array.isArray(manifest.promptSummaries) || manifest.promptSummaries.length !== recordings.length || manifest.promptSummaries.some(summary => typeof summary !== 'string' || !summary.trim() || summary.length > MAX_PROMPT_SUMMARY_LENGTH || /[\r\n]/.test(summary))) throw new Error('Expected one concise prompt summary per playlist turn (1 to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters, one line).');
         recordings.forEach((recording, index) => { recording.promptSummary = manifest.promptSummaries[index]; });
     }
+    if (manifest.outputSummaries !== undefined) {
+        if (!Array.isArray(manifest.outputSummaries) || manifest.outputSummaries.length !== recordings.length ||
+            manifest.outputSummaries.some(summary => summary !== null && (typeof summary !== 'string' || !summary.trim() || summary.length > MAX_PROMPT_SUMMARY_LENGTH || /[\r\n]/.test(summary)))) {
+            throw new Error('Expected one output summary per playlist turn: null or 1 to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters on one line.');
+        }
+        recordings.forEach((recording, index) => { recording.outputSummary = manifest.outputSummaries[index]; });
+    }
     return recordings;
 }
 

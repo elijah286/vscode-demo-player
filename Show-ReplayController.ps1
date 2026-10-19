@@ -42,11 +42,11 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="402" Topmost="True"
+        Title="Demo Player" Width="360" Height="426" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -79,8 +79,12 @@ if (-not $script:standalone) {
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
         <CheckBox x:Name="ShowElapsed" Grid.Row="7" Content="Show elapsed time" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowElapsed"
+                            ToolTipService.ShowOnDisabled="True"
                             ToolTip="Interpolated response work. Excludes user idle gaps; holds during typing and pauses."/>
-        <Grid Grid.Row="8" Margin="0,4,0,0">
+        <CheckBox x:Name="ShowOutput" Grid.Row="8" Content="Show summary of output" IsChecked="False" IsEnabled="False"
+                            VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowOutput"
+                            ToolTip="Show input and output summaries as a conversation, with working time always at the top."/>
+        <Grid Grid.Row="9" Margin="0,4,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
             <TextBlock Text="Overlay frame" VerticalAlignment="Center" FontSize="12" Foreground="#555555"/>
             <Button x:Name="FrameColor" Grid.Column="1" Padding="3" ToolTip="Overlay frame color: #F5B82E"
@@ -88,12 +92,12 @@ if (-not $script:standalone) {
                 <Border x:Name="FrameColorSwatch" Width="26" Height="16" Background="#F5B82E" BorderBrush="#777777" BorderThickness="1" CornerRadius="2"/>
             </Button>
         </Grid>
-        <ComboBox x:Name="WindowMode" Grid.Row="9" Margin="0,6,0,0" AutomationProperties.AutomationId="WindowMode"
+        <ComboBox x:Name="WindowMode" Grid.Row="10" Margin="0,6,0,0" AutomationProperties.AutomationId="WindowMode"
                             ToolTip="Playback UI. Agents is experimental and requires sign-in in its dedicated window. Switch between turns.">
             <ComboBoxItem Tag="Editor" Content="VS Code"/>
             <ComboBoxItem Tag="Agents" Content="Agents (experimental)"/>
         </ComboBox>
-    <DockPanel Grid.Row="10" Margin="0,12,0,0">
+    <DockPanel Grid.Row="11" Margin="0,12,0,0">
       <Button x:Name="CheckUpdates" DockPanel.Dock="Right" Content="Check for updates" Padding="8,0" AutomationProperties.AutomationId="CheckUpdates"/>
       <TextBlock x:Name="UpdateNotice" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,8,0" AutomationProperties.AutomationId="UpdateNotice"/>
     </DockPanel>
@@ -123,6 +127,7 @@ $checkUpdates = $window.FindName('CheckUpdates')
 $updateNotice = $window.FindName('UpdateNotice')
 $showPrompt = $window.FindName('ShowPrompt')
 $showElapsed = $window.FindName('ShowElapsed')
+$showOutput = $window.FindName('ShowOutput')
 $frameColor = $window.FindName('FrameColor')
 $frameColorSwatch = $window.FindName('FrameColorSwatch')
 $windowMode = $window.FindName('WindowMode')

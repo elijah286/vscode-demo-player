@@ -42,6 +42,10 @@ function controlView(state) {
         : 0;
     const elapsedMs = timed ? Math.round(completedMs + (range ? (range.end - range.start) * responseProgress : 0)) : undefined;
     const seconds = Math.floor(elapsedMs / 1000);
+    const conversationIdentity = crypto.createHash('sha256').update(JSON.stringify([
+        recording.fingerprint, recording.promptSummary, recording.outputSummary,
+        current > 1 ? state.recordings[current - 2].outputSummary : null
+    ])).digest('hex');
     return {
         ...view, current, total, progress: current + '/' + total,
         windowMode: state.windowMode,
@@ -50,6 +54,14 @@ function controlView(state) {
         selection: state.selection,
         overlay: {
             promptSummary: recording.promptSummary ?? null,
+            conversation: {
+                exchange: current,
+                completed: ['review', 'complete'].includes(state.phase),
+                previousOutputSummary: current > 1 ? state.recordings[current - 2].outputSummary ?? null : null,
+                outputSummary: recording.outputSummary ?? null,
+                key: (state.presentationRun ?? 0) + ':' + conversationIdentity + ':' + current + ':' + ['review', 'complete'].includes(state.phase),
+                active: ['ready', 'typing', 'response', 'review', 'complete'].includes(state.phase)
+            },
             elapsed: timed ? [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(value => String(value).padStart(2, '0')).join(':') : null,
             elapsedMs: elapsedMs ?? null,
             timingMode: 'interpolated-response-time'

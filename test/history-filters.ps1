@@ -358,7 +358,7 @@ $summaryFunction = $ast.Find({
 }, $true)
 $summaryXaml = $summaryFunction.Find({
     param($node)
-    $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -like '<Window*Title="Prompt Summaries"*'
+    $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -like '<Window*Title="Input / Output Summaries"*'
 }, $true)
 $dialog = New-DemoDialog $summaryXaml.Value $null
 try {
@@ -368,12 +368,15 @@ try {
             [pscustomobject]@{ snapshot = [pscustomobject]@{ requests = @([pscustomobject]@{ message = [pscustomobject]@{ text = 'Second original query' } }) } }
         )
         promptSummaries = @('First saved summary', 'Second saved summary')
+        outputSummaries = @('First recorded result', 'Second recorded result')
     } }
-    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Index = -1 }
+    $outputs = @('First original answer', 'Second original answer')
+    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Index = -1 }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
-    $exchange.Items.Add('Exchange 1') | Out-Null
-    $exchange.Items.Add('Exchange 2') | Out-Null
+    foreach ($label in @('Exchange 1 - Input', 'Exchange 1 - Output', 'Exchange 2 - Input', 'Exchange 2 - Output')) {
+        $exchange.Items.Add($label) | Out-Null
+    }
     $storeNode = $summaryFunction.Find({
         param($node)
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$storeDraft'
@@ -401,6 +404,17 @@ try {
     Assert-Equal ($null -eq $dialog.Tag.Summaries[0]) $true 'Individual deletion clears only the current summary'
     Assert-Equal $dialog.Tag.Summaries[1] 'Second saved summary' 'Individual deletion preserves other summaries'
     Assert-Equal $dialog.FindName('Original').Text 'First original query' 'Individual deletion never deletes the original prompt'
+    $exchange.SelectedIndex = 1
+    Assert-Equal $summary.Text 'First recorded result' 'Output editor loads independently saved summary'
+    Assert-Equal $dialog.FindName('Original').Text 'First original answer' 'Output editor shows recorded results, not the user query'
+    $summary.Text = 'o' * 300
+    & $storeDraft
+    Assert-Equal $dialog.Tag.Outputs[0].Length 300 'Exact output summary budget is preserved'
+    & ($deleteNode.Arguments[0].ScriptBlock.GetScriptBlock())
+    & $storeDraft
+    Assert-Equal ($null -eq $dialog.Tag.Outputs[0]) $true 'Deleting output clears only its summary'
+    Assert-Equal $dialog.Tag.Outputs[1] 'Second recorded result' 'Output deletion preserves other outputs'
+    Assert-Equal $dialog.Tag.Summaries[1] 'Second saved summary' 'Output deletion preserves input summaries'
     $clearNode = $summaryFunction.Find({
         param($node)
         $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
@@ -411,7 +425,8 @@ try {
     Assert-Equal $summary.Text '' 'Clear empties the current summary'
     Assert-Equal $dialog.Tag.Summaries.Count 2 'Clear keeps one draft slot per exchange'
     Assert-Equal (@($dialog.Tag.Summaries | Where-Object { $null -ne $_ }).Count) 0 'Clear empties every draft'
-    $exchange.SelectedIndex = 1
+    Assert-Equal (@($dialog.Tag.Outputs | Where-Object { $null -ne $_ }).Count) 0 'Clear empties output drafts too'
+    $exchange.SelectedIndex = 2
     Assert-Equal $summary.Text '' 'Changing exchanges does not restore cleared drafts'
     Assert-Equal $dialog.FindName('Original').Text 'Second original query' 'Clear preserves original query display'
     $exchange.SelectedIndex = 0

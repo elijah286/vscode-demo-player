@@ -141,6 +141,55 @@ test('working-time overlay rejects missing endpoints and does not wrap hours', (
     assert.equal(controlView(state).overlay.elapsed, null);
 });
 
+test('conversation advances only on explicit completion, with bounded identities stable over polling and pause', () => {
+    const state = { phase: 'ready', presentationRun: 1, turnIndex: 0, recordings: [
+        { promptSummary: 'Input1', outputSummary: 'Output1', request: { timestamp: 0, modelState: { completedAt: 60000 } } },
+        { promptSummary: 'Input2', outputSummary: 'Output2', request: { timestamp: 70000, modelState: { completedAt: 130000 } } },
+        { promptSummary: 'Input3', request: { timestamp: 140000, modelState: { completedAt: 200000 } } }
+    ] };
+    const read = () => controlView(state).overlay;
+    const ready = read().conversation;
+    assert.equal(ready.completed, false);
+    assert.equal(ready.exchange, 1);
+    assert.equal(ready.previousOutputSummary, null);
+    state.phase = 'response';
+    state.responseOrigin = 0;
+    state.clock = { now: () => 5000, paused: false };
+    assert.equal(read().elapsed, '00:01:00');
+    assert.deepEqual(read().conversation, ready, 'Even 100% elapsed cannot reveal output before response renderer completes');
+    state.clock.paused = true;
+    assert.deepEqual(read().conversation, ready);
+    state.phase = 'review'; state.turnIndex = 1;
+    const complete = read().conversation;
+    assert.equal(complete.completed, true);
+    assert.notEqual(complete.key, ready.key);
+    assert.deepEqual(read().conversation, complete);
+    state.phase = 'typing';
+    assert.equal(read().conversation.previousOutputSummary, 'Output1');
+    assert.equal(read().promptSummary, 'Input2');
+    assert.equal(read().elapsed, '00:01:00');
+    state.phase = 'review'; state.turnIndex = 2;
+    assert.equal(read().conversation.outputSummary, 'Output2');
+    assert.equal(read().promptSummary, 'Input2');
+    state.phase = 'typing';
+    assert.equal(read().conversation.previousOutputSummary, 'Output2');
+    assert.equal(read().promptSummary, 'Input3');
+    state.phase = 'complete'; state.turnIndex = 3;
+    assert.equal(read().conversation.outputSummary, null, 'Missing output is explicit, never replaced by the input or invented success');
+    for (const phase of ['error', 'stopping', 'stopped']) {
+        state.phase = phase; assert.equal(read().conversation.active, false);
+    }
+    state.phase = 'ready'; state.turnIndex = 0; state.presentationRun++;
+    assert.notEqual(read().conversation.key, ready.key);
+    assert.equal(read().elapsed, '00:00:00');
+    const restarted = read().conversation.key;
+    state.recordings[0].fingerprint = 'new selection';
+    assert.notEqual(read().conversation.key, restarted, 'A new selection is not confused with the previous process run');
+    const selected = read().conversation.key;
+    state.recordings[0].outputSummary = 'Reviewed output edit';
+    assert.notEqual(read().conversation.key, selected, 'Re-selecting reviewed metadata resets the preview even when original payload identity is unchanged');
+});
+
 test('mode changes are exposed only at complete response boundaries', () => {
     const state = { phase: 'review', windowMode: 'Agents', turnIndex: 1, recordings: [{}, {}], selection: { demoPath: 'portable.demo-recording.json' } };
     assert.equal(controlView(state).modeSwitchEnabled, true);
@@ -180,6 +229,15 @@ test('playlist summaries accept the exact 300-character budget and reject 301 wi
     const [recording] = await readPlaylist(playlist);
     assert.equal(recording.promptSummary, 'x'.repeat(300));
     assert.deepEqual(recording.request, request);
+    manifest.outputSummaries = ['o'.repeat(300)];
+    await fs.writeFile(playlist, JSON.stringify(manifest));
+    assert.equal((await readPlaylist(playlist))[0].outputSummary.length, 300);
+    for (const invalid of [['o'.repeat(301)], ['a\nb'], [''], []]) {
+        manifest.outputSummaries = invalid;
+        await fs.writeFile(playlist, JSON.stringify(manifest));
+        await assert.rejects(readPlaylist(playlist), /output summary/);
+    }
+    manifest.outputSummaries = [null];
     for (const invalid of ['x'.repeat(301), 'a\nb', '']) {
         manifest.promptSummaries = [invalid];
         await fs.writeFile(playlist, JSON.stringify(manifest));

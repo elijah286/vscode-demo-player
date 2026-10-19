@@ -5,12 +5,13 @@ const { MAX_PROMPT_SUMMARY_LENGTH } = require('./replay');
 function validateReviewedDrafts(reviewed, drafts) {
     if (!Array.isArray(reviewed) || reviewed.length !== drafts.length ||
         reviewed.some((turn, index) => turn?.exchange !== drafts[index].exchange ||
+            turn.kind !== drafts[index].kind ||
             !['approved', 'deleted'].includes(turn.status) ||
             (turn.status === 'deleted' ? turn.summary !== null : typeof turn.summary !== 'string'))) {
         throw new Error('Approve or delete every summary before saving. Keep the original exchange order; original prompts cannot be deleted.');
     }
     validatePromptSummaries(reviewed.map(turn => turn.summary), drafts.length);
-    return reviewed.map(turn => ({ exchange: turn.exchange, summary: turn.summary?.trim() ?? null }));
+    return reviewed.map(turn => ({ exchange: turn.exchange, ...(turn.kind ? { kind: turn.kind } : {}), summary: turn.summary?.trim() ?? null }));
 }
 
 function summaryReviewHtml(drafts) {
@@ -21,7 +22,7 @@ function summaryReviewHtml(drafts) {
 <html lang="en"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Review prompt summaries</title>
+<title>Review input/output summaries</title>
 <style nonce="${nonce}">
 body { font-family: var(--vscode-font-family, sans-serif); color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); padding: 16px; }
 main { display: grid; grid-template-columns: minmax(150px, 24%) 1fr; gap: 20px; }
@@ -36,13 +37,13 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 #error { color: var(--vscode-errorForeground, #c33); min-height: 1.5em; }
 @media (max-width: 600px) { main { grid-template-columns: 1fr; } select { min-height: 100px; max-height: 140px; } }
 </style></head><body>
-<h1>Review prompt summaries</h1>
-<p>Compare each AI draft with its full original prompt. Edit, approve, or delete the summary only.
-Playback always keeps the full original prompt. Deleted summaries use the original excerpt.</p>
+<h1>Review input/output summaries</h1>
+<p>Compare each AI draft with its recorded source. Edit, approve, or delete the summary only.
+Playback keeps full originals. Deleted input summaries use excerpts; deleted outputs show an actionable missing-summary notice.</p>
 <main><nav aria-label="Generated summaries"><label for="exchanges">Exchanges</label><select id="exchanges" size="10"></select></nav>
 <section aria-label="Summary comparison">
 <h2 id="heading"></h2>
-<label for="original">Original prompt (read-only)</label><textarea id="original" readonly></textarea>
+<label for="original">Recorded source for this summary kind (read-only)</label><textarea id="original" readonly></textarea>
 <label for="summary">Overlay summary (one line, up to ${MAX_PROMPT_SUMMARY_LENGTH} characters)</label>
 <textarea id="summary" maxlength="${MAX_PROMPT_SUMMARY_LENGTH}" aria-describedby="count"></textarea>
 <p id="count"></p>
@@ -62,7 +63,7 @@ function update() {
     const selected = get('exchanges');
     selected.replaceChildren(...drafts.map(turn => {
         const option = document.createElement('option');
-        option.textContent = 'Exchange ' + turn.exchange + ' - ' + turn.status;
+        option.textContent = 'Exchange ' + turn.exchange + ' - ' + (turn.kind ?? 'input') + ' - ' + turn.status;
         return option;
     }));
     selected.selectedIndex = index;
@@ -76,7 +77,7 @@ function update() {
 }
 function show() {
     const turn = drafts[index];
-    get('heading').textContent = 'Exchange ' + turn.exchange + ' (' + (index + 1) + '/' + drafts.length + ')';
+    get('heading').textContent = 'Exchange ' + turn.exchange + ' - ' + (turn.kind ?? 'input') + ' (' + (index + 1) + '/' + drafts.length + ')';
     get('original').value = turn.prompt;
     get('summary').value = turn.summary ?? '';
     get('error').textContent = '';
@@ -105,7 +106,7 @@ get('all').onclick = () => {
 };
 get('save').onclick = () => {
     get('save').disabled = true;
-    vscode.postMessage({ command: 'save', drafts: drafts.map(({ exchange, summary, status }) => ({ exchange, summary, status })) });
+    vscode.postMessage({ command: 'save', drafts: drafts.map(({ exchange, kind, summary, status }) => ({ exchange, kind, summary, status })) });
 };
 get('cancel').onclick = () => vscode.postMessage({ command: 'cancel' });
 window.addEventListener('message', event => { if (event.data.command === 'error') { get('error').textContent = event.data.message; update(); } });
@@ -114,7 +115,7 @@ show();
 }
 
 function reviewSummaries(vscode, drafts) {
-    const panel = vscode.window.createWebviewPanel('demoPlayer.summaryReview', 'Review prompt summaries',
+    const panel = vscode.window.createWebviewPanel('demoPlayer.summaryReview', 'Review input/output summaries',
         vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     return new Promise(resolve => {
         const received = panel.webview.onDidReceiveMessage(message => {

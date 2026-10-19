@@ -105,6 +105,7 @@ function activate(context) {
     }, participant));
 
     async function prepare(file, requestIndex = 0, requestCount = 1) {
+        state.presentationRun = (state.presentationRun ?? 0) + 1;
         if (['loading', 'typing', 'response', 'stopping'].includes(state.phase)) throw new Error('A replay is already active.');
         state.phase = 'loading';
         state.stopRequested = false;
@@ -191,6 +192,7 @@ function activate(context) {
 
     async function restart() {
         if (!['review', 'complete'].includes(state.phase)) throw new Error('Start Over is available only after an exchange completes.');
+        state.presentationRun = (state.presentationRun ?? 0) + 1;
         state.phase = 'loading';
         if (recordingEndpoint) {
             await recordingEndpoint.close();
