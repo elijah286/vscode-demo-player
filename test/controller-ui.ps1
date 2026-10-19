@@ -36,6 +36,7 @@ public static class DemoUITest {
 '@ -ReferencedAssemblies UIAutomationClient, UIAutomationTypes
 $root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Split-Path $PSScriptRoot -Parent }
 $evidence = Join-Path ([System.IO.Path]::GetFullPath($EvidenceRoot)) ('run-' + [guid]::NewGuid().ToString('N'))
+$env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = Join-Path $evidence 'summary-authoring'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 Write-Output ('UI evidence: ' + $evidence)
 $library = Join-Path $evidence 'library'
@@ -370,13 +371,13 @@ try {
     if (($preserved.recording.turns | ConvertTo-Json -Depth 60 -Compress) -cne ($cleared.recording.turns | ConvertTo-Json -Depth 60 -Compress)) { throw 'Clearing changed original exchanges.' }
     if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
-    $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*historical-summary-authoring-*' } | Select-Object -ExpandProperty ProcessId)
+    $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) } | Select-Object -ExpandProperty ProcessId)
     Invoke-Button $dialog 'AiPromptSummaries'
     $aiConsent = Wait-Until { Get-AppWindow 'AI Prompt Summaries' } 'AI authoring setup notice'
     $tasks.Add([DemoUITest]::Invoke((Find-Element $aiConsent 'Name' 'OK')))
     $authoring = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
-            $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-summary-authoring-*' -and
+            $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) -and
             $_.CommandLine -notlike '*--type=*' -and $_.ProcessId -notin $priorAuthoringIds
         } | Select-Object -First 1
     } 'separate isolated AI authoring process'

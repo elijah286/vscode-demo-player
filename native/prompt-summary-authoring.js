@@ -1,4 +1,5 @@
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const { readEntry, savePromptSummaries, validatePromptSummaries } = require('./demo-library');
 const { MAX_PROMPT_SUMMARY_LENGTH } = require('./replay');
 const { reviewSummaries } = require('./prompt-summary-review');
@@ -25,16 +26,57 @@ async function generateSummary(vscode, model, prompt, token) {
 }
 
 function activateSummaryAuthoring(context, vscode, file) {
-    const root = path.dirname(file);
-    const id = path.basename(file, '.demo.json');
     let busy = false;
-    const run = async () => {
+    const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
+    status.text = '$(refresh) Prompt summaries: Retry / set up AI';
+    status.tooltip = 'Discover available models again. No prompts are sent without consent and model selection.';
+    status.command = 'historyReplay.summarizePrompt';
+    status.show();
+    context.subscriptions.push(status);
+    const discover = async () => {
+        while (true) {
+            let models;
+            let failure;
+            let timer;
+            try {
+                // VS Code activates registered language-model providers during discovery.
+                models = await Promise.race([
+                    vscode.lm.selectChatModels(),
+                    new Promise((_, reject) => {
+                        timer = setTimeout(() => reject(new Error('Model discovery exceeded 15 seconds. Finish provider setup, then retry.')), 15000);
+                    })
+                ]);
+            } catch (error) { failure = error; }
+            finally { clearTimeout(timer); }
+            if (models?.length) return models;
+            const action = await vscode.window.showErrorMessage(
+                'Prompt summaries: AI provider setup required',
+                { modal: true, detail:
+                    (failure ? 'Model discovery failed: ' + failure.message : 'No VS Code AI model is available in this dedicated authoring profile.') +
+                    '\n\nNo prompts were sent and no summaries were saved. This profile does not inherit your normal editor extensions or sign-in. ' +
+                    'Find and install/enable a Language Model provider such as GitHub Copilot, then use its setup UI and the Accounts menu to sign in if required. ' +
+                    'Installation, account access, provider terms and model access are your choice. Copilot does not require a separate API token. ' +
+                    'If asked to reload this window, do so, then select Prompt summaries: Retry / set up AI in the status bar. ' +
+                    'Otherwise choose Retry after setup. Manual summaries remain available in the player.' },
+                'Find providers', 'Retry');
+            if (action === 'Retry') continue;
+            if (action === 'Find providers') {
+                await vscode.commands.executeCommand('workbench.extensions.search', '@id:GitHub.copilot-chat');
+            }
+            return undefined;
+        }
+    };
+    const run = async requestedFile => {
         if (busy) {
             await vscode.window.showWarningMessage('A summary is already being generated or reviewed.');
-            return;
+            return false;
         }
         busy = true;
         try {
+            if (typeof requestedFile === 'string') file = requestedFile;
+            if (!file) throw new Error('Choose Summarize long prompts with AI in the player to open a selection.');
+            const root = path.dirname(file);
+            const id = path.basename(file, '.demo.json');
             const entry = await readEntry(root, id);
             const candidates = entry.recording.turns.map((turn, index) => ({
                 exchange: index + 1, prompt: turn.snapshot.requests[0].message.text
@@ -44,6 +86,8 @@ function activateSummaryAuthoring(context, vscode, file) {
                 void vscode.window.showInformationMessage('No overlong prompts need summaries. Prompts up to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters and existing summaries are kept. To regenerate, clear the saved summaries first.');
                 return;
             }
+            const models = await discover();
+            if (!models) return;
             const document = await vscode.workspace.openTextDocument({
                 content: candidates.map(turn => 'Exchange ' + turn.exchange + '\n' + turn.prompt).join('\n\n---\n\n'),
                 language: 'plaintext'
@@ -53,12 +97,8 @@ function activateSummaryAuthoring(context, vscode, file) {
                 'Generate summaries for all ' + candidates.length + ' overlong prompts in "' + entry.title + '"? ' +
                 'Only the original prompts shown in this document and summarization instructions will be sent to your selected VS Code AI provider, one request per prompt. ' +
                 'Prompts up to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters and existing summaries are kept. Provider terms and usage limits apply. Do not send confidential content without permission.',
-                'Generate summaries');
+                { modal: true }, 'Generate summaries');
             if (consent !== 'Generate summaries') return;
-            const models = await vscode.lm.selectChatModels();
-            if (!models.length) {
-                throw new Error('No VS Code AI model is available. Install/enable a Language Model provider such as GitHub Copilot and sign in in this authoring window, then run Demo Player: Summarize Long Prompts again. No separate API token is required for Copilot. Manual summaries remain available in the interaction picker.');
-            }
             const selected = await vscode.window.showQuickPick(models.map(model => ({
                 label: model.name, description: model.vendor + ' / ' + model.id, model
             })), { placeHolder: 'Select the AI model for all overlong prompts' });
@@ -110,11 +150,56 @@ function activateSummaryAuthoring(context, vscode, file) {
             await savePromptSummaries(root, id, summaries, entry.recording.promptSummaries ?? null);
             void vscode.window.showInformationMessage('Saved reviewed summaries (' + reviewed.filter(turn => turn.summary !== null).length + ' approved, ' + reviewed.filter(turn => turn.summary === null).length + ' deleted). Return to the interaction picker and choose Use selected exchanges or Use saved selection; enable Show prompt summary in the controller. Playback keeps the complete original prompts.');
         } catch (error) {
-            void vscode.window.showErrorMessage('Prompt summary: ' + error.message);
+            await vscode.window.showErrorMessage('Prompt summary: ' + error.message, {
+                modal: true, detail: 'No unreviewed summaries were saved. Use Prompt summaries: Retry / set up AI in the status bar to try again. Manual summaries remain available in the player.'
+            });
         } finally { busy = false; }
     };
     context.subscriptions.push(vscode.commands.registerCommand('historyReplay.summarizePrompt', run));
     return { run };
 }
 
-module.exports = { generateSummary, activateSummaryAuthoring };
+function activateSummaryInbox(context, vscode, inbox) {
+    const authoring = activateSummaryAuthoring(context, vscode);
+    let scanning = false;
+    let disposed = false;
+    let initialized = false;
+    const scan = async () => {
+        if (scanning || disposed) return;
+        scanning = true;
+        try {
+            const requests = (await fs.readdir(inbox)).filter(name => /^\d+-[a-f0-9]+\.json$/.test(name)).sort();
+            const last = path.join(inbox, 'last.json');
+            if (!initialized) {
+                initialized = true;
+                if (!requests.length) {
+                    let previous;
+                    try { previous = await fs.readFile(last, 'utf8'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                    if (previous) await authoring.run(JSON.parse(previous).file);
+                }
+            }
+            for (const name of requests) {
+                if (disposed) break;
+                const request = path.join(inbox, name);
+                const value = JSON.parse(await fs.readFile(request, 'utf8'));
+                if (typeof value.file !== 'string' || !path.isAbsolute(value.file) || !value.file.endsWith('.demo.json')) {
+                    throw new Error('Invalid summary authoring launch request: ' + name);
+                }
+                if (await authoring.run(value.file) === false) break;
+                await fs.writeFile(last, JSON.stringify(value));
+                await fs.unlink(request);
+            }
+        } catch (error) {
+            clearInterval(timer);
+            await vscode.window.showErrorMessage('Prompt summary launch: ' + error.message, {
+                modal: true, detail: 'Close the dedicated authoring window and retry from the player. No launch failure is treated as a successful save.'
+            });
+        } finally { scanning = false; }
+    };
+    const timer = setInterval(() => { void scan(); }, 750);
+    context.subscriptions.push({ dispose() { disposed = true; clearInterval(timer); } });
+    return { ...authoring, ready: scan(), scan };
+}
+
+module.exports = { generateSummary, activateSummaryAuthoring, activateSummaryInbox };

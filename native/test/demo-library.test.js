@@ -198,7 +198,7 @@ test('AI request contains only the query and validates exact output limits and m
 });
 
 function authoringAPI(options = {}) {
-    const calls = { errors: [], saved: [], requests: 0, consent: 0, models: 0, picks: 0, reviews: 0, messages: [], documents: [], progress: [], reviewDrafts: [] };
+    const calls = { errors: [], errorOptions: [], commands: [], statuses: [], saved: [], requests: 0, consent: 0, models: 0, picks: 0, reviews: 0, messages: [], documents: [], progress: [], reviewDrafts: [] };
     class CancellationTokenSource {
         constructor() {
             this.listeners = new Set();
@@ -227,7 +227,11 @@ function authoringAPI(options = {}) {
         }
     };
     const api = {
-        commands: { registerCommand: () => ({ dispose() {} }) },
+        commands: {
+            registerCommand: () => ({ dispose() {} }),
+            executeCommand: async (...args) => { calls.commands.push(args); if (options.setupFailure) throw new Error('Setup command failed'); }
+        },
+        StatusBarAlignment: { Left: 1 },
         CancellationTokenSource,
         LanguageModelChatMessage: { User: content => ({ content }) },
         ProgressLocation: { Notification: 1 },
@@ -237,12 +241,24 @@ function authoringAPI(options = {}) {
             calls.documents.push(document);
             return document;
         } },
-        lm: { selectChatModels: async () => { calls.models++; return options.noModels ? [] : [model]; } },
+        lm: { selectChatModels: async () => {
+            calls.models++;
+            options.onDiscovery?.();
+            if (options.discoveryStall) return new Promise(() => {});
+            if (options.discoveryFailure && calls.models === 1) throw new Error('Discovery denied');
+            return options.noModels || calls.models <= (options.unavailableAttempts ?? 0) ? [] : [model];
+        } },
         window: {
+            createStatusBarItem: () => {
+                const status = { show() {}, dispose() {} };
+                calls.statuses.push(status);
+                return status;
+            },
             showQuickPick: async items => { calls.picks++; return options.cancelModel ? undefined : items[0]; },
             showTextDocument: async () => {},
-            showWarningMessage: async (_message, action) => {
+            showWarningMessage: async (_message, messageOptions, action) => {
                 if (action === 'Generate summaries') {
+                    assert.equal(messageOptions.modal, true);
                     calls.consent++;
                     return options.decline ? undefined : action;
                 }
@@ -276,7 +292,11 @@ function authoringAPI(options = {}) {
                 if (options.preCanceled) options.cancelSource.cancel();
                 return callback({ report: value => calls.progress.push(value) }, options.cancelSource.token);
             },
-            showErrorMessage: async message => calls.errors.push(message),
+            showErrorMessage: async (message, messageOptions) => {
+                calls.errors.push(message + (messageOptions.detail ?? ''));
+                calls.errorOptions.push(messageOptions);
+                return options.recoveryActions?.shift();
+            },
             showInformationMessage: async message => calls.saved.push(message)
         }
     };
@@ -324,6 +344,100 @@ test('AI authoring refuses a concurrent summary edit instead of overwriting it',
     await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
     assert.match(calls.errors[0], /changed since/);
     assert.equal((await library.readEntry(root, added.id)).recording.promptSummaries[0], 'Other editor');
+});
+
+test('provider setup is modal, explicit and request-free until discovery succeeds and fresh consent is given', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0], 'Provider setup', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    for (const options of [
+        { noModels: true }, { discoveryFailure: true },
+        { noModels: true, recoveryActions: ['Find providers'] },
+        { noModels: true, recoveryActions: ['Retry'] },
+        { noModels: true, recoveryActions: ['Find providers'], setupFailure: true },
+        { unavailableAttempts: 1, recoveryActions: ['Retry'], decline: true },
+        { discoveryFailure: true, recoveryActions: ['Retry'], decline: true }
+    ]) {
+        const { api, calls } = authoringAPI(options);
+        await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+        assert.equal(calls.requests, 0);
+        assert.equal(calls.reviews, 0);
+        assert.equal(calls.saved.length, 0);
+        assert.deepEqual(await fs.readFile(file), before);
+        assert.ok(calls.errorOptions.every(value => value.modal === true));
+        assert.match(calls.errors[0], /No prompts were sent/);
+        assert.equal(calls.statuses[0].command, 'historyReplay.summarizePrompt');
+        if (options.discoveryFailure) assert.match(calls.errors[0], /Discovery denied/);
+        if (calls.commands.length) assert.deepEqual(calls.commands, [['workbench.extensions.search', '@id:GitHub.copilot-chat']]);
+        if (options.setupFailure) assert.match(calls.errors.at(-1), /Setup command failed/);
+    }
+    const { api, calls } = authoringAPI({ unavailableAttempts: 1, recoveryActions: ['Retry'] });
+    await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+    assert.equal(calls.models, 2);
+    assert.equal(calls.consent, 1);
+    assert.equal(calls.requests, 1);
+    assert.equal(calls.reviews, 1);
+    assert.equal(calls.saved.length, 1);
+});
+
+test('persistent authoring inbox processes new selections in the running window and restores retry after reload', async context => {
+    const { activateSummaryInbox } = require('../prompt-summary-authoring');
+    const { source, root, inspection, directory } = await authoringFixture(context);
+    const first = await library.addPackage(root, await library.createPackage(source, [0], 'First launch', inspection.sha256));
+    const second = await library.addPackage(root, await library.createPackage(source, [0], 'Second launch', inspection.sha256));
+    const inbox = path.join(directory, 'authoring-inbox');
+    await fs.mkdir(inbox);
+    const files = [first, second].map(entry => path.join(root, entry.id + '.demo.json'));
+    const before = await Promise.all(files.map(file => fs.readFile(file)));
+    const subscriptions = [];
+    const { api, calls } = authoringAPI({ noModels: true });
+    await fs.writeFile(path.join(inbox, '100-abc.json'), JSON.stringify({ file: files[0] }));
+    const authoring = activateSummaryInbox({ subscriptions }, api, inbox);
+    context.after(() => subscriptions.forEach(item => item.dispose()));
+    await authoring.ready;
+    await fs.writeFile(path.join(inbox, '101-def.json'), JSON.stringify({ file: files[1] }));
+    await authoring.scan();
+    assert.equal(calls.models, 2);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: files[1] });
+    assert.deepEqual(await fs.readdir(inbox), ['last.json']);
+    subscriptions.forEach(item => item.dispose());
+    const reloadedSubscriptions = [];
+    const reloaded = authoringAPI({ noModels: true });
+    const reload = activateSummaryInbox({ subscriptions: reloadedSubscriptions }, reloaded.api, inbox);
+    context.after(() => reloadedSubscriptions.forEach(item => item.dispose()));
+    await reload.ready;
+    assert.equal(reloaded.calls.models, 1, 'Reload recovers the last selection without stale process environment');
+    assert.equal(reloaded.calls.requests, 0);
+    assert.deepEqual(await Promise.all(files.map(file => fs.readFile(file))), before);
+    await fs.writeFile(path.join(inbox, '102-aaa.json'), '{"file":"relative.demo.json"}');
+    await reload.scan();
+    assert.match(reloaded.calls.errors.at(-1), /Invalid summary authoring launch request/);
+    assert.equal(reloaded.calls.errorOptions.at(-1).modal, true);
+    assert.deepEqual(await Promise.all(files.map(file => fs.readFile(file))), before);
+});
+
+test('stalled provider discovery times out visibly without content consent, requests or persistence', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0], 'Stalled discovery', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    let started;
+    const discovering = new Promise(resolve => { started = resolve; });
+    const { api, calls } = authoringAPI({ discoveryStall: true, onDiscovery: started });
+    const running = activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+    await discovering;
+    context.mock.timers.tick(15000);
+    await running;
+    assert.match(calls.errors[0], /Model discovery exceeded 15 seconds/);
+    assert.equal(calls.errorOptions[0].modal, true);
+    assert.equal(calls.consent, 0);
+    assert.equal(calls.requests, 0);
+    assert.equal(calls.saved.length, 0);
+    assert.deepEqual(await fs.readFile(file), before);
 });
 
 test('individual review approvals and deletions persist only summary metadata through playback and export', async context => {

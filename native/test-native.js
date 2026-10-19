@@ -4,6 +4,46 @@ const fs = require('node:fs');
 const net = require('node:net');
 const { runTests } = require('@vscode/test-electron');
 
+async function runSummaryUI(options, profile) {
+    const { spawn } = require('node:child_process');
+    const driver = path.join(profile, 'summary-ui-driver');
+    const resultFile = path.join(profile, 'summary-ui-result.json');
+    fs.mkdirSync(driver, { recursive: true });
+    const manifest = { ...require('./package.json'), main: './driver.js' };
+    fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(driver, 'driver.js'),
+        'const vscode = require("vscode");\n' +
+        'exports.activate = context => {\n' +
+        ' const api = require(' + JSON.stringify(path.join(options.extensionDevelopmentPath, 'native-extension.js')) + ').activate(context);\n' +
+        ' const fs = require("node:fs"); const marker = ' + JSON.stringify(path.join(driver, 'started')) + ';\n' +
+        ' if (fs.existsSync(marker)) return api; fs.writeFileSync(marker, "started");\n' +
+        ' setTimeout(async () => {\n' +
+        '  let result;\n' +
+        '  try { await require(' + JSON.stringify(options.extensionTestsPath) + ').run(); result = { passed: true }; }\n' +
+        '  catch (error) { console.error(error); result = { passed: false, error: error.stack }; }\n' +
+        '  require("node:fs").writeFileSync(' + JSON.stringify(resultFile) + ', JSON.stringify(result));\n' +
+        '  await vscode.commands.executeCommand("workbench.action.quit");\n' +
+        ' }, 0);\n' +
+        ' return api;\n' +
+        '};\n');
+    const env = { ...process.env, ...options.extensionTestsEnv, HISTORY_REPLAY_TEST_DRIVER: driver };
+    delete env.ELECTRON_RUN_AS_NODE;
+    // Normal development mode is intentional: extensionTestsPath suppresses VS Code modal dialogs.
+    const child = spawn(options.vscodeExecutablePath, [
+        '--extensionDevelopmentPath=' + driver, ...options.launchArgs
+    ], { env, stdio: 'inherit' });
+    let timer;
+    try {
+        await new Promise((resolve, reject) => {
+            child.once('error', reject);
+            child.once('exit', code => code === 0 ? resolve() : reject(new Error('Summary UI window exited with code ' + code)));
+            timer = setTimeout(() => { child.kill(); reject(new Error('Summary UI acceptance exceeded 120 seconds')); }, 120000);
+        });
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+        if (!result.passed) throw new Error(result.error);
+    } finally { clearTimeout(timer); }
+}
+
 async function main() {
     const summaryTest = process.argv.includes('--summaries');
     const artifacts = process.argv.includes('--artifacts');
@@ -12,6 +52,10 @@ async function main() {
     let summaryEntry = process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY;
     if (summaryTest && !summaryEntry) {
         fs.mkdirSync(profile, { recursive: true });
+        fs.mkdirSync(path.join(profile, 'User'), { recursive: true });
+        fs.writeFileSync(path.join(profile, 'User', 'settings.json'), JSON.stringify({
+            'window.dialogStyle': 'custom', 'telemetry.telemetryLevel': 'off'
+        }));
         source = path.join(profile, 'synthetic-summary-source.jsonl');
         fs.writeFileSync(source, JSON.stringify({ kind: 0, v: { requests: [
             { result: {}, message: { text: 'First synthetic long prompt. '.repeat(12) }, response: [{ value: 'Original synthetic answer.' }] },
@@ -54,7 +98,12 @@ async function main() {
         });
     });
     console.log('NATIVE TEST PROFILE', profile);
-    await runTests({
+    if (summaryTest) {
+        fs.mkdirSync(path.join(profile, 'requests'), { recursive: true });
+        fs.mkdirSync(path.join(profile, 'workspace'), { recursive: true });
+        fs.writeFileSync(path.join(profile, 'requests', '100-abc.json'), JSON.stringify({ file: path.resolve(summaryEntry) }));
+    }
+    const options = {
         vscodeExecutablePath: path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe'),
         extensionDevelopmentPath: process.env.HISTORY_REPLAY_TEST_EXTENSION
             ? path.resolve(process.env.HISTORY_REPLAY_TEST_EXTENSION) : __dirname,
@@ -63,15 +112,19 @@ async function main() {
             HISTORY_REPLAY_CDP_PORT: String(port),
             HISTORY_REPLAY_TEST_SOURCE: path.resolve(source),
             HISTORY_REPLAY_TEST_REQUEST: String(requestIndex),
-            HISTORY_REPLAY_SUMMARY_ENTRY: summaryTest ? path.resolve(summaryEntry) : '',
+            HISTORY_REPLAY_TEST_SUMMARY_ENTRY: summaryTest ? path.resolve(summaryEntry) : '',
+            HISTORY_REPLAY_SUMMARY_ENTRY: '',
+            HISTORY_REPLAY_SUMMARY_INBOX: summaryTest ? path.join(profile, 'requests') : '',
             ...(artifacts ? { HISTORY_REPLAY_TEST_ARTIFACTS: '1' } : {}),
             ...(process.env.HISTORY_REPLAY_BACKEND_PROBE === '1' ? { HISTORY_REPLAY_BACKEND_PROBE: '1' } : {})
         },
         launchArgs: [
             '--new-window',
+            ...(summaryTest ? [path.join(profile, 'workspace')] : []),
             ...(process.env.HISTORY_REPLAY_AGENTS === '1' ? ['--agents'] : []),
             '--remote-debugging-port=' + port,
             '--user-data-dir', profile,
+            '--shared-data-dir', path.join(profile, 'shared-data'),
             '--extensions-dir', path.join(profile, 'extensions'),
             '--enable-proposed-api=local.historical-transcript-replay',
             ...(process.env.HISTORY_REPLAY_AGENTS === '1' ? [] : [
@@ -84,7 +137,9 @@ async function main() {
             '--skip-release-notes',
             '--disable-telemetry'
         ]
-    });
+    };
+    if (summaryTest) await runSummaryUI(options, profile);
+    else await runTests(options);
 }
 
 main().catch(error => {

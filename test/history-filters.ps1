@@ -31,6 +31,24 @@ Assert-Equal (Test-DemoHistoryRow $row '' '*' '*' '*' '*' ([datetime]'2026-10-16
 Assert-Equal (Test-DemoHistoryRow $row '' '*' '*' '*' '*' $null $null 0 0) $false 'Unknown numbers are not coerced to zero'
 
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ApplicationRoot 'DemoDialogs.ps1'), [ref]$null, [ref]$null)
+$previousSummaryRoot = $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT
+try {
+    $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = $null
+    $firstPaths = Get-DemoSummaryAuthoringPaths
+    $secondPaths = Get-DemoSummaryAuthoringPaths
+    Assert-Equal $firstPaths.Profile $secondPaths.Profile 'Authoring profile is persistent across launches'
+    Assert-Equal $firstPaths.Profile (Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\summary-authoring') 'Authoring never uses the normal editor profile'
+    Assert-Equal $firstPaths.Extensions (Join-Path $firstPaths.Profile 'extensions') 'Providers remain in a dedicated persistent directory'
+    Assert-Equal $firstPaths.Workspace (Join-Path $firstPaths.Profile 'workspace') 'Repeated launches reuse a dedicated workspace'
+    $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = Join-Path $ApplicationRoot '.build\synthetic-summary-profile'
+    Assert-Equal (Get-DemoSummaryAuthoringPaths).Profile $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT 'Acceptance can explicitly isolate the authoring profile'
+    $launch = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-DemoSummaryAuthoring' }, $true).Extent.Text
+    Assert-Equal $launch.Contains("'--reuse-window'") $true 'Authoring reuses its own workspace window'
+    Assert-Equal $launch.Contains("'--shared-data-dir'") $true 'New VS Code shared account storage is isolated too'
+    Assert-Equal $launch.Contains("['HISTORY_REPLAY_SUMMARY_INBOX']") $true 'Running authoring process receives later selections through inbox'
+    Assert-Equal $launch.Contains("'HISTORY_REPLAY_SUMMARY_ENTRY'") $false 'Launcher does not rely on stale process selection environment'
+    Assert-Equal $launch.Contains('[IO.File]::Move($pending, $request)') $true 'Launch requests are published atomically'
+} finally { $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = $previousSummaryRoot }
 foreach ($call in $ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-DemoLibrary'

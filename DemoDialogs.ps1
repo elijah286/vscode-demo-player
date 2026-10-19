@@ -714,17 +714,51 @@ function Show-InteractionPicker($Owner) {
     return Show-InteractionPickerWindow $dialog
 }
 
+function Get-DemoSummaryAuthoringPaths {
+    $profile = if ($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) {
+        [IO.Path]::GetFullPath($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT)
+    } else { Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\summary-authoring' }
+    return @{
+        Profile = $profile
+        Extensions = Join-Path $profile 'extensions'
+        Workspace = Join-Path $profile 'workspace'
+        Inbox = Join-Path $profile 'requests'
+    }
+}
+
 function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
     Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner | Out-Null
     $code = Resolve-PlayerVSCode $script:CodePath
-    $profile = Join-Path ([IO.Path]::GetTempPath()) ('historical-summary-authoring-' + [guid]::NewGuid().ToString('N'))
+    $paths = Get-DemoSummaryAuthoringPaths
+    foreach ($directory in @($paths.Profile, $paths.Extensions, $paths.Workspace, $paths.Inbox)) {
+        [IO.Directory]::CreateDirectory($directory) | Out-Null
+    }
+    $request = Join-Path $paths.Inbox (([datetime]::UtcNow.Ticks.ToString()) + '-' + [guid]::NewGuid().ToString('N') + '.json')
+    $pending = $request + '.pending'
+    [IO.File]::WriteAllText($pending, (ConvertTo-Json @{ file = Join-Path $script:LibraryRoot ($Id + '.demo.json') } -Compress), [Text.UTF8Encoding]::new($false))
+    [IO.File]::Move($pending, $request)
+    $profileArgument = '--user-data-dir(?:=|\s+)"?' + [regex]::Escape($paths.Profile) + '(?:"|\s|$)'
+    $running = Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
+        $_.CommandLine -and $_.CommandLine -match $profileArgument -and $_.CommandLine -notmatch '--type='
+    } | Select-Object -First 1
+    if ($running) {
+        # Re-running an extension-development CLI launch reloads the host and discards an active review.
+        $shell = New-Object -ComObject WScript.Shell
+        try {
+            if (-not $shell.AppActivate([int]$running.ProcessId)) {
+                throw 'Your selection is queued in the dedicated VS Code authoring window. Switch to that window to continue setup or review; Windows could not bring it to the foreground.'
+            }
+        } finally { [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null }
+        return
+    }
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $code
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.Arguments = @(
-        '--new-window', '--user-data-dir', ('"' + $profile + '"'),
-        '--extensions-dir', ('"' + (Join-Path $profile 'extensions') + '"'),
+        '--reuse-window', ('"' + $paths.Workspace + '"'), '--user-data-dir', ('"' + $paths.Profile + '"'),
+        '--extensions-dir', ('"' + $paths.Extensions + '"'),
+        '--shared-data-dir', ('"' + (Join-Path $paths.Profile 'shared-data') + '"'),
         ('--extensionDevelopmentPath="' + (Join-Path $PSScriptRoot 'native') + '"'),
         '--enable-proposed-api=local.historical-transcript-replay',
         '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--disable-telemetry'
@@ -733,7 +767,7 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
     foreach ($key in @($start.EnvironmentVariables.Keys)) {
         if ($key -like 'HISTORY_REPLAY_*') { $start.EnvironmentVariables.Remove($key) }
     }
-    $start.EnvironmentVariables['HISTORY_REPLAY_SUMMARY_ENTRY'] = Join-Path $script:LibraryRoot ($Id + '.demo.json')
+    $start.EnvironmentVariables['HISTORY_REPLAY_SUMMARY_INBOX'] = $paths.Inbox
     $process = [Diagnostics.Process]::Start($start)
     if (-not $process) { throw 'The isolated VS Code summary authoring window could not start.' }
     $process.Dispose()
@@ -799,7 +833,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 }
 
 function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 300-character summary budget in this selection. Short prompts and existing summaries are preserved. An isolated VS Code authoring window opens; enable an AI provider and sign in there if needed. One consent and model selection cover the batch, with one provider request per long prompt. After generation a review panel opens automatically: compare originals, edit, approve individually, delete only summaries, or approve all. Save the reviewed batch, return here to use the selection, and enable Show prompt summary in the controller. Playback keeps the full original prompts and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate summaries for all unsummarized prompts longer than the 300-character summary budget in this selection. Short prompts and existing summaries are preserved. Switch to the dedicated VS Code authoring window for provider setup and review. Its isolated profile retains providers and sign-in across launches, but never inherits your normal editor account or extensions. Install/enable a provider and sign in there yourself if prompted, then choose Retry in the status bar. Nothing is sent until you consent and select a model. After generation compare originals, edit, approve, or delete summaries and save the reviewed batch. Return here to use the selection and enable Show prompt summary. Playback keeps full originals and never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
 }
 

@@ -18,7 +18,7 @@ async function reviewFrame(page) {
 }
 
 async function run() {
-    const file = process.env.HISTORY_REPLAY_SUMMARY_ENTRY;
+    const file = process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY;
     const before = await fs.readFile(file);
     const entry = JSON.parse(before.toString('utf8'));
     const prompts = entry.recording.turns.map(turn => turn.snapshot.requests[0].message.text)
@@ -32,17 +32,55 @@ async function run() {
     try {
         const page = browser.contexts()[0].pages().find(page => page.url().includes('workbench'));
         assert.ok(page, 'Isolated authoring workbench is available');
-        await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
-        assert.equal(await page.locator('.quick-input-list:visible').count(), 0, 'No per-prompt selection is required');
-        assert.ok(vscode.workspace.textDocuments.some(document => prompts.every(prompt => document.getText().includes(prompt))), 'All eligible original prompts are available before one batch consent');
-        await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
-        await page.getByText(/Prompt summary: No VS Code AI model is available/).first().waitFor({ state: 'visible', timeout: 15000 });
+        const setup = page.getByText('Prompt summaries: AI provider setup required', { exact: true });
+        await setup.waitFor({ state: 'visible', timeout: 15000 });
+        assert.equal(await page.getByRole('button', { name: 'Generate summaries', exact: true }).count(), 0, 'No content consent before provider readiness');
+        assert.ok(await page.getByRole('button', { name: 'Find providers', exact: true }).isVisible(), 'Setup is an actionable modal, not a hidden notification');
+        await page.getByRole('button', { name: 'Retry', exact: true }).click();
+        await setup.waitFor({ state: 'visible', timeout: 15000 });
+        await page.screenshot({ path: path.join(path.dirname(file), 'summary-provider-missing.png') });
         assert.deepEqual(await fs.readFile(file), before, 'Missing provider cannot change saved summaries or payloads');
-        const runAgain = vscode.commands.executeCommand('historyReplay.summarizePrompt');
-        await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
-        await vscode.commands.executeCommand('notifications.clearAll');
+        await page.getByRole('button', { name: 'Find providers', exact: true }).click();
+        await api.ready;
+        assert.ok(await page.getByText('Prompt summaries: Retry / set up AI', { exact: true }).isVisible(), 'Persistent status action remains available during setup');
+        const runAgain = api.run();
+        await setup.waitFor({ state: 'visible', timeout: 15000 });
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         await runAgain;
-        assert.deepEqual(await fs.readFile(file), before, 'Canceling another batch consent preserves the entry');
+        assert.deepEqual(await fs.readFile(file), before, 'Canceling setup preserves the entry');
+        await api.ready;
+        const secondRoot = path.join(path.dirname(file), 'second-library');
+        const second = await library.addPackage(secondRoot, { ...entry.recording, title: 'Synthetic later selection' });
+        const secondFile = path.join(secondRoot, second.id + '.demo.json');
+        const secondBefore = await fs.readFile(secondFile);
+        const inbox = process.env.HISTORY_REPLAY_SUMMARY_INBOX;
+        const { spawn } = require('node:child_process');
+        const profile = path.dirname(inbox);
+        const env = { ...process.env };
+        delete env.ELECTRON_RUN_AS_NODE;
+        env.VSCODE_DEMO_PLAYER_SUMMARY_ROOT = profile;
+        const quote = value => "'" + value.replace(/'/g, "''") + "'";
+        const launch = '. ' + quote(path.join(__dirname, '..', '..', 'DemoDialogs.ps1')) + '; ' +
+            '$script:LibraryRoot = ' + quote(secondRoot) + '; ' +
+            'function Invoke-DemoLibrary { param($Request, $Owner) Get-Content -Raw -LiteralPath ' + quote(secondFile) + ' | ConvertFrom-Json }; ' +
+            'function Resolve-PlayerVSCode { param($CodePath) ' + quote(process.execPath) + ' }; ' +
+            'Start-DemoSummaryAuthoring ' + quote(second.id) + ' $null';
+        await new Promise((resolve, reject) => {
+            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference = 'Stop'; " + launch], { env });
+            let output = '';
+            child.stderr.on('data', data => { output += data; });
+            child.once('error', reject);
+            child.once('exit', code => code === 0 ? resolve() : reject(new Error('Repeated authoring launch failed: ' + code + ' ' + output)));
+        });
+        await setup.waitFor({ state: 'visible', timeout: 15000 });
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        const deadline = Date.now() + 5000;
+        while (JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')).file !== secondFile && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: secondFile }, 'A repeated CLI launch targets the later selection, not stale process environment');
+        assert.deepEqual(await fs.readFile(secondFile), secondBefore);
+        assert.equal(browser.contexts()[0].pages().filter(candidate => candidate.url().includes('workbench')).length, 1, 'Repeated launch reuses one dedicated authoring workspace');
         let requests = 0;
         const syntheticModel = {
             name: 'Synthetic summary model', vendor: 'test', id: 'synthetic', maxInputTokens: 10000,
@@ -59,14 +97,16 @@ async function run() {
             CancellationTokenSource: vscode.CancellationTokenSource,
             LanguageModelChatMessage: vscode.LanguageModelChatMessage,
             ProgressLocation: vscode.ProgressLocation,
+            StatusBarAlignment: vscode.StatusBarAlignment,
             ViewColumn: vscode.ViewColumn,
             workspace: vscode.workspace,
             commands: { registerCommand: () => ({ dispose() {} }) },
             lm: { selectChatModels: async () => [syntheticModel] },
             window: {
+                createStatusBarItem: vscode.window.createStatusBarItem,
                 showTextDocument: vscode.window.showTextDocument,
                 showWarningMessage: vscode.window.showWarningMessage,
-                showErrorMessage: message => { console.error(message); return vscode.window.showErrorMessage(message); },
+                showErrorMessage: (message, ...args) => { console.error(message); return vscode.window.showErrorMessage(message, ...args); },
                 showInformationMessage: vscode.window.showInformationMessage,
                 withProgress: vscode.window.withProgress,
                 createWebviewPanel: vscode.window.createWebviewPanel,
@@ -75,6 +115,8 @@ async function run() {
         }, file);
         const generated = authoring.run();
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+        assert.equal(await page.locator('.quick-input-list:visible').count(), 0, 'No per-prompt selection is required');
+        assert.ok(vscode.workspace.textDocuments.some(document => prompts.every(prompt => document.getText().includes(prompt))), 'Full originals are available before batch consent');
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const frame = await reviewFrame(page);
         const original = frame.getByLabel('Original prompt (read-only)');

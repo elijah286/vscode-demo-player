@@ -464,8 +464,29 @@ Install/enable an AI Language Model provider such as GitHub Copilot and sign in
 in that window. Copilot uses your existing account/allowance: a separate API
 token is not required, but a model must be available and provider limits/terms
 still apply. The isolated profile does not inherit your normal VS Code sign-in
-or installed extensions. If no model is available, an explicit error explains
-setup; manual summaries still work.
+or installed extensions. It now persists its own providers and sign-in under
+`%LOCALAPPDATA%\VSCodeDemoPlayer\summary-authoring` across launches. No tokens,
+extensions, or settings are read/copied from the normal profile. The same
+dedicated workspace receives later selections even when already running.
+Do not use this workspace for normal editing. For isolated testing, set
+`VSCODE_DEMO_PLAYER_SUMMARY_ROOT` to a separate synthetic profile root before
+starting the controller; never point it at a normal VS Code profile.
+VS Code's shared account-storage directory is isolated under the same root too.
+Later selections are queued while generation/review is active; reopening the
+picker action brings the existing authoring window forward without reloading it.
+
+Before content consent, VS Code discovers/activates registered Language Model
+providers. If none are ready (or discovery fails), a **modal** setup dialog
+explains the problem. **Find providers** opens the GitHub Copilot extension
+listing, but does not install, enable, sign in, or send prompts for you.
+You may use another provider. Complete provider setup and account access in
+this dedicated window, including any required reload. Then choose **Retry**,
+or **Prompt summaries: Retry / set up AI** in the status bar. Reload restores
+the last selection for retry. Discovery is retried explicitly, not treated as
+successful generation. Dismiss/cancel leaves all library bytes unchanged;
+manual summaries still work. Generation/save failures also use modal errors.
+Discovery has a 15-second limit; a slow provider can be retried after setup.
+Switch to the dedicated authoring window if another player window covers it.
 
 There is no per-exchange chooser: one batch covers every prompt that exceeds
 the 300-character summary budget after whitespace normalization and does not
@@ -497,9 +518,11 @@ Return to the picker and click **Use selected exchanges** or **Use saved selecti
 either reads the latest saved summaries without refreshing or reselecting.
 Enable **Show prompt summary** in the controller to display them; this toggle
 stays off by default. The native chat prompt itself intentionally remains full-length.
-Close the authoring window
-when finished. Its private temporary profile remains under the Windows temp
-directory (`historical-summary-authoring-*`); it is not shipped or committed.
+Close the authoring window when finished. Its dedicated profile, installed
+providers and provider-managed authentication remain local for next time;
+they are not shipped or committed. Playback profiles remain disposable and
+never make AI requests. Live provider/account readiness requires your own
+installation/sign-in and is not established by synthetic-provider tests.
 
 Summaries are optional package metadata and survive export/import. Concurrent
 summary edits are rejected rather than overwritten; reopen the editor to reload.
@@ -722,6 +745,24 @@ npm run lint
 `test:unit` selects the native-reference regressions explicitly, including
 capture/export/import fidelity, serialized URI/location variants, native-anchor
 conversion, malformed ranges, and refusal to turn unknown parts into tool calls.
+
+For synthetic summary/provider-recovery acceptance (no external AI requests):
+
+```powershell
+$env:HISTORY_REPLAY_TEST_PROFILE = 'C:\Temp\unique-synthetic-summary-profile'
+node .\test-native.js --summaries
+```
+
+Use a new empty profile path and reserve the interactive desktop slot first.
+This launches a normal isolated development window via a generated local driver:
+VS Code suppresses modal dialogs in extension-test mode. Only that synthetic
+profile sets custom dialog style for automation. Acceptance exercises real
+missing-provider guidance, explicit retry/provider search/cancel, repeated
+production-launcher foregrounding/inbox delivery, and the full synthetic-model
+review/save/cancel flow. Result JSON, screenshots and local driver stay under
+the test profile. Unit tests separately cover throwing/stalled discovery,
+setup-command failures and reload/last-selection recovery. None of these tests
+certifies a live provider, account sign-in, allowance, or external model access.
 
 For native reference rendering and retained-history verification:
 
