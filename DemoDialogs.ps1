@@ -91,7 +91,9 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
             } while ($state.Clock.ElapsedMilliseconds -lt 30000)
         }
         if ($state.Cancelled) {
-            throw ("The demo library operation '" + $state.Operation + "' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.")
+            $failure = [OperationCanceledException]::new("The demo library operation '" + $state.Operation + "' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.")
+            $failure.Data['DemoPlayerOwnerClosed'] = $true
+            throw $failure
         }
         if ($state.Failure) { throw $state.Failure }
         if (-not $process.HasExited) {
@@ -124,6 +126,10 @@ function New-DemoDialog([string]$Xaml, $Owner) {
 }
 
 function Show-DemoError($Owner, $Failure) {
+    if ($Failure.Exception -is [OperationCanceledException] -and $Failure.Exception.Data['DemoPlayerOwnerClosed']) {
+        Write-Warning $Failure.Exception.Message
+        return
+    }
     [System.Windows.MessageBox]::Show($Owner, $Failure.Exception.Message, 'Demo Player', 'OK', 'Error') | Out-Null
 }
 
