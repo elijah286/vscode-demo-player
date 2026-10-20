@@ -431,7 +431,9 @@ try {
     Invoke-Button $dialog 'EditPromptSummaries'
     $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'summary clear draft editor'
     Invoke-Button $summaryDialog 'ClearSummaryDrafts'
-    if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '') { throw 'Clear all did not empty the summary draft.' }
+    Wait-Until {
+        (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq ''
+    } 'clear all empties the summary draft' | Out-Null
     Invoke-Button $summaryDialog 'Cancel'
     Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'cancel clear draft' | Out-Null
     $preserved = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
@@ -445,7 +447,11 @@ try {
     $clearConsent = Wait-Until { Get-AppWindow 'Clear Prompt Summaries' } 'confirmed clear summaries'
     Invoke-DialogButton $clearConsent 'OK'
     Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'clear confirmation closes' | Out-Null
-    $cleared = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    $cleared = Wait-Until {
+        $state = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+        if (-not @($state.recording.promptSummaries | Where-Object { $null -ne $_ }).Count -and
+            -not @($state.recording.outputSummaries | Where-Object { $null -ne $_ }).Count) { return $state }
+    } 'confirmed clear persists all input and output summaries'
     if (@($cleared.recording.promptSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left saved summaries.' }
     if (@($cleared.recording.outputSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left output summaries.' }
     if (($preserved.recording.turns | ConvertTo-Json -Depth 60 -Compress) -cne ($cleared.recording.turns | ConvertTo-Json -Depth 60 -Compress)) { throw 'Clearing changed original exchanges.' }

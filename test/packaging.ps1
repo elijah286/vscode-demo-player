@@ -71,6 +71,27 @@ function Test-ControllerFailures {
     Assert-Equal $script:sentAction 'stop' 'Timed-out target is not played'
     Assert-Equal $playPause.IsEnabled $false 'Timed-out primary control remains disabled'
     Assert-Equal $nextStep.IsEnabled $false 'Timed-out Next Step remains disabled'
+    $script:stopping = $false
+    $script:connectionStop = $false
+    $script:pairedVisible = $true
+    $script:preparedDeadline = [DateTime]::UtcNow.AddMinutes(1)
+    $script:connectionFailures = 0
+    $script:client = [pscustomobject]@{}
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $cancelled = [Threading.Tasks.TaskCompletionSource[object]]::new()
+        $cancelled.SetCanceled()
+        $script:stateTask = $cancelled.Task
+        & $tick
+    }
+    Assert-Equal $script:stopping $true 'Repeated connection cancellation requests scoped stop'
+    Assert-Equal $script:connectionStop $true 'Connection-driven stop is distinct from user stop'
+    $script:alive = $false
+    & $tick
+    Assert-Equal ($script:lastFault -like 'The isolated VS Code target closed. Control connection failed:*') $true 'Connection-driven exit reports target closure and retains its cause'
+    $script:connectionStop = $false
+    $script:lastFault = 'User stop preserves existing status'
+    & $tick
+    Assert-Equal $script:lastFault 'User stop preserves existing status' 'User stop is not relabeled as unexpected closure'
     $script:ReplayProcessId = 0
     $script:standalone = $true
     function Start-DemoReplay { throw 'Synthetic target launch failure' }

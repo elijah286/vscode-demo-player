@@ -280,7 +280,10 @@ with a 30-second helper limit and reentrant controls disabled until done.
 The same responsive, disabled-owner wait is used for saved-library refresh,
 import, rename, delete and export. The budget includes sending the request:
 a helper that stops reading stdin cannot freeze the window before the watchdog
-starts. Closing the owning window cancels and stops that helper. History
+starts. Closing the owning window cancels and stops that helper. This explicit
+owner-close cancellation is logged as a warning instead of reopening an error
+dialog for the closed window; it still never confirms a successful operation.
+History
 discovery retains its separate 60-second budget and streamed progress.
 
 Success requires a complete successful response **and** a zero-exit helper.

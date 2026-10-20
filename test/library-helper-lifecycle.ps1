@@ -155,13 +155,19 @@ process.stdin.on('end', () => {
         $closeTimer.Add_Tick({ $closeTimer.Stop(); $owner.Close() })
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $message = ''
+        $failure = $null
         try {
             $closeTimer.Start()
             Invoke-DemoLibrary @{ command = 'export' } $owner | Out-Null
-        } catch { $message = $_.Exception.Message }
+        } catch { $failure = $_; $message = $_.Exception.Message }
         finally { $closeTimer.Stop() }
         Assert-HelperStopped
         if ($clock.Elapsed.TotalSeconds -gt 5 -or $message -notmatch "export.*cancelled.*No success was confirmed") { throw ('Owner closure did not cancel explicitly and promptly: ' + $message) }
+        if ($failure.Exception -isnot [OperationCanceledException] -or -not $failure.Exception.Data['DemoPlayerOwnerClosed']) { throw 'Owner closure lost its explicit cancellation type/context.' }
+        $warnings = @(& { Show-DemoError $owner $failure } 3>&1)
+        if ($warnings.Count -ne 1 -or $warnings[0] -isnot [Management.Automation.WarningRecord] -or $warnings[0].Message -ne $message) {
+            throw 'Closed-window cancellation must be logged without reopening a modal error.'
+        }
     }
     if ($failures.Count) { throw ($failures -join "`n") }
     Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 5 runtime cases; real 30-second deadlines, blocked input, completion contract, streaming history, owner routing/cancellation and process cleanup.'

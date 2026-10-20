@@ -153,6 +153,7 @@ $script:stateTask = $null
 $script:actionTask = $null
 $script:action = $null
 $script:stopping = $false
+$script:connectionStop = $false
 $script:stopSent = $false
 $script:closeAllowed = $false
 $script:fallbackSent = $false
@@ -247,6 +248,7 @@ function Reset-ReplaySession {
     $script:ReplayProcessId = 0
     $script:action = $null
     $script:stopping = $false
+    $script:connectionStop = $false
     $script:stopSent = $false
     $script:fallbackSent = $false
     $script:pairedVisible = $false
@@ -390,9 +392,11 @@ $windowMode.Add_SelectionChanged({
 })
 
 function Request-Stop {
+    param([switch]$ConnectionFailure)
     if (-not $ReplayProcessId) { return }
     if ($script:stopping) { return }
     $script:stopping = $true
+    $script:connectionStop = [bool]$ConnectionFailure
     $script:switching = $false
     $script:deadline = [DateTime]::UtcNow.AddSeconds(8)
     $status.Text = 'Stopping'
@@ -455,8 +459,10 @@ $timer.Add_Tick({
         }
         if (-not $ReplayProcessId) { return }
         if (-not (Test-ReplayAlive)) {
-            if (-not $script:stopping) {
+            if (-not $script:stopping -or $script:connectionStop) {
+                $connectionFailure = if ($script:connectionStop) { $script:lastFault } else { $null }
                 $script:lastFault = if ($script:pairedVisible) { 'The isolated VS Code target closed.' } else { 'The isolated player exited before it was ready.' }
+                if ($connectionFailure) { $script:lastFault += ' Control connection failed: ' + $connectionFailure }
             }
             Reset-ReplaySession
             return
@@ -550,7 +556,7 @@ $timer.Add_Tick({
         $script:actionTask = $null
         $playPause.IsEnabled = $false
         $nextStep.IsEnabled = $false
-        if ($script:connectionFailures -ge 3 -and -not $script:stopping) { Request-Stop }
+        if ($script:connectionFailures -ge 3 -and -not $script:stopping) { Request-Stop -ConnectionFailure }
     }
 })
 $window.Add_Closed({
