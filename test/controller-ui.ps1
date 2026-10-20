@@ -81,14 +81,21 @@ function Find-Element($Parent, [string]$Property, [string]$Value) {
         'Id' { [System.Windows.Automation.AutomationElement]::AutomationIdProperty }
     }
     $condition = [System.Windows.Automation.PropertyCondition]::new($identifier, $Value)
-    return $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $element = $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw ('UI element did not become available: ' + $Property + '=' + $Value)
 }
 
-function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 15) {
+function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 60) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
         $value = & $Check
         if ($value) { return $value }
+        Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     throw ('UI acceptance timed out: ' + $Description)
 }
@@ -100,6 +107,24 @@ function Get-AppWindow([string]$Title) {
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
     ))
     return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Invoke-DialogButton($Parent, [string]$Name) {
+    $title = $Parent.Current.Name
+    $button = Wait-Until {
+        $dialog = Get-AppWindow $title
+        if (-not $dialog) { return $null }
+        $condition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Name),
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+        ))
+        $candidate = $dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        if ($candidate -and $candidate.Current.IsEnabled) {
+            $pattern = $null
+            if ($candidate.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { return $candidate }
+        }
+    } ('invokable dialog button: ' + $Name)
+    $script:tasks.Add([DemoUITest]::Invoke($button))
 }
 
 function Invoke-Button($Parent, [string]$Id) {
@@ -370,12 +395,12 @@ try {
     if ($preserved.recording.promptSummaries[0] -cne $overlaySummary) { throw 'Canceling clear changed saved summaries.' }
     Invoke-Button $dialog 'ClearPromptSummaries'
     $clearConsent = Wait-Until { Get-AppWindow 'Clear Prompt Summaries' } 'clear summaries confirmation'
-    $tasks.Add([DemoUITest]::Invoke((Find-Element $clearConsent 'Name' 'Cancel')))
+    Invoke-DialogButton $clearConsent 'Cancel'
     Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'declined clear leaves summaries' | Out-Null
     if ((Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }).recording.promptSummaries[0] -cne $overlaySummary) { throw 'Declining clear changed the summary.' }
     Invoke-Button $dialog 'ClearPromptSummaries'
     $clearConsent = Wait-Until { Get-AppWindow 'Clear Prompt Summaries' } 'confirmed clear summaries'
-    $tasks.Add([DemoUITest]::Invoke((Find-Element $clearConsent 'Name' 'OK')))
+    Invoke-DialogButton $clearConsent 'OK'
     Wait-Until { -not (Get-AppWindow 'Clear Prompt Summaries') } 'clear confirmation closes' | Out-Null
     $cleared = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
     if (@($cleared.recording.promptSummaries | Where-Object { $null -ne $_ }).Count) { throw 'Clear all left saved summaries.' }
@@ -385,13 +410,13 @@ try {
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($cleared.recording.outputSummaries) } | Out-Null
     foreach ($action in @(
-        @{ Button = 'AiPromptSummaries'; Title = 'AI Input / Output Summaries' },
-        @{ Button = 'AiResponseSummaries'; Title = 'AI Response Summaries' }
+        @{ Button = 'AiPromptSummaries'; Title = 'AI Input / Output Summaries'; Scope = 'both' },
+        @{ Button = 'AiResponseSummaries'; Title = 'AI Response Summaries'; Scope = 'output' }
     )) {
     $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) } | Select-Object -ExpandProperty ProcessId)
     Invoke-Button $dialog $action.Button
     $aiConsent = Wait-Until { Get-AppWindow $action.Title } 'AI authoring setup notice'
-    $tasks.Add([DemoUITest]::Invoke((Find-Element $aiConsent 'Name' 'OK')))
+    Invoke-DialogButton $aiConsent 'OK'
     $authoring = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
             $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) -and
@@ -399,10 +424,23 @@ try {
         } | Select-Object -First 1
     } 'separate isolated AI authoring process'
     $authoringId = [int]$authoring.ProcessId
+    Wait-Until {
+        $requests = Get-ChildItem -LiteralPath (Join-Path $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT 'requests') -Filter '*.json' -File
+        foreach ($queued in $requests) {
+            $request = Get-Content -LiteralPath $queued.FullName -Raw | ConvertFrom-Json
+            $requestScope = if ($request.scope) { $request.scope } else { 'both' }
+            if ($request.file -eq (Join-Path $library ($summaryEntry.id + '.demo.json')) -and $requestScope -eq $action.Scope) { return $true }
+        }
+        return $false
+    } 'authoring launch queues the correct scoped request' | Out-Null
     Wait-Until { (Get-Process -Id $authoringId).MainWindowHandle -ne [IntPtr]::Zero } 'AI authoring workbench window' 30 | Out-Null
     if (-not (Get-Process -Id $authoringId).WaitForInputIdle(5000)) { throw 'AI authoring window did not become responsive.' }
-    (Get-Process -Id $authoringId).CloseMainWindow() | Out-Null
-    Wait-Until { -not (Get-Process -Id $authoringId -ErrorAction SilentlyContinue) } 'close only the synthetic authoring window' 20 | Out-Null
+    Wait-Until {
+        $ownedAuthoring = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
+        if (-not $ownedAuthoring) { return $true }
+        if ($ownedAuthoring.MainWindowHandle -ne [IntPtr]::Zero) { $ownedAuthoring.CloseMainWindow() | Out-Null }
+        return $ownedAuthoring.WaitForExit(1000)
+    } 'dismiss setup dialogs and close only the synthetic authoring window' 60 | Out-Null
     $authoringId = 0
     }
     Save-WindowImage $dialog 'library-captured.png'
