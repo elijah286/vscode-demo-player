@@ -384,9 +384,13 @@ try {
     if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($cleared.recording.outputSummaries) } | Out-Null
+    foreach ($action in @(
+        @{ Button = 'AiPromptSummaries'; Title = 'AI Input / Output Summaries' },
+        @{ Button = 'AiResponseSummaries'; Title = 'AI Response Summaries' }
+    )) {
     $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) } | Select-Object -ExpandProperty ProcessId)
-    Invoke-Button $dialog 'AiPromptSummaries'
-    $aiConsent = Wait-Until { Get-AppWindow 'AI Input / Output Summaries' } 'AI authoring setup notice'
+    Invoke-Button $dialog $action.Button
+    $aiConsent = Wait-Until { Get-AppWindow $action.Title } 'AI authoring setup notice'
     $tasks.Add([DemoUITest]::Invoke((Find-Element $aiConsent 'Name' 'OK')))
     $authoring = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
@@ -400,6 +404,7 @@ try {
     (Get-Process -Id $authoringId).CloseMainWindow() | Out-Null
     Wait-Until { -not (Get-Process -Id $authoringId -ErrorAction SilentlyContinue) } 'close only the synthetic authoring window' 20 | Out-Null
     $authoringId = 0
+    }
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
     $selectedControls = Wait-Until {

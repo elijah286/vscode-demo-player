@@ -1,6 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { readEntry, saveSummaryBatch, validatePromptSummaries } = require('./demo-library');
+const { readEntry, saveSummaryBatch, savePromptSummaries, validatePromptSummaries } = require('./demo-library');
 const { MAX_PROMPT_SUMMARY_LENGTH, kindOf } = require('./replay');
 const { reviewSummaries } = require('./prompt-summary-review');
 
@@ -51,6 +51,7 @@ async function generateSummary(vscode, model, prompt, token, kind = 'input') {
 
 function activateSummaryAuthoring(context, vscode, file) {
     let busy = false;
+    let scope = 'both';
     const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
     status.text = '$(refresh) Prompt summaries: Retry / set up AI';
     status.tooltip = 'Discover available models again. No prompts are sent without consent and model selection.';
@@ -73,14 +74,15 @@ function activateSummaryAuthoring(context, vscode, file) {
             } catch (error) { failure = error; }
             finally { clearTimeout(timer); }
             if (models?.length) return models;
+            const retryLabel = scope === 'output' ? 'Response summaries: Retry / set up AI' : 'Prompt summaries: Retry / set up AI';
             const action = await vscode.window.showErrorMessage(
-                'Prompt summaries: AI provider setup required',
+                (scope === 'output' ? 'Response summaries' : 'Prompt summaries') + ': AI provider setup required',
                 { modal: true, detail:
                     (failure ? 'Model discovery failed: ' + failure.message : 'No VS Code AI model is available in this dedicated authoring profile.') +
                     '\n\nNo prompts were sent and no summaries were saved. This profile does not inherit your normal editor extensions or sign-in. ' +
                     'Find and install/enable a Language Model provider such as GitHub Copilot, then use its setup UI and the Accounts menu to sign in if required. ' +
                     'Installation, account access, provider terms and model access are your choice. Copilot does not require a separate API token. ' +
-                    'If asked to reload this window, do so, then select Prompt summaries: Retry / set up AI in the status bar. ' +
+                    'If asked to reload this window, do so, then select ' + retryLabel + ' in the status bar. ' +
                     'Otherwise choose Retry after setup. Manual summaries remain available in the player.' },
                 'Find providers', 'Retry');
             if (action === 'Retry') continue;
@@ -90,14 +92,18 @@ function activateSummaryAuthoring(context, vscode, file) {
             return undefined;
         }
     };
-    const run = async requestedFile => {
+    const run = async (requestedFile, requestedScope) => {
         if (busy) {
             await vscode.window.showWarningMessage('A summary is already being generated or reviewed.');
             return false;
         }
         busy = true;
         try {
+            if (requestedScope !== undefined && !['both', 'output'].includes(requestedScope)) throw new Error('Unknown summary generation scope.');
             if (typeof requestedFile === 'string') file = requestedFile;
+            if (requestedScope !== undefined) scope = requestedScope;
+            status.text = scope === 'output' ? '$(refresh) Response summaries: Retry / set up AI' : '$(refresh) Prompt summaries: Retry / set up AI';
+            status.command = scope === 'output' ? 'historyReplay.summarizeResponse' : 'historyReplay.summarizePrompt';
             if (!file) throw new Error('Choose Summarize inputs / outputs with AI in the player to open a selection.');
             const root = path.dirname(file);
             const id = path.basename(file, '.demo.json');
@@ -107,7 +113,7 @@ function activateSummaryAuthoring(context, vscode, file) {
                 const request = turn.snapshot.requests[0];
                 const output = recordedOutput(request);
                 const drafts = [];
-                if (!entry.recording.promptSummaries?.[index] && request.message.text.replace(/\s+/g, ' ').trim().length > MAX_PROMPT_SUMMARY_LENGTH) {
+                if (scope === 'both' && !entry.recording.promptSummaries?.[index] && request.message.text.replace(/\s+/g, ' ').trim().length > MAX_PROMPT_SUMMARY_LENGTH) {
                     drafts.push({ exchange: index + 1, kind: 'input', prompt: request.message.text });
                 }
                 if (!entry.recording.outputSummaries?.[index] && output.text.trim()) {
@@ -118,7 +124,7 @@ function activateSummaryAuthoring(context, vscode, file) {
                 return drafts;
             }).sort((left, right) => (left.kind === 'output') - (right.kind === 'output') || left.exchange - right.exchange);
             if (!candidates.length) {
-                void vscode.window.showInformationMessage('No summaries need generation. Short inputs and existing summaries are kept. If a recorded output has no supported text or tool status, write its output summary manually; no result is invented.');
+                void vscode.window.showInformationMessage('No ' + (scope === 'output' ? 'response ' : '') + 'summaries need generation. ' + (scope === 'output' ? 'Inputs are unchanged and existing output summaries are kept. ' : 'Short inputs and existing summaries are kept. ') + 'If a recorded output has no supported text or tool status, write its output summary manually; no result is invented.');
                 return;
             }
             const models = await discover();
@@ -131,18 +137,20 @@ function activateSummaryAuthoring(context, vscode, file) {
             });
             await vscode.window.showTextDocument(document, { preview: true });
             const consent = await vscode.window.showWarningMessage(
-                'Generate ' + candidates.length + ' input/output summaries in "' + entry.title + '"? ' +
-                'The original user queries and appropriate recorded assistant output/tool status shown in this document, plus summarization instructions, will be sent to your selected VS Code AI provider, one request per summary. ' +
+                'Generate ' + candidates.length + (scope === 'output' ? ' response summaries' : ' input/output summaries') + ' in "' + entry.title + '"? ' +
+                (scope === 'output' ?
+                    'Only the recorded assistant output/tool status shown in this document, plus summarization instructions, will be sent to your selected VS Code AI provider, one request per summary. User prompts are not sent or summarized by this action. ' :
+                    'The original user queries and appropriate recorded assistant output/tool status shown in this document, plus summarization instructions, will be sent to your selected VS Code AI provider, one request per summary. ') +
                 'Raw tool arguments/results, reasoning and metadata are excluded; review the shown text for secrets before consenting. ' +
                 'Prompts up to ' + MAX_PROMPT_SUMMARY_LENGTH + ' characters and existing summaries are kept. Provider terms and usage limits apply. Do not send confidential content without permission.',
                 { modal: true }, 'Generate summaries');
             if (consent !== 'Generate summaries') return;
             const selected = await vscode.window.showQuickPick(models.map(model => ({
                 label: model.name, description: model.vendor + ' / ' + model.id, model
-            })), { placeHolder: 'Select the AI model for input and output summaries' });
+            })), { placeHolder: scope === 'output' ? 'Select the AI model for response summaries' : 'Select the AI model for input and output summaries' });
             if (!selected) return;
             const drafts = await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification, title: 'Summarizing recorded inputs and outputs', cancellable: true
+                location: vscode.ProgressLocation.Notification, title: scope === 'output' ? 'Summarizing recorded responses' : 'Summarizing recorded inputs and outputs', cancellable: true
             }, async (progress, token) => {
                 const cancellation = new vscode.CancellationTokenSource();
                 const subscription = token.onCancellationRequested(() => cancellation.cancel());
@@ -188,23 +196,38 @@ function activateSummaryAuthoring(context, vscode, file) {
             for (const turn of reviewed) {
                 summaries[turn.kind === 'output' ? 'outputSummaries' : 'promptSummaries'][turn.exchange - 1] = turn.summary;
             }
-            await saveSummaryBatch(root, id, summaries, {
-                promptSummaries: entry.recording.promptSummaries ?? null,
-                outputSummaries: entry.recording.outputSummaries ?? null
-            });
+            if (scope === 'output') {
+                await savePromptSummaries(root, id, summaries.outputSummaries, entry.recording.outputSummaries ?? null, 'output');
+            } else {
+                await saveSummaryBatch(root, id, summaries, {
+                    promptSummaries: entry.recording.promptSummaries ?? null,
+                    outputSummaries: entry.recording.outputSummaries ?? null
+                });
+            }
             void vscode.window.showInformationMessage('Saved reviewed summaries (' + reviewed.filter(turn => turn.summary !== null).length + ' approved, ' + reviewed.filter(turn => turn.summary === null).length + ' deleted). Return to the interaction picker and choose Use selected exchanges or Use saved selection; enable Show summary of output for the conversation overlay. Playback keeps complete originals and never calls AI.');
         } catch (error) {
-            await vscode.window.showErrorMessage('Prompt summary: ' + error.message, {
-                modal: true, detail: 'No unreviewed summaries were saved. Use Prompt summaries: Retry / set up AI in the status bar to try again. Manual summaries remain available in the player.'
+            await vscode.window.showErrorMessage((scope === 'output' ? 'Response summary: ' : 'Prompt summary: ') + error.message, {
+                modal: true, detail: 'No unreviewed summaries were saved. Use ' + (scope === 'output' ? 'Response summaries' : 'Prompt summaries') + ': Retry / set up AI in the status bar to try again. Manual summaries remain available in the player.'
             });
         } finally { busy = false; }
     };
-    context.subscriptions.push(vscode.commands.registerCommand('historyReplay.summarizePrompt', run));
+    context.subscriptions.push(vscode.commands.registerCommand('historyReplay.summarizePrompt', requestedFile => run(requestedFile, 'both')));
+    context.subscriptions.push(vscode.commands.registerCommand('historyReplay.summarizeResponse', () => run(undefined, 'output')));
     return { run };
 }
 
 function activateSummaryInbox(context, vscode, inbox) {
     const authoring = activateSummaryAuthoring(context, vscode);
+    const selection = (json, name) => {
+        const value = JSON.parse(json);
+        if (typeof value?.file !== 'string' || !path.isAbsolute(value.file) || !value.file.endsWith('.demo.json')) {
+            throw new Error('Invalid summary authoring launch request: ' + name);
+        }
+        if (value.scope !== undefined && !['both', 'output'].includes(value.scope)) {
+            throw new Error('Invalid summary authoring scope: ' + name);
+        }
+        return value;
+    };
     let scanning = false;
     let disposed = false;
     let initialized = false;
@@ -220,17 +243,17 @@ function activateSummaryInbox(context, vscode, inbox) {
                     let previous;
                     try { previous = await fs.readFile(last, 'utf8'); }
                     catch (error) { if (error.code !== 'ENOENT') throw error; }
-                    if (previous) await authoring.run(JSON.parse(previous).file);
+                    if (previous) {
+                        const value = selection(previous, 'last.json');
+                        await authoring.run(value.file, value.scope ?? 'both');
+                    }
                 }
             }
             for (const name of requests) {
                 if (disposed) break;
                 const request = path.join(inbox, name);
-                const value = JSON.parse(await fs.readFile(request, 'utf8'));
-                if (typeof value.file !== 'string' || !path.isAbsolute(value.file) || !value.file.endsWith('.demo.json')) {
-                    throw new Error('Invalid summary authoring launch request: ' + name);
-                }
-                if (await authoring.run(value.file) === false) break;
+                const value = selection(await fs.readFile(request, 'utf8'), name);
+                if (await authoring.run(value.file, value.scope ?? 'both') === false) break;
                 await fs.writeFile(last, JSON.stringify(value));
                 await fs.unlink(request);
             }

@@ -68,7 +68,7 @@ async function run() {
             '$script:LibraryRoot = ' + quote(secondRoot) + '; ' +
             'function Invoke-DemoLibrary { param($Request, $Owner) Get-Content -Raw -LiteralPath ' + quote(secondFile) + ' | ConvertFrom-Json }; ' +
             'function Resolve-PlayerVSCode { param($CodePath) ' + quote(process.execPath) + ' }; ' +
-            'Start-DemoSummaryAuthoring ' + quote(second.id) + ' $null';
+            'Start-DemoSummaryAuthoring ' + quote(second.id) + " $null 'output'";
         await new Promise((resolve, reject) => {
             const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference = 'Stop'; " + launch], { env });
             let output = '';
@@ -76,13 +76,13 @@ async function run() {
             child.once('error', reject);
             child.once('exit', code => code === 0 ? resolve() : reject(new Error('Repeated authoring launch failed: ' + code + ' ' + output)));
         });
-        await setup.waitFor({ state: 'visible', timeout: 15000 });
+        await page.getByText('Response summaries: AI provider setup required', { exact: true }).waitFor({ state: 'visible', timeout: 15000 });
         await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         const deadline = Date.now() + 5000;
         while (JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')).file !== secondFile && Date.now() < deadline) {
             await new Promise(resolve => setTimeout(resolve, 50));
         }
-        assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: secondFile }, 'A repeated CLI launch targets the later selection, not stale process environment');
+        assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: secondFile, scope: 'output' }, 'A repeated response-only launch targets the later selection and retains its scope');
         assert.deepEqual(await fs.readFile(secondFile), secondBefore);
         assert.equal(browser.contexts()[0].pages().filter(candidate => candidate.url().includes('workbench')).length, 1, 'Repeated launch reuses one dedicated authoring workspace');
         let requests = 0;
@@ -189,6 +189,23 @@ async function run() {
         await canceledFrame.getByRole('button', { name: 'Cancel', exact: true }).click();
         await canceled;
         assert.deepEqual(await fs.readFile(file), saved, 'Canceling automatic review preserves the saved library byte-for-byte');
+        const responseGenerated = authoring.run(undefined, 'output');
+        await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+        assert.ok(await page.getByText(/User prompts are not sent or summarized by this action/).isVisible(), 'Response-only consent excludes user prompts explicitly');
+        await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
+        const responseFrame = await reviewFrame(page);
+        assert.equal(await responseFrame.locator('#exchanges option').count(), 1, 'Only the single missing output is generated, not the deleted input summary');
+        assert.match(await responseFrame.locator('#heading').textContent(), /output/);
+        assert.equal(await responseFrame.getByLabel('Recorded source for this summary kind (read-only)').inputValue(), outputs[1]);
+        await responseFrame.getByLabel('Overlay summary (one line, up to 300 characters)').fill('Explicitly reviewed response summary');
+        await responseFrame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
+        await responseFrame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true }).click();
+        await responseGenerated;
+        const responseSaved = await library.readEntry(path.dirname(file), entry.id);
+        assert.deepEqual(responseSaved.recording.promptSummaries, after.recording.promptSummaries, 'Explicit response generation leaves input summaries exactly unchanged');
+        assert.equal(responseSaved.recording.outputSummaries[1], 'Explicitly reviewed response summary');
+        assert.deepEqual(responseSaved.recording.turns, entry.recording.turns, 'Explicit response generation preserves all original answers and prompts');
+        console.log('NATIVE EXPLICIT RESPONSE GENERATION PASSED: real response-only launch inbox, provider setup, scoped consent, output-only review/edit/approve/save, input-summary preservation and original-answer fidelity; synthetic model only.');
         console.log('NATIVE SUMMARY AUTHORING PASSED: real isolated activation, consent, missing-provider guidance, automatic comparison webview, full read-only originals, editable 300-char summaries, invalid-input gating, individual approval/advance, deletion/restoration, list navigation, approve-all preserving deletions, edit revokes approval, save/playback fidelity, cancel byte preservation, inert HTML-like data. Synthetic provider only; no external AI requests.');
     } finally { await browser.close(); }
 }

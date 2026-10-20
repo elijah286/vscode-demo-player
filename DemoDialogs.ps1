@@ -297,6 +297,7 @@ function Show-InteractionPicker($Owner) {
    <WrapPanel HorizontalAlignment="Right">
     <Button x:Name="SelectionSummaries" Content="Review / edit summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionSummaries"/>
     <Button x:Name="SelectionAiSummaries" Content="Summarize inputs / outputs with AI..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiSummaries"/>
+    <Button x:Name="SelectionAiResponses" Content="Generate AI summaries of responses" IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionAiResponses"/>
     <Button x:Name="SelectionClearSummaries" Content="Clear all summaries..." IsEnabled="False" Padding="10,6" Margin="0,0,8,0" AutomationProperties.AutomationId="SelectionClearSummaries"/>
     <Button x:Name="Save" Content="Use selected exchanges" IsEnabled="False" Padding="18,6" AutomationProperties.AutomationId="SaveDemo"/>
    </WrapPanel>
@@ -330,6 +331,7 @@ function Show-InteractionPicker($Owner) {
    <WrapPanel Margin="0,0,0,8">
     <Button x:Name="Summaries" Content="Review / edit summaries..." Padding="12,6" AutomationProperties.AutomationId="EditPromptSummaries"/>
     <Button x:Name="AiSummaries" Content="Summarize inputs / outputs with AI..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiPromptSummaries"/>
+    <Button x:Name="AiResponses" Content="Generate AI summaries of responses" Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="AiResponseSummaries"/>
     <Button x:Name="ClearSummaries" Content="Clear all summaries..." Padding="12,6" Margin="8,0,0,0" AutomationProperties.AutomationId="ClearPromptSummaries"/>
    </WrapPanel>
    <DockPanel>
@@ -597,7 +599,7 @@ function Show-InteractionPicker($Owner) {
             $turns.SelectedItems.Count -ge 1 -and $turns.SelectedItems.Count -le 100 -and
             $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true
         )
-        foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
+        foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries', 'SelectionAiResponses', 'SelectionClearSummaries')) {
             $dialog.FindName($name).IsEnabled = $dialog.FindName('Save').IsEnabled
         }
     }
@@ -699,6 +701,13 @@ function Show-InteractionPicker($Owner) {
             & $refresh
         } catch { Show-DemoError $dialog $_ }
     })
+    $dialog.FindName('SelectionAiResponses').Add_Click({
+        try {
+            $entry = & $prepareSelection
+            Show-DemoSummaryAuthoringNotice $dialog $entry.id 'output'
+            & $refresh
+        } catch { Show-DemoError $dialog $_ }
+    })
     $dialog.FindName('SelectionClearSummaries').Add_Click({
         try {
             $entry = & $prepareSelection
@@ -726,7 +735,7 @@ function Get-DemoSummaryAuthoringPaths {
     }
 }
 
-function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
+function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'output')][string]$Scope = 'both') {
     Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner | Out-Null
     $code = Resolve-PlayerVSCode $script:CodePath
     $paths = Get-DemoSummaryAuthoringPaths
@@ -735,7 +744,9 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner) {
     }
     $request = Join-Path $paths.Inbox (([datetime]::UtcNow.Ticks.ToString()) + '-' + [guid]::NewGuid().ToString('N') + '.json')
     $pending = $request + '.pending'
-    [IO.File]::WriteAllText($pending, (ConvertTo-Json @{ file = Join-Path $script:LibraryRoot ($Id + '.demo.json') } -Compress), [Text.UTF8Encoding]::new($false))
+    $selection = @{ file = Join-Path $script:LibraryRoot ($Id + '.demo.json') }
+    if ($Scope -eq 'output') { $selection.scope = 'output' }
+    [IO.File]::WriteAllText($pending, (ConvertTo-Json $selection -Compress), [Text.UTF8Encoding]::new($false))
     [IO.File]::Move($pending, $request)
     $profileArgument = '--user-data-dir(?:=|\s+)"?' + [regex]::Escape($paths.Profile) + '(?:"|\s|$)'
     $running = Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
@@ -849,7 +860,12 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
     return $dialog.ShowDialog()
 }
 
-function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id) {
+function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id, [ValidateSet('both', 'output')][string]$Scope = 'both') {
+    if ($Scope -eq 'output') {
+        $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing AI summaries of recorded assistant responses/tool status only (300 characters each). User prompts are not sent or summarized by this action. Existing summaries are preserved. Unsupported outputs need manual summaries; no result is invented. Switch to the dedicated authoring window to set up your provider, review the recorded output, consent and select a model. Raw tool arguments/results, reasoning and metadata are excluded; shown answer text can still contain secrets, so review it first. Edit, approve or delete drafts and save the reviewed batch. Return here to use the selection and enable Show summary of output. The original answers remain unchanged in chat; playback never calls AI.', 'AI Response Summaries', 'OKCancel', 'Information')
+        if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'output' }
+        return
+    }
     $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing summaries for long inputs and recorded assistant outputs/tool status (300 characters each). Short inputs and existing summaries are preserved. Unsupported output structures require manual summaries; no result is invented. Switch to the dedicated VS Code authoring window for provider setup and review. Its isolated profile retains providers and sign-in, but never inherits your normal editor account or extensions. Install/enable a provider and sign in there yourself if prompted, then choose Retry. Nothing is sent until you review the shown user queries and assistant output, consent, and select a model. Provider terms and limits apply. Do not send private content without permission. Edit, approve, or delete each draft and save the batch. Return here to use the selection and enable Show summary of output. Playback keeps full originals and never calls AI.', 'AI Input / Output Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
 }
@@ -901,6 +917,12 @@ function Show-InteractionPickerWindow($dialog) {
             Show-DemoSummaryAuthoringNotice $dialog $list.SelectedItem.Entry.id
         } catch { Show-DemoError $dialog $_ }
     })
+    $dialog.FindName('AiResponses').Add_Click({
+        try {
+            if (-not $list.SelectedItem) { throw 'Select a demo to summarize its responses.' }
+            Show-DemoSummaryAuthoringNotice $dialog $list.SelectedItem.Entry.id 'output'
+        } catch { Show-DemoError $dialog $_ }
+    })
     $dialog.FindName('ClearSummaries').Add_Click({
         try {
             if (-not $list.SelectedItem) { throw 'Select a demo to clear its summaries.' }
@@ -911,7 +933,7 @@ function Show-InteractionPickerWindow($dialog) {
         $entry = if ($list.SelectedItem) { $list.SelectedItem.Entry } else { $null }
         $dialog.FindName('SavedTitle').Text = if ($entry) { $entry.title } else { '' }
         $dialog.FindName('SavedPreview').Text = if ($entry) { $entry.source + "`r`n" + $entry.preview + "`r`n" + $entry.notice } else { '' }
-        foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
+        foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'AiResponses', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
             $dialog.FindName($name).IsEnabled = $null -ne $entry
         }
     })
@@ -960,7 +982,7 @@ function Show-InteractionPickerWindow($dialog) {
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
-    foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
+    foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'AiResponses', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
         $dialog.FindName($name).IsEnabled = $false
     }
     & $refresh

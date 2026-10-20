@@ -480,6 +480,30 @@ clears the drafts for every exchange; **Save summaries** applies that change,
 while **Cancel** discards it. **Delete this summary** clears only the current
 exchange's summary draft, never its original prompt.
 
+**Generate AI summaries of responses** is an explicit response-only action beside
+the conversation selection actions and on **Saved selections**. It generates
+only missing output summaries, never sends or summarizes user prompts, and keeps
+existing input/output summaries. Recorded assistant answer text and concise tool
+status are used, with the same filtering and result-fidelity safeguards as the
+combined action below. Raw tool arguments/results, reasoning and metadata remain
+excluded; displayed answer text can still contain secrets, so review it before
+consenting. Unsupported-only outputs still require a manual summary.
+
+The response-only action reuses the completed provider-setup, editable review
+and output-overlay features; it is not a separate summary format or playback
+implementation. Approve or delete every draft and **Save reviewed summaries for
+playback**, return to the picker, and use the selection. Then enable **Show summary
+of output** in the controller (the output-summary checkbox). Full answers remain
+unchanged in chat. Cancel, provider errors and stale output-summary edits save
+no partial batch; concurrent input-only edits are preserved. To regenerate an
+existing output summary, clear that output draft in **Review / edit summaries**
+and save it first. The response-only scope survives provider retry, window reload
+and later queued selections. The dedicated Command Palette action is
+**Demo Player: Generate AI Summaries of Responses**.
+
+These output-summary controls are not present in v0.2.11; they belong to the
+pending output-summary feature and this follow-up, not a shipped update yet.
+
 **Summarize inputs / outputs with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate, isolated VS Code
 authoring window, never the playback window or your normal editor profile.

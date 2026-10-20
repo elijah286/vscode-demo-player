@@ -48,6 +48,11 @@
     ],
     "commands": [
       {
+        "command": "historyReplay.summarizeResponse",
+        "title": "Demo Player: Generate AI Summaries of Responses",
+        "enablement": "demoPlayer.summaryAuthoring"
+      },
+      {
         "command": "historyReplay.summarizePrompt",
         "title": "Demo Player: Summarize Inputs and Outputs",
         "enablement": "demoPlayer.summaryAuthoring"
