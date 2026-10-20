@@ -511,7 +511,7 @@ interaction selected, the links show **(0/0)** and are disabled. They are also
 disabled during playback; stop playback before authoring.
 The prompt link generates only missing prompt summaries, including short prompts;
 the output link generates only missing reply summaries. Both reuse the same
-dedicated authoring profile, provider/model selection, consent and editable review.
+dedicated authoring window, provider/model selection, consent and editable review.
 Existing summaries are preserved. Cancellation or unsaved drafts do not increase
 the counts. Unsupported-only output still needs a manual summary, not an invented
 answer. **Demo Player: Generate AI Summaries of Prompts** retries prompt-only work;
@@ -521,22 +521,29 @@ These output-summary controls require v0.2.12 or later; they are not present
 in v0.2.11.
 
 **Summarize inputs / outputs with AI...**, available beside the selection action and
-on the **Saved selections** tab, opens a separate, isolated VS Code
-authoring window, never the playback window or your normal editor profile.
-Install/enable an AI Language Model provider such as GitHub Copilot and sign in
-in that window. Copilot uses your existing account/allowance: a separate API
-token is not required, but a model must be available and provider limits/terms
-still apply. The isolated profile does not inherit your normal VS Code sign-in
-or installed extensions. It now persists its own providers and sign-in under
-`%LOCALAPPDATA%\VSCodeDemoPlayer\summary-authoring` across launches. No tokens,
-extensions, or settings are read/copied from the normal profile. The same
-dedicated workspace receives later selections even when already running.
+on the **Saved selections** tab, opens a separate VS Code authoring window,
+never the playback window. In this pending follow-up to v0.2.13, it uses your
+existing VS Code AI providers and sign-in instead of an empty isolated profile.
+No credentials are copied, no extensions are automatically installed, and
+unrelated editor windows are not reused or reloaded. Copilot uses your existing
+account/allowance: a separate API token is not required, but a model must be
+available and provider limits/terms still apply. The dedicated **Demo Player
+Summary Authoring** workspace and request inbox persist locally under
+`%LOCALAPPDATA%\VSCodeDemoPlayer\summary-authoring-existing`.
+The older isolated authoring profile remains untouched; it is not migrated or deleted.
+This window can access your normal provider/account capabilities; it is not a
+security sandbox. Review synthetic or recorded content before consenting.
 Do not use this workspace for normal editing. For isolated testing, set
 `VSCODE_DEMO_PLAYER_SUMMARY_ROOT` to a separate synthetic profile root before
 starting the controller; never point it at a normal VS Code profile.
-VS Code's shared account-storage directory is isolated under the same root too.
+That explicit test override isolates extensions and shared account storage too.
 Later selections are queued while generation/review is active; reopening the
 picker action brings the existing authoring window forward without reloading it.
+During initial startup, another selection is queued with a visible startup
+message instead of launching a duplicate window. If you close the window before
+its extension initializes, allow up to two minutes for that startup guard to expire.
+VS Code may ask whether **Transcript Playback** may access your provider's models;
+grant access only if you want to generate summaries. Canceling sends no content.
 
 Before content consent, VS Code discovers/activates registered Language Model
 providers. If none are ready (or discovery fails), a **modal** setup dialog
@@ -589,9 +596,9 @@ Return to the picker and click **Use selected exchanges** or **Use saved selecti
 either reads the latest saved summaries without refreshing or reselecting.
 Enable **Show prompt summary** in the controller to display them; this toggle
 stays off by default. The native chat prompt itself intentionally remains full-length.
-Close the authoring window when finished. Its dedicated profile, installed
-providers and provider-managed authentication remain local for next time;
-they are not shipped or committed. Playback profiles remain disposable and
+Close the authoring window when finished. Your existing providers and
+provider-managed authentication stay where VS Code manages them; they are not
+copied, shipped or committed. Playback profiles remain disposable and
 never make AI requests. Live provider/account readiness requires your own
 installation/sign-in and is not established by synthetic-provider tests.
 
@@ -660,8 +667,10 @@ The original direct launcher remains available:
 
 Direct-launch mode retains its paired-controller lifetime: Stop closes both.
 
-Never install this development extension in your normal VS Code profile.
-The launcher supplies a dedicated temporary profile and extension directory.
+Do not install this development extension globally in your normal VS Code profile.
+The playback launcher supplies a dedicated temporary profile and extension directory.
+Summary authoring instead loads it only in its dedicated development window,
+using your existing AI setup as described above.
 
 Existing local playlist manifests can be supplied using `-PlaylistPath`.
 They refer to native workspace-storage session IDs on the same computer;
@@ -836,6 +845,21 @@ review/save/cancel flow. Result JSON, screenshots and local driver stay under
 the test profile. Unit tests separately cover throwing/stalled discovery,
 setup-command failures and reload/last-selection recovery. None of these tests
 certifies a live provider, account sign-in, allowance, or external model access.
+
+An explicitly authorized live check is available separately:
+
+```powershell
+$env:HISTORY_REPLAY_TEST_PROFILE = 'C:\Temp\unique-live-summary-evidence'
+node .\test-native.js --existing-ai
+```
+
+Unlike `--summaries`, this opens a separate development window using your normal
+VS Code AI setup. It sends exactly two tiny fabricated examples (one input and
+one reply), not real recordings, using your provider/account allowance. Approve
+any provider model-access prompt yourself. It does not install extensions, copy
+credentials, change global settings, or quit unrelated editor windows. The
+evidence path is not a user-data/profile override in this mode. Reserve the
+desktop slot and obtain explicit live-request consent before running it.
 
 For native reference rendering and retained-history verification:
 

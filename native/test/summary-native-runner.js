@@ -57,7 +57,8 @@ async function run() {
         const second = await library.addPackage(secondRoot, { ...entry.recording, title: 'Synthetic later selection' });
         const secondFile = path.join(secondRoot, second.id + '.demo.json');
         const secondBefore = await fs.readFile(secondFile);
-        const inbox = process.env.HISTORY_REPLAY_SUMMARY_INBOX;
+        assert.ok(!process.env.HISTORY_REPLAY_SUMMARY_INBOX, 'Authoring activation must not depend on inherited process environment');
+        const inbox = path.join(path.dirname(vscode.workspace.workspaceFolders[0].uri.fsPath), 'requests');
         const { spawn } = require('node:child_process');
         const profile = path.dirname(inbox);
         const env = { ...process.env };

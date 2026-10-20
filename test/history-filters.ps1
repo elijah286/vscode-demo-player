@@ -36,16 +36,26 @@ try {
     $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = $null
     $firstPaths = Get-DemoSummaryAuthoringPaths
     $secondPaths = Get-DemoSummaryAuthoringPaths
-    Assert-Equal $firstPaths.Profile $secondPaths.Profile 'Authoring profile is persistent across launches'
-    Assert-Equal $firstPaths.Profile (Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\summary-authoring') 'Authoring never uses the normal editor profile'
-    Assert-Equal $firstPaths.Extensions (Join-Path $firstPaths.Profile 'extensions') 'Providers remain in a dedicated persistent directory'
-    Assert-Equal $firstPaths.Workspace (Join-Path $firstPaths.Profile 'workspace') 'Repeated launches reuse a dedicated workspace'
+    Assert-Equal $firstPaths.Root $secondPaths.Root 'Authoring inbox is persistent across launches'
+    Assert-Equal $firstPaths.Profile $null 'Authoring uses existing editor sign-in by default'
+    Assert-Equal $firstPaths.Extensions $null 'Authoring does not hide existing AI providers'
+    Assert-Equal $firstPaths.Workspace (Join-Path $firstPaths.Root 'Demo Player Summary Authoring') 'Authoring has its own recognizable workspace'
+    $startInfo = New-DemoSummaryAuthoringStartInfo $firstPaths 'C:\Synthetic VS Code\Code.exe'
+    Assert-Equal $startInfo.FileName 'C:\Synthetic VS Code\Code.exe' 'Authoring uses the resolved existing editor'
+    Assert-Equal $startInfo.Arguments.StartsWith('--new-window ') $true 'Default authoring opens its own window'
+    foreach ($flag in @('--user-data-dir', '--extensions-dir', '--shared-data-dir', '--disable-extensions', '--reuse-window')) {
+        Assert-Equal $startInfo.Arguments.Contains($flag) $false ('Default authoring preserves existing setup and other windows: ' + $flag)
+    }
+    Assert-Equal $startInfo.EnvironmentVariables.ContainsKey('HISTORY_REPLAY_SUMMARY_INBOX') $false 'Default authoring does not depend on inherited selection environment'
     $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = Join-Path $ApplicationRoot '.build\synthetic-summary-profile'
     Assert-Equal (Get-DemoSummaryAuthoringPaths).Profile $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT 'Acceptance can explicitly isolate the authoring profile'
+    $testStart = New-DemoSummaryAuthoringStartInfo (Get-DemoSummaryAuthoringPaths) 'C:\Synthetic VS Code\Code.exe'
+    foreach ($flag in @('--user-data-dir', '--extensions-dir', '--shared-data-dir')) {
+        Assert-Equal $testStart.Arguments.Contains($flag) $true ('Explicit synthetic tests isolate ' + $flag)
+    }
     $launch = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-DemoSummaryAuthoring' }, $true).Extent.Text
-    Assert-Equal $launch.Contains("'--reuse-window'") $true 'Authoring reuses its own workspace window'
-    Assert-Equal $launch.Contains("'--shared-data-dir'") $true 'New VS Code shared account storage is isolated too'
-    Assert-Equal $launch.Contains("['HISTORY_REPLAY_SUMMARY_INBOX']") $true 'Running authoring process receives later selections through inbox'
+    Assert-Equal $launch.Contains('New-DemoSummaryAuthoringStartInfo $paths $code') $true 'Production uses the tested authoring command builder'
+    Assert-Equal $launch.Contains('.demo-player-summary-authoring.json') $true 'Authoring is workspace-scoped even when an existing VS Code process ignores launch environment'
     Assert-Equal $launch.Contains("'HISTORY_REPLAY_SUMMARY_ENTRY'") $false 'Launcher does not rely on stale process selection environment'
     Assert-Equal $launch.Contains('[IO.File]::Move($pending, $request)') $true 'Launch requests are published atomically'
 } finally { $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = $previousSummaryRoot }
@@ -377,6 +387,7 @@ try {
         $script:selectedDemo = $null
         $script:ReplayProcessId = 0
         $script:summaryRefreshing = $false
+        $script:pickerOpen = $false
         Update-ControllerSummaryLinks
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'No selected prompt count'
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'No selected output action'
@@ -386,6 +397,10 @@ try {
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (3/12)' 'Manual and AI inputs share the saved count'
         Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (1/12)' 'Outputs have independent count'
         Assert-Equal $generatePromptSummaries.IsEnabled $true 'Selected interaction enables generation'
+        $script:pickerOpen = $true
+        Update-ControllerSummaryLinks
+        Assert-Equal $generatePromptSummaries.IsEnabled $false 'Modal picker disables authoring'
+        $script:pickerOpen = $false
         $script:ReplayProcessId = 123
         Update-ControllerSummaryLinks
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'Playback disables authoring'
@@ -407,6 +422,10 @@ try {
         function Set-IdleView { Update-ControllerSummaryLinks }
         function Show-DemoError { param($Owner, $ErrorRecord) $script:summaryErrors++ }
         function Show-DemoSummaryAuthoringNotice { param($Owner, $Id, $Scope) $script:summaryLaunch = "$Id/$Scope" }
+        $script:pickerOpen = $true
+        Refresh-ControllerSummaries
+        Assert-Equal $script:refreshCalls 0 'Background refresh cannot pump a nested dispatcher or re-enable the controller while picker is modal'
+        $script:pickerOpen = $false
         Refresh-ControllerSummaries
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (4/12)' 'Background saved input refresh'
         Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (2/12)' 'Background saved output refresh'
@@ -436,6 +455,31 @@ try {
         Assert-Equal $script:summaryErrors 1 'Refresh failure is explicitly surfaced'
         Assert-Equal $script:summaryRefreshing $false 'Refresh failure releases reentrancy guard'
         Assert-Equal $script:summaryRefreshAt ([DateTime]::MaxValue) 'Refresh failure does not cause a repeating dialog storm'
+        $chooseDemo = $controller.FindName('ChooseDemo')
+        $openNode = $controllerAst.Find({
+            param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$openLibrary'
+        }, $true)
+        $openLibrary = $openNode.Right.Expression.ScriptBlock.GetScriptBlock()
+        $script:pickerCalls = 0
+        function Show-InteractionPicker {
+            param($Owner)
+            $script:pickerCalls++
+            Assert-Equal $chooseDemo.IsEnabled $false 'Picker launch disables controller entry point'
+            & $openLibrary
+            Refresh-ControllerSummaries
+            Assert-Equal $script:summaryRefreshing $false 'Modal picker suppresses timer-driven refresh'
+            return [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 0; output = 0 } }
+        }
+        function Invoke-DemoLibrary { param($Request, $Owner) return $script:selectedDemo }
+        & $openLibrary
+        Assert-Equal $script:pickerCalls 1 'Reentrant controller click cannot open a second picker'
+        Assert-Equal $script:pickerOpen $false 'Selecting exchanges releases picker guard'
+        Assert-Equal $chooseDemo.IsEnabled $true 'Controller can open another picker after completion'
+        function Show-InteractionPicker { throw 'Synthetic picker failed' }
+        & $openLibrary
+        Assert-Equal $script:pickerOpen $false 'Picker failure also releases lifecycle guard'
+        Assert-Equal $script:summaryErrors 2 'Picker failure is explicitly surfaced'
     }
 } finally { $controller.Close() }
 $summaryFunction = $ast.Find({

@@ -19,10 +19,10 @@ async function runSummaryUI(options, profile) {
         ' if (fs.existsSync(marker)) return api; fs.writeFileSync(marker, "started");\n' +
         ' setTimeout(async () => {\n' +
         '  let result;\n' +
-        '  try { await require(' + JSON.stringify(options.extensionTestsPath) + ').run(); result = { passed: true }; }\n' +
+        '  try { await require(' + JSON.stringify(options.extensionTestsPath) + ').run(vscode); result = { passed: true }; }\n' +
         '  catch (error) { console.error(error); result = { passed: false, error: error.stack }; }\n' +
         '  require("node:fs").writeFileSync(' + JSON.stringify(resultFile) + ', JSON.stringify(result));\n' +
-        '  await vscode.commands.executeCommand("workbench.action.quit");\n' +
+        '  await vscode.commands.executeCommand("workbench.action.closeWindow");\n' +
         ' }, 0);\n' +
         ' return api;\n' +
         '};\n');
@@ -35,9 +35,22 @@ async function runSummaryUI(options, profile) {
     let timer;
     try {
         await new Promise((resolve, reject) => {
+            let exited = false;
             child.once('error', reject);
-            child.once('exit', code => code === 0 ? resolve() : reject(new Error('Summary UI window exited with code ' + code)));
-            timer = setTimeout(() => { child.kill(); reject(new Error('Summary UI acceptance exceeded 120 seconds')); }, 120000);
+            child.once('exit', code => {
+                exited = true;
+                if (code !== 0) reject(new Error('Summary UI launch exited with code ' + code));
+            });
+            const deadline = Date.now() + 120000;
+            const check = () => {
+                if (fs.existsSync(resultFile) && (options.existingAI || exited)) return resolve();
+                if (Date.now() >= deadline) {
+                    if (!options.existingAI) child.kill();
+                    return reject(new Error('Summary UI acceptance exceeded 120 seconds'));
+                }
+                timer = setTimeout(check, 100);
+            };
+            check();
         });
         const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
         if (!result.passed) throw new Error(result.error);
@@ -45,7 +58,8 @@ async function runSummaryUI(options, profile) {
 }
 
 async function main() {
-    const summaryTest = process.argv.includes('--summaries');
+    const existingAI = process.argv.includes('--existing-ai');
+    const summaryTest = process.argv.includes('--summaries') || existingAI;
     const artifacts = process.argv.includes('--artifacts');
     const profile = process.env.HISTORY_REPLAY_TEST_PROFILE ?? fs.mkdtempSync(path.join(os.tmpdir(), 'native-replay-test-'));
     let source = artifacts ? path.join(profile, 'synthetic-artifacts.jsonl') : process.env.HISTORY_REPLAY_TEST_SOURCE;
@@ -100,34 +114,39 @@ async function main() {
     console.log('NATIVE TEST PROFILE', profile);
     if (summaryTest) {
         fs.mkdirSync(path.join(profile, 'requests'), { recursive: true });
-        fs.mkdirSync(path.join(profile, 'workspace'), { recursive: true });
-        fs.writeFileSync(path.join(profile, 'requests', '100-abc.json'), JSON.stringify({ file: path.resolve(summaryEntry) }));
+        const workspace = path.join(profile, 'Demo Player Summary Authoring');
+        fs.mkdirSync(workspace, { recursive: true });
+        fs.writeFileSync(path.join(workspace, '.demo-player-summary-authoring.json'), '{"version":1}');
+        if (!existingAI) fs.writeFileSync(path.join(profile, 'requests', '100-abc.json'), JSON.stringify({ file: path.resolve(summaryEntry) }));
     }
     const options = {
         vscodeExecutablePath: path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe'),
         extensionDevelopmentPath: process.env.HISTORY_REPLAY_TEST_EXTENSION
             ? path.resolve(process.env.HISTORY_REPLAY_TEST_EXTENSION) : __dirname,
-        extensionTestsPath: path.join(__dirname, 'test', summaryTest ? 'summary-native-runner.js' : process.argv.includes('--references') ? 'reference-native-runner.js' : 'native-runner.js'),
+        existingAI,
+        extensionTestsPath: path.join(__dirname, 'test', existingAI ? 'summary-live-runner.js' : summaryTest ? 'summary-native-runner.js' : process.argv.includes('--references') ? 'reference-native-runner.js' : 'native-runner.js'),
         extensionTestsEnv: {
             HISTORY_REPLAY_CDP_PORT: String(port),
             HISTORY_REPLAY_TEST_SOURCE: path.resolve(source),
             HISTORY_REPLAY_TEST_REQUEST: String(requestIndex),
             HISTORY_REPLAY_TEST_SUMMARY_ENTRY: summaryTest ? path.resolve(summaryEntry) : '',
             HISTORY_REPLAY_SUMMARY_ENTRY: '',
-            HISTORY_REPLAY_SUMMARY_INBOX: summaryTest ? path.join(profile, 'requests') : '',
+            HISTORY_REPLAY_SUMMARY_INBOX: '',
             ...(artifacts ? { HISTORY_REPLAY_TEST_ARTIFACTS: '1' } : {}),
             ...(process.env.HISTORY_REPLAY_BACKEND_PROBE === '1' ? { HISTORY_REPLAY_BACKEND_PROBE: '1' } : {})
         },
         launchArgs: [
             '--new-window',
-            ...(summaryTest ? [path.join(profile, 'workspace')] : []),
+            ...(summaryTest ? [path.join(profile, 'Demo Player Summary Authoring')] : []),
             ...(process.env.HISTORY_REPLAY_AGENTS === '1' ? ['--agents'] : []),
             '--remote-debugging-port=' + port,
-            '--user-data-dir', profile,
-            '--shared-data-dir', path.join(profile, 'shared-data'),
-            '--extensions-dir', path.join(profile, 'extensions'),
+            ...(!existingAI ? [
+                '--user-data-dir', profile,
+                '--shared-data-dir', path.join(profile, 'shared-data'),
+                '--extensions-dir', path.join(profile, 'extensions')
+            ] : []),
             '--enable-proposed-api=local.historical-transcript-replay',
-            ...(process.env.HISTORY_REPLAY_AGENTS === '1' ? [] : [
+            ...(process.env.HISTORY_REPLAY_AGENTS === '1' || existingAI ? [] : [
                 '--disable-extensions',
                 '--disable-extension=github.copilot-chat',
                 '--disable-extension=github.copilot'

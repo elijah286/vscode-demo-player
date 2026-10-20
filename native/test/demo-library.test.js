@@ -475,7 +475,9 @@ test('provider setup is modal, explicit and request-free until discovery succeed
         assert.equal(calls.saved.length, 0);
         assert.deepEqual(await fs.readFile(file), before);
         assert.ok(calls.errorOptions.every(value => value.modal === true));
-        assert.match(calls.errors[0], /No prompts were sent/);
+        assert.match(calls.errors[0], /No recorded content was sent/);
+        assert.match(calls.errors[0], /existing VS Code AI setup/);
+        assert.doesNotMatch(calls.errors[0], /does not inherit your normal/);
         assert.equal(calls.statuses[0].command, 'historyReplay.summarizePrompt');
         if (options.discoveryFailure) assert.match(calls.errors[0], /Discovery denied/);
         if (calls.commands.length) assert.deepEqual(calls.commands, [['workbench.extensions.search', '@id:GitHub.copilot-chat']]);
@@ -627,6 +629,24 @@ test('explicit response generation failures, review cancellation and stale outpu
     assert.deepEqual((await library.readEntry(root, added.id)).recording.outputSummaries, ['Concurrent output', null]);
 });
 
+test('authoring workspace selects its inbox without process environment or unrelated workspaces', async context => {
+    const { summaryWorkspaceInbox } = require('../prompt-summary-authoring');
+    const { directory } = await fixture(context);
+    const folder = path.join(directory, 'Demo Player Summary Authoring');
+    await fs.mkdir(folder);
+    const api = { workspace: { workspaceFolders: [{ uri: { scheme: 'file', fsPath: folder } }] } };
+    assert.equal(summaryWorkspaceInbox(api), undefined);
+    await fs.writeFile(path.join(folder, '.demo-player-summary-authoring.json'), '{"version":1}');
+    assert.equal(summaryWorkspaceInbox(api), path.join(directory, 'requests'));
+    assert.equal(summaryWorkspaceInbox({}), undefined);
+    assert.equal(summaryWorkspaceInbox({ workspace: { workspaceFolders: [{ uri: { scheme: 'file', fsPath: directory } }] } }), undefined);
+    assert.equal(summaryWorkspaceInbox({ workspace: { workspaceFolders: [...api.workspace.workspaceFolders, ...api.workspace.workspaceFolders] } }), undefined);
+    await fs.writeFile(path.join(folder, '.demo-player-summary-authoring.json'), '{"version":2}');
+    assert.throws(() => summaryWorkspaceInbox(api), /Unsupported/);
+    await fs.writeFile(path.join(folder, '.demo-player-summary-authoring.json'), 'not json');
+    assert.throws(() => summaryWorkspaceInbox(api), SyntaxError);
+});
+
 test('persistent inbox retains response-only scope across reload and resets it for legacy combined requests', async context => {
     const { activateSummaryInbox } = require('../prompt-summary-authoring');
     const { source, root, inspection, directory } = await authoringFixture(context);
@@ -691,7 +711,8 @@ test('persistent authoring inbox processes new selections in the running window 
     await authoring.scan();
     assert.equal(calls.models, 2);
     assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: files[1] });
-    assert.deepEqual(await fs.readdir(inbox), ['last.json']);
+    assert.deepEqual(await fs.readdir(inbox), ['active-' + process.pid + '.json', 'last.json']);
+    assert.equal((await fs.stat(path.join(inbox, 'active-' + process.pid + '.json'))).isFile(), true, 'A live authoring window advertises its scoped inbox, not normal editor processes');
     subscriptions.forEach(item => item.dispose());
     const reloadedSubscriptions = [];
     const reloaded = authoringAPI({ noModels: true });

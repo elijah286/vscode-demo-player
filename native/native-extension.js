@@ -7,13 +7,14 @@ const { packageRecordings } = require('./demo-library');
 const { nativeResponsePart } = require('./native-response');
 
 function activate(context) {
-    if (process.env.HISTORY_REPLAY_SUMMARY_ENTRY || process.env.HISTORY_REPLAY_SUMMARY_INBOX) {
-        const { activateSummaryAuthoring, activateSummaryInbox } = require('./prompt-summary-authoring');
-        const authoring = process.env.HISTORY_REPLAY_SUMMARY_INBOX
-            ? activateSummaryInbox(context, vscode, process.env.HISTORY_REPLAY_SUMMARY_INBOX)
+    const { activateSummaryAuthoring, activateSummaryInbox, summaryWorkspaceInbox } = require('./prompt-summary-authoring');
+    const summaryInbox = summaryWorkspaceInbox(vscode) || process.env.HISTORY_REPLAY_SUMMARY_INBOX;
+    if (process.env.HISTORY_REPLAY_SUMMARY_ENTRY || summaryInbox) {
+        const authoring = summaryInbox
+            ? activateSummaryInbox(context, vscode, summaryInbox)
             : activateSummaryAuthoring(context, vscode, process.env.HISTORY_REPLAY_SUMMARY_ENTRY);
         void vscode.commands.executeCommand('setContext', 'demoPlayer.summaryAuthoring', true)
-            .then(() => process.env.HISTORY_REPLAY_SUMMARY_INBOX ? undefined : authoring.run(),
+            .then(() => summaryInbox ? undefined : authoring.run(),
                 error => vscode.window.showErrorMessage('Prompt summary authoring could not start: ' + error.message, { modal: true }));
         return authoring;
     }

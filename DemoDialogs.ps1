@@ -724,64 +724,95 @@ function Show-InteractionPicker($Owner) {
 }
 
 function Get-DemoSummaryAuthoringPaths {
-    $profile = if ($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) {
+    $isolated = [bool]$env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT
+    $root = if ($isolated) {
         [IO.Path]::GetFullPath($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT)
-    } else { Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\summary-authoring' }
+    } else { Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\summary-authoring-existing' }
     return @{
-        Profile = $profile
-        Extensions = Join-Path $profile 'extensions'
-        Workspace = Join-Path $profile 'workspace'
-        Inbox = Join-Path $profile 'requests'
+        Root = $root
+        Profile = if ($isolated) { $root } else { $null }
+        Extensions = if ($isolated) { Join-Path $root 'extensions' } else { $null }
+        Workspace = Join-Path $root 'Demo Player Summary Authoring'
+        Inbox = Join-Path $root 'requests'
     }
+}
+
+function New-DemoSummaryAuthoringStartInfo($Paths, [string]$Code) {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Code
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $arguments = @('--new-window', ('"' + $Paths.Workspace + '"'))
+    if ($Paths.Profile) {
+        $arguments += @('--user-data-dir', ('"' + $Paths.Profile + '"'),
+            '--extensions-dir', ('"' + $Paths.Extensions + '"'),
+            '--shared-data-dir', ('"' + (Join-Path $Paths.Profile 'shared-data') + '"'))
+    }
+    $start.Arguments = ($arguments + @(
+        ('--extensionDevelopmentPath="' + (Join-Path $PSScriptRoot 'native') + '"'),
+        '--enable-proposed-api=local.historical-transcript-replay',
+        '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--disable-telemetry'
+    )) -join ' '
+    $start.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
+    foreach ($key in @($start.EnvironmentVariables.Keys)) {
+        if ($key -like 'HISTORY_REPLAY_*') { $start.EnvironmentVariables.Remove($key) }
+    }
+    return $start
 }
 
 function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'input', 'output')][string]$Scope = 'both') {
     Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner | Out-Null
     $code = Resolve-PlayerVSCode $script:CodePath
     $paths = Get-DemoSummaryAuthoringPaths
-    foreach ($directory in @($paths.Profile, $paths.Extensions, $paths.Workspace, $paths.Inbox)) {
+    foreach ($directory in @($paths.Root, $paths.Profile, $paths.Extensions, $paths.Workspace, $paths.Inbox)) {
+        if (-not $directory) { continue }
         [IO.Directory]::CreateDirectory($directory) | Out-Null
     }
+    [IO.File]::WriteAllText((Join-Path $paths.Workspace '.demo-player-summary-authoring.json'), '{"version":1}', [Text.UTF8Encoding]::new($false))
     $request = Join-Path $paths.Inbox (([datetime]::UtcNow.Ticks.ToString()) + '-' + [guid]::NewGuid().ToString('N') + '.json')
     $pending = $request + '.pending'
     $selection = @{ file = Join-Path $script:LibraryRoot ($Id + '.demo.json') }
     if ($Scope -ne 'both') { $selection.scope = $Scope }
     [IO.File]::WriteAllText($pending, (ConvertTo-Json $selection -Compress), [Text.UTF8Encoding]::new($false))
     [IO.File]::Move($pending, $request)
-    $profileArgument = '--user-data-dir(?:=|\s+)"?' + [regex]::Escape($paths.Profile) + '(?:"|\s|$)'
-    $running = Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
-        $_.CommandLine -and $_.CommandLine -match $profileArgument -and $_.CommandLine -notmatch '--type='
-    } | Select-Object -First 1
-    if ($running) {
-        # Re-running an extension-development CLI launch reloads the host and discards an active review.
+    $running = $null
+    if ($paths.Profile) {
+        $profileArgument = '--user-data-dir(?:=|\s+)"?' + [regex]::Escape($paths.Profile) + '(?:"|\s|$)'
+        $running = Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
+            $_.CommandLine -and $_.CommandLine -match $profileArgument -and $_.CommandLine -notmatch '--type='
+        } | Select-Object -First 1
+    }
+    $active = @(Get-ChildItem -LiteralPath $paths.Inbox -Filter 'active-*.json' -File | Where-Object {
+        $_.BaseName -match '^active-(\d+)$' -and
+        $_.LastWriteTimeUtc -gt [DateTime]::UtcNow.AddSeconds(-15) -and
+        (Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue)
+    })
+    if ($running -or $active.Count) {
+        # A second development launch can reload an active review; queue and focus instead.
         $shell = New-Object -ComObject WScript.Shell
         try {
-            if (-not $shell.AppActivate([int]$running.ProcessId)) {
+            $target = if ($running) { [int]$running.ProcessId } else { 'Demo Player Summary Authoring' }
+            if (-not $shell.AppActivate($target)) {
                 throw 'Your selection is queued in the dedicated VS Code authoring window. Switch to that window to continue setup or review; Windows could not bring it to the foreground.'
             }
         } finally { [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null }
         return
     }
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $code
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.Arguments = @(
-        '--reuse-window', ('"' + $paths.Workspace + '"'), '--user-data-dir', ('"' + $paths.Profile + '"'),
-        '--extensions-dir', ('"' + $paths.Extensions + '"'),
-        '--shared-data-dir', ('"' + (Join-Path $paths.Profile 'shared-data') + '"'),
-        ('--extensionDevelopmentPath="' + (Join-Path $PSScriptRoot 'native') + '"'),
-        '--enable-proposed-api=local.historical-transcript-replay',
-        '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes', '--disable-telemetry'
-    ) -join ' '
-    $start.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
-    foreach ($key in @($start.EnvironmentVariables.Keys)) {
-        if ($key -like 'HISTORY_REPLAY_*') { $start.EnvironmentVariables.Remove($key) }
+    $launching = Join-Path $paths.Inbox 'launching'
+    if (-not $paths.Profile -and (Test-Path -LiteralPath $launching) -and
+        (Get-Item -LiteralPath $launching).LastWriteTimeUtc -gt [DateTime]::UtcNow.AddMinutes(-2)) {
+        throw 'The summary authoring window is still starting. Your selection is queued; switch to that window, or retry after startup finishes.'
     }
-    $start.EnvironmentVariables['HISTORY_REPLAY_SUMMARY_INBOX'] = $paths.Inbox
-    $process = [Diagnostics.Process]::Start($start)
-    if (-not $process) { throw 'The isolated VS Code summary authoring window could not start.' }
-    $process.Dispose()
+    [IO.File]::WriteAllText($launching, '', [Text.UTF8Encoding]::new($false))
+    $start = New-DemoSummaryAuthoringStartInfo $paths $code
+    try {
+        $process = [Diagnostics.Process]::Start($start)
+        if (-not $process) { throw 'The VS Code summary authoring window could not start.' }
+        $process.Dispose()
+    } catch {
+        [IO.File]::Delete($launching)
+        throw
+    }
 }
 
 function Show-DemoSummaryDialog($Owner, [string]$Id) {
@@ -871,7 +902,7 @@ function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id, [ValidateSet('both
         if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'output' }
         return
     }
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing summaries for long inputs and recorded assistant outputs/tool status (300 characters each). Short inputs and existing summaries are preserved. Unsupported output structures require manual summaries; no result is invented. Switch to the dedicated VS Code authoring window for provider setup and review. Its isolated profile retains providers and sign-in, but never inherits your normal editor account or extensions. Install/enable a provider and sign in there yourself if prompted, then choose Retry. Nothing is sent until you review the shown user queries and assistant output, consent, and select a model. Provider terms and limits apply. Do not send private content without permission. Edit, approve, or delete each draft and save the batch. Return here to use the selection and enable Show summary of output. Playback keeps full originals and never calls AI.', 'AI Input / Output Summaries', 'OKCancel', 'Information')
+    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing summaries for long inputs and recorded assistant outputs/tool status (300 characters each). Short inputs and existing summaries are preserved. Unsupported output structures require manual summaries; no result is invented. A separate VS Code authoring window uses your existing editor AI providers and sign-in, without copying credentials or installing extensions. Other editor windows are not reused or reloaded. If no model is available, finish provider setup in that window and choose Retry. Nothing is sent until you review the shown user queries and assistant output, consent, and select a model. Provider terms and limits apply. Do not send private content without permission. Edit, approve, or delete each draft and save the batch. Return here to use the selection and enable Show summary of output. Playback keeps full originals and never calls AI.', 'AI Input / Output Summaries', 'OKCancel', 'Information')
     if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
 }
 

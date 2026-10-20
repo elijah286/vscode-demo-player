@@ -344,6 +344,9 @@ try {
     if ((Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -ne '2 of 3 exchanges selected') { throw 'Preview controls or focus changes altered the selected exchanges.' }
     Invoke-Button $capture 'SaveDemo'
     Wait-Until { -not (Get-AppWindow 'Find interaction') } 'selection returns to controller' | Out-Null
+    Start-Sleep -Seconds 3
+    if (Get-AppWindow 'Find interaction') { throw 'Use selected exchanges reopened the picker after returning to the controller.' }
+    if (-not (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled) { throw 'Completed selection left the controller locked.' }
     $entries = @(Invoke-DemoLibrary @{ command = 'list' })
     if ($entries.Count -ne 2) { throw 'UI capture did not persist the second demo.' }
     if (-not ($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB))) { throw 'The PowerShell bridge did not preserve the Unicode capture title.' }
@@ -351,6 +354,8 @@ try {
     if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Capture changed the original saved conversation.' }
     Invoke-Button $window 'ChooseDemo'
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'reopen unified picker'
+    Start-Sleep -Seconds 3
+    if ((Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled) { throw 'Background summary refresh re-enabled the controller beneath its modal picker.' }
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     $list = Find-Element $dialog 'Id' 'DemoList'
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
