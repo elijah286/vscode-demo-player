@@ -14,6 +14,40 @@ Add-Type -TypeDefinition @'
 using System.Threading.Tasks;
 using System.Windows.Automation;
 public static class DemoUITest {
+    private delegate bool EnumWindowCallback(System.IntPtr handle, System.IntPtr parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EnumWindows(EnumWindowCallback callback, System.IntPtr parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(System.IntPtr handle, out uint processId);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetWindowText(System.IntPtr handle, System.Text.StringBuilder text, int count);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetWindowTextLength(System.IntPtr handle);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(System.IntPtr handle);
+    public static AutomationElement FindWindow(int processId, string title) {
+        var found = System.IntPtr.Zero;
+        bool completed = EnumWindows((handle, parameter) => {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner != processId || !IsWindowVisible(handle)) return true;
+            var text = new System.Text.StringBuilder(GetWindowTextLength(handle) + 1);
+            GetWindowText(handle, text, text.Capacity);
+            if (text.ToString() != title) return true;
+            found = handle;
+            return false;
+        }, System.IntPtr.Zero);
+        if (found != System.IntPtr.Zero) {
+            try {
+                var element = AutomationElement.FromHandle(found);
+                return element.Current.ControlType == ControlType.Window ? element : null;
+            } catch (ElementNotAvailableException) {
+                return null;
+            }
+        }
+        if (!completed) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return null;
+    }
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, System.UIntPtr extra);
     public static void Drag(int x, int y, int dx, int dy) {
@@ -101,12 +135,8 @@ function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 6
 }
 
 function Get-AppWindow([string]$Title) {
-    $condition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$script:controllerId),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Title),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    ))
-    return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    # Owned modal HWNDs must be found without traversing unrelated desktop controls.
+    return [DemoUITest]::FindWindow([int]$script:controllerId, $Title)
 }
 
 function Invoke-DialogButton($Parent, [string]$Name) {
@@ -262,13 +292,17 @@ try {
     Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 0 } 'prompt threshold filters numerically' | Out-Null
     Invoke-Button $capture 'CaptureClearFilters'
     $header = Find-Element $sessionList 'Name' 'Conversation'
-    $tasks.Add([DemoUITest]::Invoke($header))
-    Start-Sleep -Milliseconds 200
-    $tasks.Add([DemoUITest]::Invoke($header))
-    Wait-Until {
-        $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
-        Find-Element $cell 'Name' 'Synthetic UI acceptance'
-    } 'conversation column sorts descending' | Out-Null
+    foreach ($sort in @(
+        @{ Title = 'First synthetic SDK prompt'; Direction = 'ascending' },
+        @{ Title = 'Synthetic UI acceptance'; Direction = 'descending' }
+    )) {
+        $tasks.Add([DemoUITest]::Invoke($header))
+        $sortedTitle = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $sort.Title)
+        Wait-Until {
+            $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
+            $cell.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sortedTitle)
+        } ('conversation column sorts ' + $sort.Direction) | Out-Null
+    }
     Invoke-Button $capture 'CaptureRefresh'
     Wait-Until { (Find-Element $capture 'Id' 'CaptureRefresh').Current.IsEnabled -and ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 } 'refresh completes without duplicate rows' 65 | Out-Null
     $sourceBox = Find-Element $capture 'Id' 'CaptureSource'
@@ -344,6 +378,9 @@ try {
     if ((Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -ne '2 of 3 exchanges selected') { throw 'Preview controls or focus changes altered the selected exchanges.' }
     Invoke-Button $capture 'SaveDemo'
     Wait-Until { -not (Get-AppWindow 'Find interaction') } 'selection returns to controller' | Out-Null
+    Start-Sleep -Seconds 3
+    if (Get-AppWindow 'Find interaction') { throw 'Use selected exchanges reopened the picker after returning to the controller.' }
+    if (-not (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled) { throw 'Completed selection left the controller locked.' }
     $entries = @(Invoke-DemoLibrary @{ command = 'list' })
     if ($entries.Count -ne 2) { throw 'UI capture did not persist the second demo.' }
     if (-not ($entries | Where-Object title -eq ('Captured through UI ' + [char]0x03BB))) { throw 'The PowerShell bridge did not preserve the Unicode capture title.' }
@@ -351,6 +388,8 @@ try {
     if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Capture changed the original saved conversation.' }
     Invoke-Button $window 'ChooseDemo'
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'reopen unified picker'
+    Start-Sleep -Seconds 3
+    if ((Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled) { throw 'Background summary refresh re-enabled the controller beneath its modal picker.' }
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     $list = Find-Element $dialog 'Id' 'DemoList'
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)

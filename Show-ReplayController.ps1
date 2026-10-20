@@ -171,6 +171,7 @@ $script:switchView = $null
 $script:summaryStamp = $null
 $script:summaryRefreshing = $false
 $script:summaryRefreshAt = [DateTime]::MinValue
+$script:pickerOpen = $false
 $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
@@ -180,13 +181,13 @@ function Update-ControllerSummaryLinks {
     $outputs = if ($script:selectedDemo) { $script:selectedDemo.summaryCounts.output } else { 0 }
     $generatePromptSummaries.Content = "Generate AI prompt summaries ($inputs/$total)"
     $generateOutputSummaries.Content = "Generate AI output summaries ($outputs/$total)"
-    $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing
+    $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen
     $generatePromptSummaries.IsEnabled = $enabled
     $generateOutputSummaries.IsEnabled = $enabled
 }
 
 function Refresh-ControllerSummaries {
-    if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:summaryRefreshing -or -not $window.IsEnabled) { return }
+    if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:summaryRefreshing -or $script:pickerOpen -or -not $window.IsEnabled) { return }
     $script:summaryRefreshing = $true
     Update-ControllerSummaryLinks
     try {
@@ -211,7 +212,7 @@ function Refresh-ControllerSummaries {
 
 function Invoke-ControllerSummaryAuthoring([ValidateSet('input', 'output')][string]$Scope) {
     try {
-        if (-not $script:selectedDemo -or $script:ReplayProcessId) { throw 'Select an interaction and stop playback before generating summaries.' }
+        if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:pickerOpen) { throw 'Select an interaction, close the picker and stop playback before generating summaries.' }
         Show-DemoSummaryAuthoringNotice $window $script:selectedDemo.id $Scope
         Refresh-ControllerSummaries
     } catch { Show-DemoError $window $_ }
@@ -232,7 +233,7 @@ function Set-IdleView {
     $playIcon.Text = [char]0xE8A7
     $nextStep.IsEnabled = $false
     $stop.IsEnabled = $false
-    $chooseDemo.IsEnabled = $true
+    $chooseDemo.IsEnabled = -not $script:pickerOpen
     $windowMode.IsEnabled = $true
     Update-ControllerSummaryLinks
     Update-ReplayOverlays
@@ -281,6 +282,10 @@ function Start-DemoReplay {
 }
 
 $openLibrary = {
+    if ($script:pickerOpen) { return }
+    $script:pickerOpen = $true
+    $chooseDemo.IsEnabled = $false
+    Update-ControllerSummaryLinks
     try {
         $selected = Show-InteractionPicker $window
         if ($selected) { $script:selectedDemo = $selected }
@@ -291,6 +296,11 @@ $openLibrary = {
         $script:lastFault = $null
         Set-IdleView
     } catch { Show-DemoError $window $_ }
+    finally {
+        $script:pickerOpen = $false
+        $chooseDemo.IsEnabled = -not $script:ReplayProcessId
+        Update-ControllerSummaryLinks
+    }
 }
 $chooseDemo.Add_Click($openLibrary)
 

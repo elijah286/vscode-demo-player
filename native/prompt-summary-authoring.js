@@ -1,5 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { readFileSync } = require('node:fs');
 const { readEntry, saveSummaryBatch, savePromptSummaries, validatePromptSummaries } = require('./demo-library');
 const { MAX_PROMPT_SUMMARY_LENGTH, kindOf } = require('./replay');
 const { reviewSummaries } = require('./prompt-summary-review');
@@ -49,6 +50,18 @@ async function generateSummary(vscode, model, prompt, token, kind = 'input') {
     return summary;
 }
 
+function summaryWorkspaceInbox(vscode) {
+    const folders = vscode.workspace?.workspaceFolders;
+    if (folders?.length !== 1 || folders[0].uri.scheme !== 'file') return undefined;
+    const folder = folders[0].uri.fsPath;
+    if (path.basename(folder) !== 'Demo Player Summary Authoring') return undefined;
+    let marker;
+    try { marker = readFileSync(path.join(folder, '.demo-player-summary-authoring.json'), 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
+    if (JSON.parse(marker).version !== 1) throw new Error('Unsupported Demo Player summary authoring workspace.');
+    return path.join(path.dirname(folder), 'requests');
+}
+
 function activateSummaryAuthoring(context, vscode, file) {
     let busy = false;
     let scope = 'both';
@@ -78,9 +91,9 @@ function activateSummaryAuthoring(context, vscode, file) {
             const action = await vscode.window.showErrorMessage(
                 (scope === 'output' ? 'Response summaries' : 'Prompt summaries') + ': AI provider setup required',
                 { modal: true, detail:
-                    (failure ? 'Model discovery failed: ' + failure.message : 'No VS Code AI model is available in this dedicated authoring profile.') +
-                    '\n\nNo prompts were sent and no summaries were saved. This profile does not inherit your normal editor extensions or sign-in. ' +
-                    'Find and install/enable a Language Model provider such as GitHub Copilot, then use its setup UI and the Accounts menu to sign in if required. ' +
+                    (failure ? 'Model discovery failed: ' + failure.message : 'No VS Code AI model is available in this authoring window.') +
+                    '\n\nNo recorded content was sent and no summaries were saved. The player normally uses your existing VS Code AI setup in a separate window, without copying credentials. ' +
+                    'Check that your Language Model provider, such as GitHub Copilot, is enabled in this window and use its setup UI or the Accounts menu if sign-in is required. ' +
                     'Installation, account access, provider terms and model access are your choice. Copilot does not require a separate API token. ' +
                     'If asked to reload this window, do so, then select ' + retryLabel + ' in the status bar. ' +
                     'Otherwise choose Retry after setup. Manual summaries remain available in the player.' },
@@ -267,9 +280,26 @@ function activateSummaryInbox(context, vscode, inbox) {
             });
         } finally { scanning = false; }
     };
+    const active = path.join(inbox, 'active-' + process.pid + '.json');
+    let heartbeatBusy = false;
+    const heartbeat = async () => {
+        if (disposed || heartbeatBusy) return;
+        heartbeatBusy = true;
+        try { await fs.writeFile(active, '{}'); }
+        catch (error) {
+            clearInterval(heartbeatTimer);
+            await vscode.window.showErrorMessage('Summary authoring window registration failed: ' + error.message, { modal: true });
+        } finally { heartbeatBusy = false; }
+    };
+    const heartbeatTimer = setInterval(() => { void heartbeat(); }, 2000);
     const timer = setInterval(() => { void scan(); }, 750);
-    context.subscriptions.push({ dispose() { disposed = true; clearInterval(timer); } });
-    return { ...authoring, ready: scan(), scan };
+    context.subscriptions.push({ dispose() { disposed = true; clearInterval(timer); clearInterval(heartbeatTimer); } });
+    const ready = (async () => {
+        await fs.rm(path.join(inbox, 'launching'), { force: true });
+        await heartbeat();
+        return scan();
+    })();
+    return { ...authoring, ready, scan };
 }
 
-module.exports = { generateSummary, recordedOutput, activateSummaryAuthoring, activateSummaryInbox };
+module.exports = { generateSummary, recordedOutput, summaryWorkspaceInbox, activateSummaryAuthoring, activateSummaryInbox };
