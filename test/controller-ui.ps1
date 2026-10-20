@@ -38,8 +38,12 @@ public static class DemoUITest {
             return false;
         }, System.IntPtr.Zero);
         if (found != System.IntPtr.Zero) {
-            var element = AutomationElement.FromHandle(found);
-            return element.Current.ControlType == ControlType.Window ? element : null;
+            try {
+                var element = AutomationElement.FromHandle(found);
+                return element.Current.ControlType == ControlType.Window ? element : null;
+            } catch (ElementNotAvailableException) {
+                return null;
+            }
         }
         if (!completed) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
         return null;
@@ -288,13 +292,17 @@ try {
     Wait-Until { ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 0 } 'prompt threshold filters numerically' | Out-Null
     Invoke-Button $capture 'CaptureClearFilters'
     $header = Find-Element $sessionList 'Name' 'Conversation'
-    $tasks.Add([DemoUITest]::Invoke($header))
-    Start-Sleep -Milliseconds 200
-    $tasks.Add([DemoUITest]::Invoke($header))
-    Wait-Until {
-        $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
-        Find-Element $cell 'Name' 'Synthetic UI acceptance'
-    } 'conversation column sorts descending' | Out-Null
+    foreach ($sort in @(
+        @{ Title = 'First synthetic SDK prompt'; Direction = 'ascending' },
+        @{ Title = 'Synthetic UI acceptance'; Direction = 'descending' }
+    )) {
+        $tasks.Add([DemoUITest]::Invoke($header))
+        $sortedTitle = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $sort.Title)
+        Wait-Until {
+            $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
+            $cell.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sortedTitle)
+        } ('conversation column sorts ' + $sort.Direction) | Out-Null
+    }
     Invoke-Button $capture 'CaptureRefresh'
     Wait-Until { (Find-Element $capture 'Id' 'CaptureRefresh').Current.IsEnabled -and ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).Current.RowCount -eq 2 } 'refresh completes without duplicate rows' 65 | Out-Null
     $sourceBox = Find-Element $capture 'Id' 'CaptureSource'

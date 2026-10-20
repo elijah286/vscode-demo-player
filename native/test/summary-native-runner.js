@@ -76,7 +76,9 @@ async function run() {
             'Start-DemoSummaryAuthoring ' + quote(second.id) + " $null 'output'";
         await progress('starting repeated production launch');
         await new Promise((resolve, reject) => {
-            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference = 'Stop'; " + launch], { env });
+            const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference = 'Stop'; " + launch], {
+                env, stdio: ['ignore', 'ignore', 'pipe']
+            });
             let output = '';
             child.stderr.on('data', data => { output += data; });
             child.once('error', reject);
