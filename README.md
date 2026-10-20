@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.13](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.13/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.14](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.14/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -522,7 +522,7 @@ in v0.2.11.
 
 **Summarize inputs / outputs with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate VS Code authoring window,
-never the playback window. In this pending follow-up to v0.2.13, it uses your
+never the playback window. Starting with v0.2.14, it uses your
 existing VS Code AI providers and sign-in instead of an empty isolated profile.
 No credentials are copied, no extensions are automatically installed, and
 unrelated editor windows are not reused or reloaded. Copilot uses your existing
