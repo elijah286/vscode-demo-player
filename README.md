@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.12](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.12/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.13](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.13/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -503,7 +503,7 @@ and later queued selections. The dedicated Command Palette action is
 
 The controller also offers separate **Generate AI prompt summaries (saved/total)**
 and **Generate AI output summaries (saved/total)** links for the selected interaction.
-These links are a pending follow-up and are not in v0.2.12. Each numerator counts
+These links require v0.2.13 or later. Each numerator counts
 all saved summaries of that kind, including manual summaries; the denominator is
 the total number of exchanges in the selected interaction, not the number eligible
 for generation. Counts refresh after saved changes without reselecting. With no
