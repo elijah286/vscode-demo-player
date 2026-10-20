@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.11](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.11/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.12](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.12/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -501,8 +501,8 @@ and save it first. The response-only scope survives provider retry, window reloa
 and later queued selections. The dedicated Command Palette action is
 **Demo Player: Generate AI Summaries of Responses**.
 
-These output-summary controls are not present in v0.2.11; they belong to the
-pending output-summary feature and this follow-up, not a shipped update yet.
+These output-summary controls require v0.2.12 or later; they are not present
+in v0.2.11.
 
 **Summarize inputs / outputs with AI...**, available beside the selection action and
 on the **Saved selections** tab, opens a separate, isolated VS Code
