@@ -425,7 +425,7 @@ try {
         Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (2/2)' 'Switching interactions changes denominator and counts'
         $script:selectedDemo = $script:refreshEntries[0]
         $script:refreshEntries = @()
-        [IO.File]::WriteAllText($file, '{"deleted":true}')
+        [IO.File]::Delete($file)
         Refresh-ControllerSummaries
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'Removed selection clears counts'
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'Removed selection disables action'
