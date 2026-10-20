@@ -91,7 +91,7 @@ async function run() {
             countTokens: async () => 100,
             sendRequest: async messages => {
                 const text = messages[0].content.map(part => part.value).join('');
-                assert.ok([...prompts, ...outputs].some(source => text.endsWith(JSON.stringify(source))), 'Only consented input or filtered recorded output is sent');
+                assert.ok([...entry.recording.turns.map(turn => turn.snapshot.requests[0].message.text), ...outputs].some(source => text.endsWith(JSON.stringify(source))), 'Only consented input or filtered recorded output is sent');
                 if (outputs.some(source => text.endsWith(JSON.stringify(source)))) {
                     assert.match(text, /Do not assume the user request succeeded/);
                 }
@@ -205,6 +205,21 @@ async function run() {
         assert.deepEqual(responseSaved.recording.promptSummaries, after.recording.promptSummaries, 'Explicit response generation leaves input summaries exactly unchanged');
         assert.equal(responseSaved.recording.outputSummaries[1], 'Explicitly reviewed response summary');
         assert.deepEqual(responseSaved.recording.turns, entry.recording.turns, 'Explicit response generation preserves all original answers and prompts');
+        const missingInputs = responseSaved.recording.turns.length - responseSaved.recording.promptSummaries.filter(Boolean).length;
+        const promptsGenerated = authoring.run(undefined, 'input');
+        await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+        assert.ok(await page.getByText(/Assistant replies are not sent or summarized by this action/).isVisible());
+        await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
+        const inputFrame = await reviewFrame(page);
+        assert.equal(await inputFrame.locator('#exchanges option').count(), missingInputs, 'Prompt-only mode includes every missing input, even the short prompt');
+        await inputFrame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
+        await inputFrame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true }).click();
+        await promptsGenerated;
+        const promptsSaved = await library.readEntry(path.dirname(file), entry.id);
+        assert.equal(promptsSaved.recording.promptSummaries.filter(Boolean).length, entry.recording.turns.length);
+        assert.deepEqual(promptsSaved.recording.outputSummaries, responseSaved.recording.outputSummaries);
+        assert.deepEqual(promptsSaved.recording.turns, entry.recording.turns);
+        console.log('NATIVE CONTROLLER PROMPT SCOPE PASSED: short and long missing inputs, prompt-only consent/review/save, unchanged outputs/originals.');
         console.log('NATIVE EXPLICIT RESPONSE GENERATION PASSED: real response-only launch inbox, provider setup, scoped consent, output-only review/edit/approve/save, input-summary preservation and original-answer fidelity; synthetic model only.');
         console.log('NATIVE SUMMARY AUTHORING PASSED: real isolated activation, consent, missing-provider guidance, automatic comparison webview, full read-only originals, editable 300-char summaries, invalid-input gating, individual approval/advance, deletion/restoration, list navigation, approve-all preserving deletions, edit revokes approval, save/playback fidelity, cancel byte preservation, inert HTML-like data. Synthetic provider only; no external AI requests.');
     } finally { await browser.close(); }

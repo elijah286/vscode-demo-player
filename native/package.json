@@ -2,7 +2,7 @@
   "name": "historical-transcript-replay",
   "displayName": "Transcript Playback",
   "description": "Replay original local chat transcripts in the native VS Code interface without model or tool execution.",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "publisher": "local",
   "engines": {
     "vscode": "^1.140.0"
@@ -47,6 +47,11 @@
       }
     ],
     "commands": [
+      {
+        "command": "historyReplay.summarizeInput",
+        "title": "Demo Player: Generate AI Summaries of Prompts",
+        "enablement": "demoPlayer.summaryAuthoring"
+      },
       {
         "command": "historyReplay.summarizeResponse",
         "title": "Demo Player: Generate AI Summaries of Responses",

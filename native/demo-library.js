@@ -239,7 +239,11 @@ function summarize(entry) {
         return recording;
     });
     const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
-    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
+    const summaryCounts = {
+        input: entry.recording.promptSummaries?.filter(Boolean).length ?? 0,
+        output: entry.recording.outputSummaries?.filter(Boolean).length ?? 0
+    };
+    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
 }
 
 async function listDemos(root) {

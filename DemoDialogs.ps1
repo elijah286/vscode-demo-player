@@ -735,7 +735,7 @@ function Get-DemoSummaryAuthoringPaths {
     }
 }
 
-function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'output')][string]$Scope = 'both') {
+function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'input', 'output')][string]$Scope = 'both') {
     Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner | Out-Null
     $code = Resolve-PlayerVSCode $script:CodePath
     $paths = Get-DemoSummaryAuthoringPaths
@@ -745,7 +745,7 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'o
     $request = Join-Path $paths.Inbox (([datetime]::UtcNow.Ticks.ToString()) + '-' + [guid]::NewGuid().ToString('N') + '.json')
     $pending = $request + '.pending'
     $selection = @{ file = Join-Path $script:LibraryRoot ($Id + '.demo.json') }
-    if ($Scope -eq 'output') { $selection.scope = 'output' }
+    if ($Scope -ne 'both') { $selection.scope = $Scope }
     [IO.File]::WriteAllText($pending, (ConvertTo-Json $selection -Compress), [Text.UTF8Encoding]::new($false))
     [IO.File]::Move($pending, $request)
     $profileArgument = '--user-data-dir(?:=|\s+)"?' + [regex]::Escape($paths.Profile) + '(?:"|\s|$)'
@@ -860,7 +860,12 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
     return $dialog.ShowDialog()
 }
 
-function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id, [ValidateSet('both', 'output')][string]$Scope = 'both') {
+function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id, [ValidateSet('both', 'input', 'output')][string]$Scope = 'both') {
+    if ($Scope -eq 'input') {
+        $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing AI summaries of user prompts only (300 characters each), including short prompts. Recorded assistant replies are not sent or summarized by this action. Existing summaries are preserved. Use the same dedicated authoring window, provider/model selection and editable review as other summary actions. Review the shown prompts for secrets before consenting; provider terms and usage limits apply. Approve or delete drafts and save the reviewed batch. The controller counts all saved summaries, including manual ones. Original chat prompts remain unchanged; playback never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
+        if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'input' }
+        return
+    }
     if ($Scope -eq 'output') {
         $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing AI summaries of recorded assistant responses/tool status only (300 characters each). User prompts are not sent or summarized by this action. Existing summaries are preserved. Unsupported outputs need manual summaries; no result is invented. Switch to the dedicated authoring window to set up your provider, review the recorded output, consent and select a model. Raw tool arguments/results, reasoning and metadata are excluded; shown answer text can still contain secrets, so review it first. Edit, approve or delete drafts and save the reviewed batch. Return here to use the selection and enable Show summary of output. The original answers remain unchanged in chat; playback never calls AI.', 'AI Response Summaries', 'OKCancel', 'Information')
         if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'output' }

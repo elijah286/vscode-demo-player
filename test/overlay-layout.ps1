@@ -264,7 +264,15 @@ try {
         $controllerWindow.Content.Measure($controllerSize)
         $controllerWindow.Content.Arrange([System.Windows.Rect]::new($controllerSize))
         $controllerWindow.Content.UpdateLayout()
-        Assert-Layout ($outputControl.ActualHeight -gt 0 -and [System.Windows.Controls.Grid]::GetRow($outputControl) -eq 8) 'Controller output toggle must occupy its own measured row.'
+        Assert-Layout ($outputControl.ActualHeight -gt 0 -and [System.Windows.Controls.Grid]::GetRow($outputControl.Parent) -eq 8) 'Controller output toggle and authoring link must occupy their measured row.'
+        foreach ($pair in @(@('ShowPrompt', 'GeneratePromptSummaries'), @('ShowOutput', 'GenerateOutputSummaries'))) {
+            $toggle = $controllerWindow.FindName($pair[0])
+            $link = $controllerWindow.FindName($pair[1])
+            $toggleOrigin = $toggle.TranslatePoint([System.Windows.Point]::new(0, 0), $controllerWindow.Content)
+            $linkOrigin = $link.TranslatePoint([System.Windows.Point]::new(0, 0), $controllerWindow.Content)
+            Assert-Layout ($link.ActualHeight -gt 0 -and $linkOrigin.Y -ge $toggleOrigin.Y + $toggle.ActualHeight) 'Authoring link must be visible below its checkbox without overlap.'
+            Assert-Layout ($link.ActualWidth -le $controllerWindow.Content.ActualWidth -and $linkOrigin.Y + $link.ActualHeight -le $controllerWindow.Content.ActualHeight) 'Authoring links must fit the compact controller.'
+        }
         Assert-Layout ([System.Windows.Controls.Grid]::GetRow($controllerWindow.FindName('WindowMode')) -eq 10) 'Adding output must preserve the mode selector below it.'
         Assert-Layout (-not $controllerWindow.IsVisible) 'Controller layout must remain hidden.'
     } finally { $controllerWindow.Close() }

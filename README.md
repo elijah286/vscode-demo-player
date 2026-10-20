@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.12](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.12/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.13](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.13/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -500,6 +500,22 @@ existing output summary, clear that output draft in **Review / edit summaries**
 and save it first. The response-only scope survives provider retry, window reload
 and later queued selections. The dedicated Command Palette action is
 **Demo Player: Generate AI Summaries of Responses**.
+
+The controller also offers separate **Generate AI prompt summaries (saved/total)**
+and **Generate AI output summaries (saved/total)** links for the selected interaction.
+These links require v0.2.13 or later. Each numerator counts
+all saved summaries of that kind, including manual summaries; the denominator is
+the total number of exchanges in the selected interaction, not the number eligible
+for generation. Counts refresh after saved changes without reselecting. With no
+interaction selected, the links show **(0/0)** and are disabled. They are also
+disabled during playback; stop playback before authoring.
+The prompt link generates only missing prompt summaries, including short prompts;
+the output link generates only missing reply summaries. Both reuse the same
+dedicated authoring profile, provider/model selection, consent and editable review.
+Existing summaries are preserved. Cancellation or unsaved drafts do not increase
+the counts. Unsupported-only output still needs a manual summary, not an invented
+answer. **Demo Player: Generate AI Summaries of Prompts** retries prompt-only work;
+the existing combined picker action retains its long-prompt eligibility rules.
 
 These output-summary controls require v0.2.12 or later; they are not present
 in v0.2.11.
