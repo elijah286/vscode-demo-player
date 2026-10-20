@@ -14,6 +14,36 @@ Add-Type -TypeDefinition @'
 using System.Threading.Tasks;
 using System.Windows.Automation;
 public static class DemoUITest {
+    private delegate bool EnumWindowCallback(System.IntPtr handle, System.IntPtr parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EnumWindows(EnumWindowCallback callback, System.IntPtr parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(System.IntPtr handle, out uint processId);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetWindowText(System.IntPtr handle, System.Text.StringBuilder text, int count);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetWindowTextLength(System.IntPtr handle);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(System.IntPtr handle);
+    public static AutomationElement FindWindow(int processId, string title) {
+        var found = System.IntPtr.Zero;
+        bool completed = EnumWindows((handle, parameter) => {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner != processId || !IsWindowVisible(handle)) return true;
+            var text = new System.Text.StringBuilder(GetWindowTextLength(handle) + 1);
+            GetWindowText(handle, text, text.Capacity);
+            if (text.ToString() != title) return true;
+            found = handle;
+            return false;
+        }, System.IntPtr.Zero);
+        if (found != System.IntPtr.Zero) {
+            var element = AutomationElement.FromHandle(found);
+            return element.Current.ControlType == ControlType.Window ? element : null;
+        }
+        if (!completed) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        return null;
+    }
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, System.UIntPtr extra);
     public static void Drag(int x, int y, int dx, int dy) {
@@ -101,12 +131,8 @@ function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 6
 }
 
 function Get-AppWindow([string]$Title) {
-    $condition = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$script:controllerId),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Title),
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    ))
-    return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    # Owned modal HWNDs must be found without traversing unrelated desktop controls.
+    return [DemoUITest]::FindWindow([int]$script:controllerId, $Title)
 }
 
 function Invoke-DialogButton($Parent, [string]$Name) {

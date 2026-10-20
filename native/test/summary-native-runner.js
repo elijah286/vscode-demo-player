@@ -19,6 +19,8 @@ async function reviewFrame(page) {
 
 async function run() {
     const file = process.env.HISTORY_REPLAY_TEST_SUMMARY_ENTRY;
+    const progress = stage => fs.appendFile(path.join(path.dirname(file), 'summary-ui-progress.log'), new Date().toISOString() + ' ' + stage + '\n');
+    await progress('runner started');
     const before = await fs.readFile(file);
     const entry = JSON.parse(before.toString('utf8'));
     const prompts = entry.recording.turns.map(turn => turn.snapshot.requests[0].message.text)
@@ -43,6 +45,7 @@ async function run() {
         await page.getByRole('button', { name: 'Retry', exact: true }).click();
         await setup.waitFor({ state: 'visible', timeout: 15000 });
         await page.screenshot({ path: path.join(path.dirname(file), 'summary-provider-missing.png') });
+        await progress('provider setup and retry verified');
         assert.deepEqual(await fs.readFile(file), before, 'Missing provider cannot change saved summaries or payloads');
         await page.getByRole('button', { name: 'Find providers', exact: true }).click();
         await api.ready;
@@ -53,6 +56,7 @@ async function run() {
         await runAgain;
         assert.deepEqual(await fs.readFile(file), before, 'Canceling setup preserves the entry');
         await api.ready;
+        await progress('manual setup cancellation verified');
         const secondRoot = path.join(path.dirname(file), 'second-library');
         const second = await library.addPackage(secondRoot, { ...entry.recording, title: 'Synthetic later selection' });
         const secondFile = path.join(secondRoot, second.id + '.demo.json');
@@ -70,6 +74,7 @@ async function run() {
             'function Invoke-DemoLibrary { param($Request, $Owner) Get-Content -Raw -LiteralPath ' + quote(secondFile) + ' | ConvertFrom-Json }; ' +
             'function Resolve-PlayerVSCode { param($CodePath) ' + quote(process.execPath) + ' }; ' +
             'Start-DemoSummaryAuthoring ' + quote(second.id) + " $null 'output'";
+        await progress('starting repeated production launch');
         await new Promise((resolve, reject) => {
             const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference = 'Stop'; " + launch], { env });
             let output = '';
@@ -77,6 +82,7 @@ async function run() {
             child.once('error', reject);
             child.once('exit', code => code === 0 ? resolve() : reject(new Error('Repeated authoring launch failed: ' + code + ' ' + output)));
         });
+        await progress('repeated production launch exited');
         await page.getByText('Response summaries: AI provider setup required', { exact: true }).waitFor({ state: 'visible', timeout: 15000 });
         await page.getByRole('button', { name: 'Cancel', exact: true }).click();
         const deadline = Date.now() + 5000;
@@ -86,6 +92,7 @@ async function run() {
         assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file: secondFile, scope: 'output' }, 'A repeated response-only launch targets the later selection and retains its scope');
         assert.deepEqual(await fs.readFile(secondFile), secondBefore);
         assert.equal(browser.contexts()[0].pages().filter(candidate => candidate.url().includes('workbench')).length, 1, 'Repeated launch reuses one dedicated authoring workspace');
+        await progress('repeated output selection verified');
         let requests = 0;
         const syntheticModel = {
             name: 'Synthetic summary model', vendor: 'test', id: 'synthetic', maxInputTokens: 10000,
