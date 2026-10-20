@@ -490,6 +490,61 @@ test('provider setup is modal, explicit and request-free until discovery succeed
     assert.equal(calls.saved.length, 1);
 });
 
+test('controller prompt-only action includes short prompts, preserves outputs and reports saved-summary counts', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context, ['Short prompt', 'Long prompt '.repeat(40)]);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Controller counts', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    assert.deepEqual(added.summaryCounts, { input: 0, output: 0 });
+    await library.savePromptSummaries(root, added.id, ['Manual prompt', null], null, 'input');
+    await library.savePromptSummaries(root, added.id, ['Manual reply', null], null, 'output');
+    assert.deepEqual((await library.listDemos(root))[0].summaryCounts, { input: 1, output: 1 });
+    const before = await library.readEntry(root, added.id);
+    const { api, calls } = authoringAPI({
+        beforeReview: () => library.savePromptSummaries(root, added.id, ['Concurrent output', null], ['Manual reply', null], 'output')
+    });
+    activateSummaryAuthoring({ subscriptions: [] }, api, file);
+    await calls.handlers['historyReplay.summarizeInput']();
+    assert.deepEqual(calls.errors, []);
+    assert.equal(calls.requests, 1);
+    assert.ok(calls.reviewDrafts.every(draft => draft.kind === 'input'));
+    assert.match(calls.consentMessages[0], /Assistant replies are not sent/);
+    assert.equal(calls.statuses[0].command, 'historyReplay.summarizeInput');
+    const after = await library.readEntry(root, added.id);
+    assert.deepEqual(after.recording.promptSummaries, ['Manual prompt', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.outputSummaries, ['Concurrent output', null]);
+    assert.deepEqual(after.recording.turns, before.recording.turns);
+    assert.deepEqual((await library.listDemos(root))[0].summaryCounts, { input: 2, output: 1 });
+    await library.savePromptSummaries(root, added.id, [null, null], after.recording.promptSummaries, 'input');
+    const second = authoringAPI();
+    activateSummaryAuthoring({ subscriptions: [] }, second.api, file);
+    await second.calls.handlers['historyReplay.summarizeInput']();
+    assert.equal(second.calls.requests, 2, 'Prompt-only action includes short prompts in the total');
+    assert.ok(second.calls.documents[0].content.includes('Short prompt'));
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.outputSummaries, ['Concurrent output', null]);
+});
+
+test('prompt-only cancellation and stale input do not overwrite reviewed metadata', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context, ['Short prompt']);
+    const added = await library.addPackage(root, await library.createPackage(source, [0], 'Prompt guards', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    for (const options of [{ decline: true }, { cancelReview: true }, { providerFailure: true }]) {
+        const { api, calls } = authoringAPI(options);
+        const authoring = activateSummaryAuthoring({ subscriptions: [] }, api, file);
+        await authoring.run(undefined, 'input');
+        assert.deepEqual(await fs.readFile(file), before);
+        assert.equal(calls.statuses[0].command, 'historyReplay.summarizeInput');
+    }
+    const { api, calls } = authoringAPI({
+        beforeReview: () => library.savePromptSummaries(root, added.id, ['Concurrent prompt'], null, 'input')
+    });
+    await activateSummaryAuthoring({ subscriptions: [] }, api, file).run(undefined, 'input');
+    assert.ok(calls.errors.some(error => /changed/i.test(error)));
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, ['Concurrent prompt']);
+});
+
 test('explicit response command reviews outputs only without sending prompts or replacing input metadata', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
     const { source, root, inspection } = await authoringFixture(context, ['PRIVATE_USER_QUERY '.repeat(30), 'Another PRIVATE_USER_QUERY '.repeat(30)]);
@@ -599,6 +654,17 @@ test('persistent inbox retains response-only scope across reload and resets it f
     await reload.scan();
     assert.match(second.calls.consentMessages[1], /input\/output summaries/);
     assert.match(second.calls.documents[1].content, /Long original query/);
+    await fs.writeFile(path.join(inbox, '102-aab.json'), JSON.stringify({ file, scope: 'input' }));
+    await reload.scan();
+    assert.match(second.calls.consentMessages[2], /Assistant replies are not sent/);
+    assert.equal(second.calls.statuses[0].command, 'historyReplay.summarizeInput');
+    const restoredSubscriptions = [];
+    const restored = authoringAPI({ decline: true });
+    const restoredInbox = activateSummaryInbox({ subscriptions: restoredSubscriptions }, restored.api, inbox);
+    context.after(() => restoredSubscriptions.forEach(item => item.dispose()));
+    await restoredInbox.ready;
+    assert.match(restored.calls.consentMessages[0], /Assistant replies are not sent/);
+    restoredSubscriptions.forEach(item => item.dispose());
     const before = await fs.readFile(file);
     await fs.writeFile(path.join(inbox, '102-aaa.json'), JSON.stringify({ file, scope: 'unrecognized' }));
     await reload.scan();

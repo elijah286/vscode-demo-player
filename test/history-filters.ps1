@@ -363,6 +363,80 @@ try {
     Assert-Equal ($null -eq $controller.FindName('Library')) $true 'Controller no longer exposes Manage Demos'
     Assert-Equal $controller.FindName('PrimaryLabel').Text 'Open' 'Preparing a target stays separate from playback'
     Assert-Equal $controller.FindName('PlayPause').IsEnabled $false 'Playback requires a selected interaction'
+    & {
+        $window = $controller
+        $generatePromptSummaries = $controller.FindName('GeneratePromptSummaries')
+        $generateOutputSummaries = $controller.FindName('GenerateOutputSummaries')
+        foreach ($name in @('Update-ControllerSummaryLinks', 'Refresh-ControllerSummaries', 'Invoke-ControllerSummaryAuthoring')) {
+            $definition = $controllerAst.Find({
+                param($node)
+                $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($definition.Extent.Text))
+        }
+        $script:selectedDemo = $null
+        $script:ReplayProcessId = 0
+        $script:summaryRefreshing = $false
+        Update-ControllerSummaryLinks
+        Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'No selected prompt count'
+        Assert-Equal $generateOutputSummaries.IsEnabled $false 'No selected output action'
+        Assert-Equal $generatePromptSummaries.IsEnabled $false 'No selected prompt action'
+        $script:selectedDemo = [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 3; output = 1 } }
+        Update-ControllerSummaryLinks
+        Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (3/12)' 'Manual and AI inputs share the saved count'
+        Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (1/12)' 'Outputs have independent count'
+        Assert-Equal $generatePromptSummaries.IsEnabled $true 'Selected interaction enables generation'
+        $script:ReplayProcessId = 123
+        Update-ControllerSummaryLinks
+        Assert-Equal $generateOutputSummaries.IsEnabled $false 'Playback disables authoring'
+        $script:ReplayProcessId = 0
+        $script:summaryRefreshing = $true
+        Update-ControllerSummaryLinks
+        Assert-Equal $generatePromptSummaries.IsEnabled $false 'Reentrant refresh disables authoring'
+        $script:summaryRefreshing = $false
+        $script:LibraryRoot = Join-Path $ApplicationRoot ('.build\controller-summary-links\' + [guid]::NewGuid().ToString('N'))
+        [IO.Directory]::CreateDirectory($script:LibraryRoot) | Out-Null
+        $file = Join-Path $script:LibraryRoot 'synthetic.demo.json'
+        [IO.File]::WriteAllText($file, '{}')
+        $script:summaryStamp = $null
+        $script:summaryRefreshAt = [DateTime]::MinValue
+        $script:refreshCalls = 0
+        $script:summaryErrors = 0
+        $script:refreshEntries = @([pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 4; output = 2 } })
+        function Invoke-DemoLibrary { param($Request, $Owner) $script:refreshCalls++; return $script:refreshEntries }
+        function Set-IdleView { Update-ControllerSummaryLinks }
+        function Show-DemoError { param($Owner, $ErrorRecord) $script:summaryErrors++ }
+        function Show-DemoSummaryAuthoringNotice { param($Owner, $Id, $Scope) $script:summaryLaunch = "$Id/$Scope" }
+        Refresh-ControllerSummaries
+        Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (4/12)' 'Background saved input refresh'
+        Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (2/12)' 'Background saved output refresh'
+        Refresh-ControllerSummaries
+        Assert-Equal $script:refreshCalls 1 'Unchanged file does not start a helper every tick'
+        Invoke-ControllerSummaryAuthoring 'input'
+        Assert-Equal $script:summaryLaunch 'synthetic/input' 'Prompt controller link routes input only'
+        Invoke-ControllerSummaryAuthoring 'output'
+        Assert-Equal $script:summaryLaunch 'synthetic/output' 'Output controller link routes output only'
+        $script:refreshEntries = @([pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 0; output = 0 } })
+        [IO.File]::WriteAllText($file, '{"cleared":true}')
+        Refresh-ControllerSummaries
+        Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (0/12)' 'Clearing summaries resets numerator only'
+        $script:selectedDemo = [pscustomobject]@{ id = 'other'; count = 2; summaryCounts = @{ input = 1; output = 2 } }
+        Update-ControllerSummaryLinks
+        Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (2/2)' 'Switching interactions changes denominator and counts'
+        $script:selectedDemo = $script:refreshEntries[0]
+        $script:refreshEntries = @()
+        [IO.File]::WriteAllText($file, '{"deleted":true}')
+        Refresh-ControllerSummaries
+        Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'Removed selection clears counts'
+        Assert-Equal $generatePromptSummaries.IsEnabled $false 'Removed selection disables action'
+        $script:selectedDemo = [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 0; output = 0 } }
+        $script:summaryStamp = $null
+        function Invoke-DemoLibrary { throw 'Synthetic library read failed' }
+        Refresh-ControllerSummaries
+        Assert-Equal $script:summaryErrors 1 'Refresh failure is explicitly surfaced'
+        Assert-Equal $script:summaryRefreshing $false 'Refresh failure releases reentrancy guard'
+        Assert-Equal $script:summaryRefreshAt ([DateTime]::MaxValue) 'Refresh failure does not cause a repeating dialog storm'
+    }
 } finally { $controller.Close() }
 $summaryFunction = $ast.Find({
     param($node)

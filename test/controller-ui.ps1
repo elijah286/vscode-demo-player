@@ -208,6 +208,10 @@ try {
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'standalone controller'
     $play = Find-Element $window 'Id' 'PlayPause'
     if ($play.Current.IsEnabled) { throw 'Play must be disabled without a selected demo.' }
+    foreach ($id in @('GeneratePromptSummaries', 'GenerateOutputSummaries')) {
+        $link = Find-Element $window 'Id' $id
+        if ($link.Current.IsEnabled -or $link.Current.Name -notmatch '\(0/0\)$') { throw 'Summary links require an interaction and start at0/0.' }
+    }
     Save-WindowImage $window 'controller-empty.png'
     Invoke-Button $window 'ChooseDemo'
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'unified interaction picker'
@@ -455,6 +459,26 @@ try {
         return $controls
     } 'selected demo and both presentation controls ready'
     if ($selectedControls.PlayPause.Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
+    foreach ($action in @(
+        @{ Id = 'GeneratePromptSummaries'; Title = 'AI Prompt Summaries' },
+        @{ Id = 'GenerateOutputSummaries'; Title = 'AI Response Summaries' }
+    )) {
+        $link = Wait-Until {
+            $candidate = Find-Element $window 'Id' $action.Id
+            if ($candidate.Current.IsEnabled -and $candidate.Current.Name -match '\(1/2\)$') { return $candidate }
+        } 'controller links display separate saved summaries out of total exchanges'
+        Invoke-Button $window $action.Id
+        $notice = Wait-Until { Get-AppWindow $action.Title } 'scoped controller authoring notice'
+        Invoke-DialogButton $notice 'Cancel'
+        Wait-Until { -not (Get-AppWindow $action.Title) } 'controller authoring cancellation' | Out-Null
+    }
+    $countEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, 'Manually saved second reply'); expected = @($countEntry.recording.outputSummaries) } | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes external summary save without reselecting' | Out-Null
+    if ((Find-Element $window 'Id' 'GeneratePromptSummaries').Current.Name -notmatch '\(1/2\)$') { throw 'Output saves changed prompt count.' }
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($outputSummary, 'Manually saved second reply') } | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(1/2\)$' } 'controller observes summary clear without reselecting' | Out-Null
+    Save-WindowImage $window 'controller-summary-links.png'
     $showPrompt = $selectedControls.ShowPrompt
     $showElapsed = $selectedControls.ShowElapsed
     if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) {

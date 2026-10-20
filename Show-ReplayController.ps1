@@ -42,11 +42,11 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="426" Topmost="True"
+        Title="Demo Player" Width="360" Height="474" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="24"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -75,15 +75,27 @@ if (-not $script:standalone) {
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <TextBlock Grid.ColumnSpan="3" Text="Find an interaction, then Open and Play." VerticalAlignment="Center" Foreground="#555555"/>
     </Grid>
-        <CheckBox x:Name="ShowPrompt" Grid.Row="6" Content="Show prompt summary" IsEnabled="False"
+        <StackPanel Grid.Row="6">
+        <CheckBox x:Name="ShowPrompt" Content="Show prompt summary" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
+        <Button x:Name="GeneratePromptSummaries" Content="Generate AI prompt summaries (0/0)" IsEnabled="False"
+                HorizontalAlignment="Left" Padding="0,2" Background="Transparent" BorderThickness="0"
+                Foreground="#0066CC" Cursor="Hand" AutomationProperties.AutomationId="GeneratePromptSummaries"
+                ToolTip="Generate missing prompt summaries. Counts include all saved summaries, including manual ones."/>
+        </StackPanel>
         <CheckBox x:Name="ShowElapsed" Grid.Row="7" Content="Show elapsed time" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowElapsed"
                             ToolTipService.ShowOnDisabled="True"
                             ToolTip="Interpolated response work. Excludes user idle gaps; holds during typing and pauses."/>
-        <CheckBox x:Name="ShowOutput" Grid.Row="8" Content="Show summary of output" IsChecked="False" IsEnabled="False"
+        <StackPanel Grid.Row="8">
+        <CheckBox x:Name="ShowOutput" Content="Show summary of output" IsChecked="False" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowOutput"
                             ToolTip="Show input and output summaries as a conversation, with working time always at the top."/>
+        <Button x:Name="GenerateOutputSummaries" Content="Generate AI output summaries (0/0)" IsEnabled="False"
+                HorizontalAlignment="Left" Padding="0,2" Background="Transparent" BorderThickness="0"
+                Foreground="#0066CC" Cursor="Hand" AutomationProperties.AutomationId="GenerateOutputSummaries"
+                ToolTip="Generate missing reply summaries. Counts include all saved summaries, including manual ones."/>
+        </StackPanel>
         <Grid Grid.Row="9" Margin="0,4,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
             <TextBlock Text="Overlay frame" VerticalAlignment="Center" FontSize="12" Foreground="#555555"/>
@@ -128,6 +140,8 @@ $updateNotice = $window.FindName('UpdateNotice')
 $showPrompt = $window.FindName('ShowPrompt')
 $showElapsed = $window.FindName('ShowElapsed')
 $showOutput = $window.FindName('ShowOutput')
+$generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
+$generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
 $frameColor = $window.FindName('FrameColor')
 $frameColorSwatch = $window.FindName('FrameColorSwatch')
 $windowMode = $window.FindName('WindowMode')
@@ -154,8 +168,56 @@ $script:replayMode = 'Editor'
 $script:modeUpdating = $false
 $script:switching = $false
 $script:switchView = $null
+$script:summaryStamp = $null
+$script:summaryRefreshing = $false
+$script:summaryRefreshAt = [DateTime]::MinValue
 $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
+
+function Update-ControllerSummaryLinks {
+    $total = if ($script:selectedDemo) { $script:selectedDemo.count } else { 0 }
+    $inputs = if ($script:selectedDemo) { $script:selectedDemo.summaryCounts.input } else { 0 }
+    $outputs = if ($script:selectedDemo) { $script:selectedDemo.summaryCounts.output } else { 0 }
+    $generatePromptSummaries.Content = "Generate AI prompt summaries ($inputs/$total)"
+    $generateOutputSummaries.Content = "Generate AI output summaries ($outputs/$total)"
+    $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing
+    $generatePromptSummaries.IsEnabled = $enabled
+    $generateOutputSummaries.IsEnabled = $enabled
+}
+
+function Refresh-ControllerSummaries {
+    if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:summaryRefreshing -or -not $window.IsEnabled) { return }
+    $script:summaryRefreshing = $true
+    Update-ControllerSummaryLinks
+    try {
+        $path = Join-Path $script:LibraryRoot ($script:selectedDemo.id + '.demo.json')
+        $stamp = if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $file = Get-Item -LiteralPath $path
+            $file.LastWriteTimeUtc.Ticks.ToString() + ':' + $file.Length
+        } else { 'missing' }
+        if ($stamp -eq $script:summaryStamp) { return }
+        $entries = @(Invoke-DemoLibrary @{ command = 'list' } $window)
+        $script:selectedDemo = $entries | Where-Object id -eq $script:selectedDemo.id | Select-Object -First 1
+        $script:summaryStamp = $stamp
+        Set-IdleView
+    } catch {
+        $script:summaryRefreshAt = [DateTime]::MaxValue
+        Show-DemoError $window $_
+    } finally {
+        $script:summaryRefreshing = $false
+        Update-ControllerSummaryLinks
+    }
+}
+
+function Invoke-ControllerSummaryAuthoring([ValidateSet('input', 'output')][string]$Scope) {
+    try {
+        if (-not $script:selectedDemo -or $script:ReplayProcessId) { throw 'Select an interaction and stop playback before generating summaries.' }
+        Show-DemoSummaryAuthoringNotice $window $script:selectedDemo.id $Scope
+        Refresh-ControllerSummaries
+    } catch { Show-DemoError $window $_ }
+}
+$generatePromptSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'input' })
+$generateOutputSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'output' })
 
 function Set-IdleView {
     $script:lastView = $script:selectedDemo.presentation
@@ -172,6 +234,7 @@ function Set-IdleView {
     $stop.IsEnabled = $false
     $chooseDemo.IsEnabled = $true
     $windowMode.IsEnabled = $true
+    Update-ControllerSummaryLinks
     Update-ReplayOverlays
 }
 
@@ -214,6 +277,7 @@ function Start-DemoReplay {
     $stop.IsEnabled = $true
     $chooseDemo.IsEnabled = $false
     $windowMode.IsEnabled = $false
+    Update-ControllerSummaryLinks
 }
 
 $openLibrary = {
@@ -222,6 +286,8 @@ $openLibrary = {
         if ($selected) { $script:selectedDemo = $selected }
         $entries = @(Invoke-DemoLibrary @{ command = 'list' })
         if ($script:selectedDemo) { $script:selectedDemo = $entries | Where-Object id -eq $script:selectedDemo.id | Select-Object -First 1 }
+        $script:summaryStamp = $null
+        $script:summaryRefreshAt = [DateTime]::MinValue
         $script:lastFault = $null
         Set-IdleView
     } catch { Show-DemoError $window $_ }
@@ -364,6 +430,10 @@ $timer = [System.Windows.Threading.DispatcherTimer]::new()
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
     try {
+        if (-not $ReplayProcessId -and [DateTime]::UtcNow -ge $script:summaryRefreshAt) {
+            $script:summaryRefreshAt = [DateTime]::UtcNow.AddSeconds(2)
+            Refresh-ControllerSummaries
+        }
         if ($script:switching) {
             if (-not (Test-ReplayAlive)) { Start-SwitchedPlayback }
             elseif ([DateTime]::UtcNow -gt $script:deadline) {
