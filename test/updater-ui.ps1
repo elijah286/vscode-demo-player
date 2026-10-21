@@ -156,11 +156,21 @@ try {
         $libraryWindow = Wait-Until { Get-Window 'Find interaction' } 'interaction picker'
         ([System.Windows.Automation.SelectionItemPattern](Find-Control $libraryWindow 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
         $list = Find-Control $libraryWindow 'DemoList'
-        $items = $list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
+        $items = Wait-Until {
+            $loaded = $list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
+            if ($loaded.Count -eq 1) { ,$loaded }
+        } 'synthetic saved selection finishes loading'
         ([Windows.Automation.SelectionItemPattern]$items[0].GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)).Select()
         Click-Control $libraryWindow 'SelectDemo'
         Wait-Until { (Find-Control $window 'PlayPause').Current.IsEnabled } 'demo selected' | Out-Null
         Click-Control $window 'PlayPause'
+        Wait-Until {
+            $primary = Find-Control $window 'PlayPause'
+            $primary.Current.IsEnabled -and $primary.Current.Name -in @('Play', 'Pause')
+        } 'playback target opens' 50 | Out-Null
+        if ((Find-Control $window 'PlayPause').Current.Name -eq 'Play') {
+            Click-Control $window 'PlayPause'
+        }
         Wait-Until { (Find-Control $window 'PlayPause').Current.Name -eq 'Pause' } 'playback starts' 50 | Out-Null
         Click-Control $window 'PlayPause'
         Wait-Until { (Find-Control $window 'PlayPause').Current.Name -eq 'Resume' } 'playback paused' | Out-Null
