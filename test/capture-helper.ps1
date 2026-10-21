@@ -58,7 +58,7 @@ try {
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id } $owner
     if ($entry.recording.turns[0].snapshot.requests[0].response[0].value -ne $answer) { throw 'Actual library read lost saved response content.' }
     $metadata = Invoke-DemoLibrary @{ command = 'metadata'; id = $saved.id } $owner
-    if ($metadata.id -ne $saved.id -or $metadata.PSObject.Properties['recording']) { throw 'Actual metadata transported the recording or lost selection identity.' }
+    if ($metadata.id -ne $saved.id -or $metadata.ContainsKey('recording')) { throw 'Actual metadata transported the recording or lost selection identity.' }
     $previousContext = [Threading.SynchronizationContext]::Current
     try {
         [Threading.SynchronizationContext]::SetSynchronizationContext([Windows.Threading.DispatcherSynchronizationContext]::new())

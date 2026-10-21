@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.19](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.19/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.20](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.20/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -280,6 +280,12 @@ with a 30-second helper limit and conflicting actions disabled until done.
 Request serialization, helper I/O and response decoding run in a background
 runspace, including asynchronous worker startup. The window itself remains
 enabled: searches and independent presentation controls still respond.
+Transport JSON uses the in-box .NET decoder with case-insensitive dictionaries
+and arrays instead of recursively allocating PowerShell note-property wrappers
+for the entire recording. This reduces garbage-collection pauses during large
+responses. Small, explicit WPF view models remain unchanged; values, arrays,
+case-insensitive field access and save/export JSON are preserved. Malformed JSON,
+empty property names and case-ambiguous property names still fail explicitly.
 Slow library operations show an activity label, elapsed seconds, an animated
 indicator and **Cancel operation**. Closing that activity window also cancels.
 Saved selections start loading after the picker is visible, rather than
@@ -526,6 +532,24 @@ For long OpenAI output sources, every combination request also retains up to
 so its closing question/choices do not depend solely on a partial model summary.
 This is part of the already displayed/consented source, not another exchange.
 
+New AI drafts have a separate **240-character** limit (target 180-220 or fewer),
+with complete sentences/questions rather than clipped words or ellipses.
+Speak directly in the original speaker's voice: "I want...", "Can you...?" or
+"Yes.", not "User wants to..." or "The assistant...". For a user question,
+the output summary must lead with the actual recorded answer and qualifications;
+if the reply did not answer, it must say so, never invent an answer.
+Generation rejects over-budget, unfinished or role-narrated drafts explicitly,
+without slicing text or automatically retrying paid requests.
+Manual and existing summaries retain their **300-character** storage limit.
+The overlay wraps the full saved text and scrolls when resized too short.
+Manual dimensions are retained for both the resize thumb and native window-edge
+resizing, including through playback updates, output-mode changes and Stop.
+History fills in batches of four bubbles per dispatcher tick so wrapping long
+summaries does not monopolize input handling as a conversation grows.
+An older summary already saved mid-word cannot be restored by enlarging the
+window: edit it against the retained original, or explicitly delete just that
+summary and consent to generate its replacement. Nothing is cleared automatically.
+
 Use **Clear all summaries...** in the interaction picker to remove all saved overlay
 summaries, including AI-generated and manually edited summaries, after
 confirmation. Default prompt excerpts return; original prompts/responses and
@@ -536,8 +560,12 @@ exchange's summary draft, never its original prompt.
 
 **Generate AI summaries of responses** is an explicit response-only action beside
 the conversation selection actions and on **Saved selections**. It generates
-only missing output summaries, never sends or summarizes user prompts, and keeps
-existing input/output summaries. Recorded assistant answer text and concise tool
+only missing output summaries, never generates prompt summaries, and keeps
+existing input/output summaries. It sends the paired user question/request as
+explicitly previewed context (up to 4,000 characters). Longer context keeps its
+opening and closing portions with a visible middle-omitted notice; missing context
+must not be inferred. Context is not evidence that an action succeeded.
+Recorded assistant answer text and concise tool
 status are used, with the same filtering and result-fidelity safeguards as the
 combined action below. Raw tool arguments/results, reasoning and metadata remain
 excluded; displayed answer text can still contain secrets, so review it before
@@ -598,7 +626,7 @@ missing prompts and supported outputs in the current selection. Each short sourc
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
 The response uses a strict JSON schema with a required one-line summary field
-bounded to 300 characters, then local validation before review. Plain prose
+bounded to 240 characters with terminal punctuation, then local validation before review. Plain prose
 that merely ignores a length instruction is no longer the response contract.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
 sent and selected model before any request. Review it for secrets: displayed
@@ -962,6 +990,12 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\controller-u
 Run UI tests only on an interactive desktop. It opens and normally closes only
 its own test windows. Evidence and synthetic library files stay in the supplied
 directory and must not be committed.
+Use source-controller mode (omit `-Installed`) for routine tests of a packaged
+payload. Installed-launcher mode holds the app's single-instance mutex and must
+use a coordinated desktop/installation slot, not run alongside the user's app.
+The harness waits for asynchronous saved selections to load after restart and
+stops only its exact failed-test controllers if acceptance fails, so a failed
+test cannot leave the installed-app mutex held.
 
 ## Layout
 

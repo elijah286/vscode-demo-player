@@ -1,3 +1,35 @@
+if (-not ('DemoLibraryJson' -as [type])) {
+    Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
+public static class DemoLibraryJson {
+    public static object Parse(string text) {
+        var parser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue, RecursionLimit = 1024 };
+        return Normalize(parser.DeserializeObject(text));
+    }
+    private static object Normalize(object value) {
+        var source = value as Dictionary<string, object>;
+        if (source != null) {
+            var result = new Dictionary<string, object>(source.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in source) {
+                if (pair.Key.Length == 0 || result.ContainsKey(pair.Key)) {
+                    throw new InvalidOperationException("The demo library returned empty or case-ambiguous JSON property names. No success was confirmed.");
+                }
+                result.Add(pair.Key, Normalize(pair.Value));
+            }
+            return result;
+        }
+        var items = value as object[];
+        if (items != null) {
+            for (int i = 0; i < items.Length; i++) items[i] = Normalize(items[i]);
+        }
+        return value;
+    }
+}
+'@
+}
+
 function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js') {
     if (-not $script:NodePath) {
         $script:NodePath = Resolve-PlayerNode
@@ -220,7 +252,7 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
         if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($output, $errors), 2000)) { throw 'Timed out reading the library helper output.' }
         $text = $output.GetAwaiter().GetResult()
         if (-not $text) { throw ('The demo library helper returned no result. ' + $errors.GetAwaiter().GetResult()) }
-        $response = ConvertFrom-Json -InputObject $text
+        $response = [DemoLibraryJson]::Parse($text)
         if (-not $response.ok -or $process.ExitCode -ne 0) {
             if ($response.code -eq 'OPENAI_AUTH') {
                 $failure = [InvalidOperationException]::new($response.error)
@@ -613,7 +645,7 @@ function Show-InteractionPicker($Owner) {
             for ($read = 0; $read -lt 50 -and -not $scan.End -and $scan.Line.IsCompleted; $read++) {
                 $line = $scan.Line.GetAwaiter().GetResult()
                 if ($null -eq $line) { $scan.End = $true; break }
-                $message = ConvertFrom-Json -InputObject $line
+                $message = [DemoLibraryJson]::Parse($line)
                 if ($message.progress) {
                     $event = $message.progress
                     if ($event.phase -eq 'warning') { $dialog.Tag.Warnings.Add($event.message) }
@@ -951,7 +983,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Originals are always retained. Include in playback selects exchanges for the next run; excluded exchanges remain editable. Preserve the speaker's voice and short replies. AI output must include the actual question asked, its alternatives/decision, especially the final question answered by a following yes/no. Never invent questions or success. Blank output shows a missing-summary notice." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. New AI drafts use complete statements up to 240 characters, in the speaker's voice: I want..., Can you...?, Yes. AI replies must preserve the recorded answer to the user's question and any questions/choices the assistant asks. Say when the reply did not answer; never invent an answer or success. Manual/existing summaries still allow 300 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
    <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>

@@ -1,9 +1,23 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -ReferencedAssemblies PresentationFramework,PresentationCore,WindowsBase,System.Xaml -TypeDefinition @'
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Automation;
+using System.Windows.Interop;
 using System.Windows.Media;
+public sealed class ReplayResizeTracker {
+    public bool NativeResize { get; private set; }
+    public ReplayResizeTracker(Window window) {
+        window.SourceInitialized += (sender, args) => {
+            HwndSource.FromHwnd(new WindowInteropHelper(window).Handle).AddHook(OnMessage);
+        };
+    }
+    public IntPtr OnMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled) {
+        if (message == 0x0214) NativeResize = true;
+        return IntPtr.Zero;
+    }
+}
 public static class ReplayMessageFactory {
     private static readonly Brush Blue = new SolidColorBrush(Color.FromRgb(21, 87, 165));
     private static readonly Brush Neutral = new SolidColorBrush(Color.FromRgb(233, 237, 242));
@@ -79,6 +93,7 @@ public static class ReplayMessageFactory {
 '@
 $overlayReader = [System.Xml.XmlNodeReader]::new($overlayLayout)
 try { $script:overlayWindow = [System.Windows.Markup.XamlReader]::Load($overlayReader) } finally { $overlayReader.Dispose() }
+$script:overlayResizeTracker = [ReplayResizeTracker]::new($script:overlayWindow)
 $script:overlayWindow.Width = [Math]::Min(820, $area.Width - 32)
 $script:overlayWindow.Left = $area.Left + ($area.Width - $script:overlayWindow.Width) / 2
 $script:overlayWindow.Top = $area.Top + 16
@@ -161,7 +176,7 @@ function Set-ConversationFontSize([double]$Width) {
 
 function Add-ConversationMessages {
     $start = $conversationMessages.Children.Count
-    $limit = [Math]::Min($start + 8, $script:conversationHistory.Count)
+    $limit = [Math]::Min($start + 4, $script:conversationHistory.Count)
     for ($index = $start; $index -lt $limit; $index++) {
         $message = $script:conversationHistory[$index]
         $summary = [string]$message.text
@@ -176,7 +191,7 @@ function Add-ConversationMessages {
                 [System.Windows.Media.Animation.DoubleAnimation]::new(0, 1, [TimeSpan]::FromMilliseconds(180)))
         }
     }
-    if (-not $script:overlayResized -and $script:outputMode -and
+    if (-not ($script:overlayResized -or $script:overlayResizeTracker.NativeResize) -and $script:outputMode -and
         $script:overlayWindow.Height -lt [Math]::Min(600, [Math]::Max(132, $area.Height - 32))) {
         $script:overlayWindow.Height = Get-OverlayConversationHeight $script:overlayWindow.Width
     }
@@ -246,7 +261,7 @@ function Update-ReplayOverlays([switch]$MeasureOnly) {
     $desiredWidth = if ($script:outputMode -or ($promptVisible -and $timerVisible)) { 820 } elseif ($promptVisible) { 720 } else { 238 }
     $script:overlayWindow.MinWidth = if ($script:outputMode -or $promptVisible) { 280 } else { 238 }
     Update-OverlayLayout
-    if (-not $script:overlayResized) {
+    if (-not ($script:overlayResized -or $script:overlayResizeTracker.NativeResize)) {
         $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
         $script:overlayWindow.Height = if ($conversationActive) { Get-OverlayConversationHeight $script:overlayWindow.Width } elseif ($promptVisible) { Get-OverlayPromptHeight $script:overlayWindow.Width $timerVisible } else { 104 }
     }

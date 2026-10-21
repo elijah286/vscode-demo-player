@@ -46,6 +46,39 @@ function Assert-HelperStopped {
 
 try {
     . (Join-Path $scratch 'DemoDialogs.ps1')
+    Test-LifecycleCase 'decoded JSON preserves case-insensitive fields, values, arrays and explicit invalid-input errors' {
+        $json = '{"Title":"Synthetic title","count":42,"nested":{"MixedCase":true,"zero":0,"empty":"","missing":null,"items":[{"index":19999}]},"emptyArray":[],"emptyObject":{},"unicode":"\ud83d\ude42","escaped":"line\nquote\""}'
+        $decoded = [DemoLibraryJson]::Parse($json)
+        if ($decoded.title -cne 'Synthetic title' -or $decoded.Count -ne 42 -or
+            -not $decoded.nested.mixedcase -or $decoded.nested.zero -ne 0 -or
+            $decoded.nested.empty -cne '' -or $null -ne $decoded.nested.missing -or
+            $decoded.nested.items.Count -ne 1 -or $decoded.nested.items[0].index -ne 19999 -or
+            $decoded.emptyArray.Count -ne 0 -or $decoded.emptyObject.Count -ne 0 -or
+            $decoded.unicode -cne [char]::ConvertFromUtf32(0x1F642) -or $decoded.escaped -cne "line`nquote`"") {
+            throw 'Decoded JSON changed case-insensitive access or a value/array shape.'
+        }
+        $roundtrip = $decoded | ConvertTo-Json -Depth 10 -Compress | ConvertFrom-Json
+        if ($roundtrip.count -ne 42 -or $roundtrip.nested.items[0].index -ne 19999 -or
+            $roundtrip.emptyArray.Count -ne 0 -or $roundtrip.unicode -cne $decoded.unicode) {
+            throw 'Decoded metadata must roundtrip through existing JSON save/export requests.'
+        }
+        $numericJson = '{"values":[0,-1,2147483648,9223372036854775807,1.25,1e-20],"date":"/Date(0)/","disabled":false}'
+        $reference = ConvertFrom-Json $numericJson
+        $actual = [DemoLibraryJson]::Parse($numericJson)
+        for ($index = 0; $index -lt $reference.values.Count; $index++) {
+            if ($actual.values[$index] -cne $reference.values[$index] -or
+                $actual.values[$index].GetType() -ne $reference.values[$index].GetType()) {
+                throw 'Numeric values/types changed from the existing Windows PowerShell decoder.'
+            }
+        }
+        if ($actual.date -cne $reference.date -or $actual.date.GetType() -ne $reference.date.GetType() -or
+            $actual.disabled -cne $false) { throw 'Date or boolean decoding changed.' }
+        foreach ($invalid in @('not json', '{"a":1,"A":2}', '{"":1}', '{"nested":[{"a":1,"A":2}]}')) {
+            $failed = $false
+            try { [DemoLibraryJson]::Parse($invalid) | Out-Null } catch { $failed = $true }
+            if (-not $failed) { throw 'Invalid or ambiguous JSON was accepted without an error.' }
+        }
+    }
     $owner = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <StackPanel><Button x:Name="Load"/><CheckBox x:Name="ShowPrompt"/><TextBox x:Name="SavedSearch"/></StackPanel>
@@ -224,7 +257,7 @@ process.stdin.on('end', () => {
         }
     }
     if ($failures.Count) { throw ($failures -join "`n") }
-    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 7 runtime cases;250ms large-JSON input budget, independent controls, explicit cancellation, real30-second deadlines, blocked input, completion contract, streaming history, owner routing and process cleanup.'
+    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 8 runtime cases;compatible JSON values/types and case-insensitive access,250ms large-JSON input budget, independent controls, explicit cancellation, real30-second deadlines, blocked input, completion contract, streaming history, owner routing and process cleanup.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()

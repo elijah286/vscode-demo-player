@@ -11,6 +11,7 @@ $frameColor = [System.Windows.Controls.Button]::new()
 $frameColorSwatch = [System.Windows.Controls.Border]::new()
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'ReplayPresentation.ps1')
 $assertions = 0
+$maxHistoryGap = 0
 
 function Assert-Layout([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -33,6 +34,16 @@ function Get-TimerTop {
     return $timerPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent).Y
 }
 
+function Assert-FullBubbleText($Bubble, [string]$Expected) {
+    $text = $Bubble.Child.Children[1]
+    Assert-Layout ($text.Text -ceq $Expected) 'Bubble must retain the entire summary.'
+    $last = $text.ContentEnd.GetInsertionPosition([System.Windows.Documents.LogicalDirection]::Backward).GetCharacterRect([System.Windows.Documents.LogicalDirection]::Backward)
+    Assert-Layout (-not $last.IsEmpty -and $last.Height -gt 0) 'Final character must have rendered line geometry.'
+    Assert-Layout ($last.Bottom -le $text.ActualHeight + 1) 'Final line must fit within the rendered text height.'
+    $bottom = $text.TranslatePoint([System.Windows.Point]::new($last.Right, $last.Bottom), $Bubble)
+    Assert-Layout ($bottom.Y -le $Bubble.ActualHeight - $Bubble.Padding.Bottom + 1) 'Bubble must enclose the final text line, not clip it.'
+}
+
 function Set-History([object[]]$Messages, [string]$Run = 'run1') {
     $script:lastView.overlay.conversation.history = $Messages
     $script:lastView.overlay.conversation.run = $Run
@@ -48,22 +59,26 @@ function Wait-History {
     $frame = [System.Windows.Threading.DispatcherFrame]::new()
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $fillTimer = $script:conversationFillTimer
+    $historyPanel = $conversationMessages
+    $timing = [pscustomobject]@{ MaxGap = 0 }
     $pulse = [System.Windows.Threading.DispatcherTimer]::new()
     $pulse.Interval = [TimeSpan]::FromMilliseconds(10)
     $pulse.Add_Tick({
-        Assert-Layout ($watch.ElapsedMilliseconds -lt 250) "History fill blocked dispatcher for $($watch.ElapsedMilliseconds)ms."
+        $timing.MaxGap = [Math]::Max($timing.MaxGap, $watch.ElapsedMilliseconds)
+        Assert-Layout ($watch.ElapsedMilliseconds -lt 250) "History fill blocked dispatcher for $($watch.ElapsedMilliseconds)ms with $($historyPanel.Children.Count) bubbles rendered."
         $watch.Restart()
         if (-not $fillTimer.IsEnabled) { $frame.Continue = $false }
     }.GetNewClosure())
     $pulse.Start()
     try { [System.Windows.Threading.Dispatcher]::PushFrame($frame) } finally { $pulse.Stop() }
+    $script:maxHistoryGap = [Math]::Max($script:maxHistoryGap, $timing.MaxGap)
 }
 
 try {
     $promptText.Text = ('A synthetic summary that wraps across the available width. ' * 3).Trim()
     $promptProgress.Text = '1/24'
     foreach ($height in @(132, 180, 500)) {
-        foreach ($width in @(280, 320, 480, 639, 640, 820)) {
+        foreach ($width in @(280, 320, 360, 480, 639, 640, 820)) {
             Arrange-Overlay $width $height
             $stacked = $width -lt 640
             Assert-Layout ([System.Windows.Controls.Grid]::GetRow($promptPanel) -eq [int]$stacked) "Incorrect prompt row at ${width}x${height}."
@@ -134,18 +149,36 @@ try {
     Arrange-Overlay 820 (Get-OverlayConversationHeight 820) $false $true
     Assert-Layout ($conversationMessages.Children.Count -eq 4 -and $conversationMessages.Children[0] -eq $first) 'Short history must retain more than two bubbles and original elements.'
     Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'Four short messages should fit naturally.'
-    foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300))) {
+    foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300),
+        (('W' * 239) + '.'), (('A complete summary of my recorded answer. ' * 6).Substring(0,239) + '.'), (([string][char]0x754C * 239) + '.'))) {
         Set-History @((Message '0:input' $true $text), (Message '0:output' $false $text)) 'fit'
-        foreach ($width in @(280, 320, 480, 639, 640, 820)) {
+        foreach ($width in @(280, 320, 360, 480, 639, 640, 820)) {
             Arrange-Overlay $width (Get-OverlayConversationHeight $width) $false $true
             Assert-Layout ((Get-TimerTop) -eq 0) 'Timer must stay at top at every width.'
             $origin = $conversationPanel.TranslatePoint([System.Windows.Point]::new(0,0), $overlayContent)
             Assert-Layout ($origin.Y -ge $timerPanel.ActualHeight + 11) 'History must scroll below timer.'
             foreach ($bubble in $conversationMessages.Children) {
-                Assert-Layout ($bubble.Child.Children[1].Text.Length -eq 300) 'History may not truncate summary budget.'
+                Assert-FullBubbleText $bubble $text
                 Assert-Layout ($bubble.ActualWidth -le $conversationPanel.ViewportWidth + 1) "Bubble must wrap inside viewport at $width."
             }
             Assert-Layout ($script:overlayWindow.Height -le 600) 'Automatic history height is bounded.'
+            if ($text.Length -eq 240) {
+                foreach ($bubble in $conversationMessages.Children) {
+                    Assert-Layout ($bubble.ActualHeight -le $conversationPanel.ViewportHeight + 1) "A complete 240-character summary must fit the automatic viewport at width $width."
+                }
+                if ($width -eq 820) {
+                    Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'Both complete summaries must fit together at the default window width.'
+                }
+            }
+            Arrange-Overlay $width 260 $false $true
+            $conversationPanel.ScrollToBottom()
+            Arrange-Overlay $width 260 $false $true
+            $latest = $conversationMessages.Children[$conversationMessages.Children.Count - 1]
+            Assert-FullBubbleText $latest $text
+            $body = $latest.Child.Children[1]
+            $last = $body.ContentEnd.GetInsertionPosition([System.Windows.Documents.LogicalDirection]::Backward).GetCharacterRect([System.Windows.Documents.LogicalDirection]::Backward)
+            $ending = $body.TranslatePoint([System.Windows.Point]::new($last.Right, $last.Bottom), $conversationPanel)
+            Assert-Layout ($ending.Y -ge $last.Height -and $ending.Y -le $conversationPanel.ActualHeight + 1) 'Scrolling a short window must expose the complete final line.'
         }
     }
     $many = @(for ($index = 0; $index -lt 100; $index++) {
@@ -200,6 +233,15 @@ try {
     Arrange-Overlay 820 180
     Assert-Layout ($showElapsed.IsEnabled -and $promptPanel.Visibility -eq 'Visible' -and $conversationPanel.Visibility -eq 'Collapsed') 'Output off must restore legacy mode and toggles.'
     Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1) 'Legacy wide timer position must return.'
+    $handled = $false
+    $null = $script:overlayResizeTracker.OnMessage([IntPtr]::Zero, 0x0005, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$handled)
+    Assert-Layout (-not $script:overlayResizeTracker.NativeResize -and -not $handled) 'Automatic WM_SIZE must not disable automatic sizing or swallow window messages.'
+    $null = $script:overlayResizeTracker.OnMessage([IntPtr]::Zero, 0x0214, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$handled)
+    Assert-Layout ($script:overlayResizeTracker.NativeResize -and -not $handled) 'Native edge/grip sizing must be tracked without intercepting native resizing.'
+    $script:overlayWindow.Width = 480
+    $script:overlayWindow.Height = 260
+    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($script:overlayWindow.Width -eq 480 -and $script:overlayWindow.Height -eq 260) 'Polling and restored legacy mode must retain native manual dimensions just like thumb resizing.'
 
     $controllerPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Show-ReplayController.ps1'
     $tokens = $parseErrors = $null
@@ -268,7 +310,7 @@ try {
         Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'Last exchange never loops.'
     } finally { $controller.Close() }
     Assert-Layout (-not $window.IsVisible -and -not $script:overlayWindow.IsVisible) 'Layout acceptance must not show windows.'
-    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; hidden real WPF legacy layouts, 300-character Latin/prose/CJK at 280-820 widths, 200-bubble history, follow-bottom, fixed timer, reset, missing output, responsive state update, fake-time real controller deadlines/cancellation."
+    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; hidden real WPF layouts, complete 240-character and legacy 300-character Latin/prose/CJK at 280-820 widths, final-line glyph geometry, default pair fit, short-window scrolling, 200-bubble history, follow-bottom, fixed timer, reset, missing output, maximum history dispatcher gap ${maxHistoryGap}ms (<250ms), fake-time real controller deadlines/cancellation."
 } finally {
     $script:closeAllowed = $true
     $script:overlayWindow.Close()

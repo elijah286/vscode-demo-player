@@ -70,19 +70,23 @@ try {
         foreach ($kind in @('input', 'output')) {
             $script:summaryCalls = [Collections.Generic.List[object]]::new()
             $script:failSummaryCall = 0
-            $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = $kind; source = $unicodeSource }) $progress $key 'gpt-4.1-mini'
+            $question = if ($kind -eq 'output') { 'Can I use the result now? No invented success.' } else { '' }
+            $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = $kind; source = $unicodeSource; question = $question }) $progress $key 'gpt-4.1-mini'
             Assert-True ($result.Length -eq 300) 'A long source produces one final overlay summary.'
             Assert-True ($summaryCalls.Count -eq 4) 'Three source parts are summarized and then combined once.'
             Assert-True (@($summaryCalls | Where-Object { $_.source.Length -gt 64000 }).Count -eq 0) 'Every helper request stays within the API input budget.'
             Assert-True (($summaryCalls[0..2].source -join '') -ceq $unicodeSource) 'All original source parts reach the helper without truncation.'
             Assert-True (@($summaryCalls | Where-Object { $_.kind -ne $kind }).Count -eq 0) 'Input/output kind is preserved through reduction.'
+            Assert-True (@($summaryCalls | Where-Object { $_.question -cne $question }).Count -eq 0) 'Every source and reduction request retains exact paired context only for outputs.'
             Assert-True ($summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Source parts have explicit incomplete-context instructions.'
             Assert-True ($summaryCalls[3].combine -and -not $summaryCalls[3].partial) 'Final reduction combines notes rather than claiming they are original output.'
         }
         $script:summaryCalls = [Collections.Generic.List[object]]::new()
-        $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'output'; source = ('x' * (64000 * 214)) }) $progress $key 'gpt-4.1-mini'
+        $question = 'What was the actual recorded result?'
+        $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'output'; source = ('x' * (64000 * 214)); question = $question }) $progress $key 'gpt-4.1-mini'
         Assert-True ($summaryCalls.Count -eq 217 -and $result.Length -eq 300) 'Large note sets are reduced over bounded intermediate levels, not rejected.'
         Assert-True (@($summaryCalls | Where-Object { $_.source.Length -gt 64000 }).Count -eq 0) 'Intermediate reduction requests are bounded too.'
+        Assert-True (@($summaryCalls | Where-Object { $_.question -cne $question }).Count -eq 0) 'Paired question survives all recursive reduction levels.'
         $script:summaryCalls = [Collections.Generic.List[object]]::new()
         $script:failSummaryCall = 2
         $failed = $false
