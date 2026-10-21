@@ -77,9 +77,19 @@ Write-Output ('UI evidence: ' + $evidence)
 $testCodePath = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
 $openAIPreload = Join-Path $evidence 'openai-preload.js'
 [IO.File]::WriteAllText($openAIPreload, @'
-if (!process.argv[1]?.endsWith('openai-summaries.js')) return;
 const fs = require('node:fs');
 const path = require('node:path');
+if (process.argv[1]?.endsWith('library-cli.js')) {
+    const promises = require('node:fs/promises');
+    const open = promises.open;
+    promises.open = async (...args) => {
+        if (String(args[0]).endsWith('.demo.json') && fs.existsSync(path.join(__dirname, 'delay-library'))) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+        return open(...args);
+    };
+}
+if (!process.argv[1]?.endsWith('openai-summaries.js')) return;
 global.fetch = async (url, options) => {
     if (url !== 'https://api.openai.com/v1/responses') throw new Error('Unexpected synthetic API endpoint');
     if (!['synthetic-openai-key-for-ui-tests', 'synthetic-replaced-openai-key-for-ui-tests'].some(key => options.headers.Authorization === 'Bearer ' + key)) throw new Error('Unexpected synthetic key');
@@ -141,6 +151,10 @@ function Find-Element($Parent, [string]$Property, [string]$Value) {
     $condition = [System.Windows.Automation.PropertyCondition]::new($identifier, $Value)
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
+        if ($Parent.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window) {
+            $currentWindow = [DemoUITest]::FindWindow($Parent.Current.ProcessId, $Parent.Current.Name)
+            if ($currentWindow) { $Parent = $currentWindow }
+        }
         $element = $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
         if ($element) { return $element }
         Start-Sleep -Milliseconds 100
@@ -274,9 +288,31 @@ try {
     Invoke-Button $window 'ChooseDemo'
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'unified interaction picker'
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    Wait-Until {
+        (Find-Element $dialog 'Id' 'DemoList').FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 1 -and
+        (Find-Element $dialog 'Id' 'RefreshDemos').Current.IsEnabled
+    } 'initial saved selections load without blocking dialog display' | Out-Null
     $list = Find-Element $dialog 'Id' 'DemoList'
     $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     if ($items.Count -ne 1) { throw ('Expected one persisted demo, got ' + $items.Count) }
+    [IO.File]::WriteAllText((Join-Path $evidence 'delay-library'), 'synthetic delayed read')
+    Invoke-Button $dialog 'RefreshDemos'
+    $working = Wait-Until { Get-AppWindow 'Working - Demo Player' } 'visible library activity feedback'
+    if ((Find-Element $working 'Id' 'LibraryActivity').Current.Name -notlike 'Loading saved selections*') { throw 'Slow library operation has no meaningful activity text.' }
+    $search = Find-Element $dialog 'Id' 'DemoSearch'
+    if (-not $dialog.Current.IsEnabled -or -not $search.Current.IsEnabled) { throw 'Background library work disabled the whole configuration window or search.' }
+    $inputClock = [Diagnostics.Stopwatch]::StartNew()
+    ([System.Windows.Automation.ValuePattern]$search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('Synthetic')
+    $inputClock.Stop()
+    if ($inputClock.Elapsed.TotalMilliseconds -gt 250) { throw ('Search input blocked during background library work: ' + $inputClock.Elapsed.TotalMilliseconds + 'ms.') }
+    Invoke-Button $working 'CancelLibraryOperation'
+    $cancelled = Wait-Until { Get-AppWindow 'Operation cancelled' } 'explicit cancellation feedback'
+    Invoke-DialogButton $cancelled 'OK'
+    Remove-Item -LiteralPath (Join-Path $evidence 'delay-library')
+    Wait-Until { -not (Get-AppWindow 'Working - Demo Player') -and (Find-Element $dialog 'Id' 'RefreshDemos').Current.IsEnabled } 'cancelled read restores conflicting actions' | Out-Null
+    Write-Output ('BACKGROUND LIBRARY UI PASSED: visible activity/cancel, enabled owner and live search; search input ' + [Math]::Round($inputClock.Elapsed.TotalMilliseconds,1) + 'ms (limit250ms).')
+    $list = Find-Element $dialog 'Id' 'DemoList'
+    $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
     ([System.Windows.Automation.SelectionItemPattern]$items[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Save-WindowImage $dialog 'library.png'
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'AgentConversationsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
@@ -598,6 +634,7 @@ try {
     if ((Find-Element $window 'Id' 'GeneratePromptSummaries').Current.Name -notmatch '\(1/2\)$') { throw 'Output saves changed prompt count.' }
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($outputSummary, 'Manually saved second reply') } | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(1/2\)$' } 'controller observes summary clear without reselecting' | Out-Null
+    foreach ($id in @('ShowPrompt','ShowElapsed','ShowOutput')) { $selectedControls[$id] = Find-Element $window 'Id' $id }
     Save-WindowImage $window 'controller-summary-links.png'
     $showPrompt = $selectedControls.ShowPrompt
     $showElapsed = $selectedControls.ShowElapsed

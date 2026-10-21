@@ -89,6 +89,25 @@ test('inspection CLI handles the 10,000-turn boundary and rejects excess turns a
     assert.match(events.error, /100,000-event limit/);
 });
 
+test('selection metadata matches the list without transporting raw recordings or reading unrelated entries', async context => {
+    const { source, root, inspection } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Metadata selection', inspection.sha256));
+    const [expected] = await library.listDemos(root);
+    assert.deepEqual(await library.entryMetadata(root, saved.id), expected);
+    const response = spawnSync(process.execPath, [path.join(__dirname, '..', 'library-cli.js')], {
+        input: JSON.stringify({ command: 'metadata', root, id: saved.id }), encoding: 'utf8', timeout: 30000
+    });
+    assert.ifError(response.error);
+    assert.equal(response.status, 0, response.stdout);
+    assert.deepEqual(JSON.parse(response.stdout), { ok: true, result: expected });
+    assert.equal(Object.hasOwn(expected, 'recording'), false);
+    const brokenId = require('node:crypto').randomUUID();
+    await fs.writeFile(path.join(root, brokenId + '.demo.json'), '{broken');
+    assert.deepEqual(await library.entryMetadata(root, saved.id), expected);
+    await assert.rejects(library.entryMetadata(root, brokenId), /JSON/);
+    await assert.rejects(library.entryMetadata(root, 'invalid'), /Invalid library entry identifier/);
+});
+
 test('capture reconstructs final state, preserves payloads and order, and excludes unselected turns', async context => {
     const { source, inspection, tool } = await fixture(context);
     const before = await fs.readFile(source);

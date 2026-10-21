@@ -33,6 +33,7 @@ async function main() {
         case 'delete': return library.deleteDemo(root, request.id);
         case 'export': return library.exportDemo(root, request.id, request.file);
         case 'read': return library.readEntry(root, request.id);
+        case 'metadata': return library.entryMetadata(root, request.id);
         default: throw new Error('Unknown demo library command.');
     }
 }

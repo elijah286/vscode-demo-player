@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.17](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.17/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.18](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.18/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -276,9 +276,15 @@ remain listed as **Load to inspect** rather than disappearing. **Discovery
 details** shows errors and limits; row tooltips explain partial, unavailable
 and unsupported sources. Chat titles use the VS Code index where available.
 Loading reconstructs and validates the full selected recording (100 MiB maximum)
-with a 30-second helper limit and reentrant controls disabled until done.
-The same responsive, disabled-owner wait is used for saved-library refresh,
-import, rename, delete and export. The budget includes sending the request:
+with a 30-second helper limit and conflicting actions disabled until done.
+Request serialization, helper I/O and response decoding run in a background
+runspace, including asynchronous worker startup. The window itself remains
+enabled: searches and independent presentation controls still respond.
+Slow library operations show an activity label, elapsed seconds, an animated
+indicator and **Cancel operation**. Closing that activity window also cancels.
+Saved selections start loading after the picker is visible, rather than
+delaying its appearance. The same background wait is used for saved-library
+refresh, import, rename, delete and export. The budget includes sending the request:
 a helper that stops reading stdin cannot freeze the window before the watchdog
 starts. Closing the owning window cancels and stops that helper. This explicit
 owner-close cancellation is logged as a warning instead of reopening an error
@@ -298,9 +304,11 @@ not add extra values to the returned library results.
 Timeout/cancellation is not a rollback: a write may already have reached disk.
 Refresh the library before retrying; no automatic retry or lock removal occurs.
 
-The isolated helper checks exercise all 11 real CLI commands with synthetic
+The isolated helper checks exercise all 12 real CLI commands with synthetic
 recordings and reviewed summaries, including a multi-megabyte response.
-They also check delayed success, explicit failure, responsive saved refresh,
+They enforce a 250 ms dispatcher/input-delay budget while serializing 5,000
+request objects and decoding 20,000 response objects, and check independent
+controls, explicit cancellation, delayed success, failure, responsive saved refresh,
 blocked stdin, output without process exit, streamed history and owner-close
 cancellation against the unchanged 30-second deadline:
 
@@ -410,6 +418,14 @@ one exchange or **Start Over** restarts the selected demo. Pause/Resume freezes
 the current timeline. **Stop** closes only the isolated replay window and leaves
 Demo Player ready to run again. Closing Demo Player stops its paired window
 before exiting. A completed demo stays visible until Stop.
+Validation and target launch run in the background with visible activity;
+mode-switch launches do too. During that short launch phase, conflicting
+actions are disabled, but the controller still processes window/presentation
+events. Closing then waits for the launch result so the controller can stop
+only its own isolated target, rather than leaving it orphaned.
+Selecting or refreshing one entry reads only that entry's validated metadata;
+it no longer re-reads the entire library or transfers the full recording to the
+UI merely to update summary counters.
 
 ### Replay presentation controls
 

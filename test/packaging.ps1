@@ -101,6 +101,19 @@ function Test-ControllerFailures {
     Assert-Equal $script:idleObserved $true 'Launch failure restores idle controls'
     Assert-Equal $script:lastFault 'Synthetic target launch failure' 'Launch failure is retained in status'
     Assert-Equal $script:reportedFailure $script:lastFault 'Launch failure is displayed rather than reported as success'
+    $refreshNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Refresh-ControllerSummaries'
+    }, $true)
+    $window = [pscustomobject]@{ IsEnabled = $true; Resources = @{ DemoPlayerOperation = @{} } }
+    $script:selectedDemo = [pscustomobject]@{ id = 'synthetic' }
+    $script:summaryRefreshing = $false
+    $script:pickerOpen = $false
+    $script:launching = $false
+    $script:summaryLinksUpdated = $false
+    function Update-ControllerSummaryLinks { $script:summaryLinksUpdated = $true }
+    & $refreshNode.Body.GetScriptBlock()
+    Assert-Equal $script:summaryLinksUpdated $false 'Automatic refresh never re-enters an active background operation'
+    Assert-Equal $script:summaryRefreshing $false 'Skipped refresh leaves the operation state intact'
 }
 try {
     $scripts = @(Get-ChildItem -LiteralPath $ApplicationRoot -Filter '*.ps1' -File)

@@ -176,6 +176,7 @@ $script:summaryStamp = $null
 $script:summaryRefreshing = $false
 $script:summaryRefreshAt = [DateTime]::MinValue
 $script:pickerOpen = $false
+$script:launching = $false
 $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
@@ -185,13 +186,13 @@ function Update-ControllerSummaryLinks {
     $outputs = if ($script:selectedDemo) { $script:selectedDemo.summaryCounts.output } else { 0 }
     $generatePromptSummaries.Content = "Generate AI prompt summaries ($inputs/$total)"
     $generateOutputSummaries.Content = "Generate AI output summaries ($outputs/$total)"
-    $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen
+    $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen -and -not $script:launching -and -not $window.Resources.Contains('DemoPlayerOperation')
     $generatePromptSummaries.IsEnabled = $enabled
     $generateOutputSummaries.IsEnabled = $enabled
 }
 
 function Refresh-ControllerSummaries {
-    if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:summaryRefreshing -or $script:pickerOpen -or -not $window.IsEnabled) { return }
+    if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:summaryRefreshing -or $script:pickerOpen -or $script:launching -or $window.Resources.Contains('DemoPlayerOperation') -or -not $window.IsEnabled) { return }
     $script:summaryRefreshing = $true
     Update-ControllerSummaryLinks
     try {
@@ -201,8 +202,9 @@ function Refresh-ControllerSummaries {
             $file.LastWriteTimeUtc.Ticks.ToString() + ':' + $file.Length
         } else { 'missing' }
         if ($stamp -eq $script:summaryStamp) { return }
-        $entries = @(Invoke-DemoLibrary @{ command = 'list' } $window)
-        $script:selectedDemo = $entries | Where-Object id -eq $script:selectedDemo.id | Select-Object -First 1
+        $script:selectedDemo = if ($stamp -eq 'missing') { $null } else {
+            Invoke-DemoLibrary @{ command = 'metadata'; id = $script:selectedDemo.id } $window
+        }
         $script:summaryStamp = $stamp
         Set-IdleView
     } catch {
@@ -266,11 +268,20 @@ function Reset-ReplaySession {
 
 function Start-DemoReplay {
     if (-not $script:selectedDemo) { throw 'Select a demo first.' }
-    # Validate the saved entry again before launching a new isolated process.
-    Invoke-DemoLibrary @{ command = 'read'; id = $script:selectedDemo.id } | Out-Null
-    $demoPath = Join-Path $script:LibraryRoot ($script:selectedDemo.id + '.demo.json')
-    $launchArguments = @{ DemoPath = $demoPath; NoController = $true; CodePath = $script:CodePath; WindowMode = $script:replayMode }
-    $started = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') @launchArguments
+    $script:launching = $true
+    $status.Text = 'Validating selection and opening isolated playback...'
+    try {
+        $started = Invoke-DemoBackgroundOperation {
+            param($Token, $Root, $Library, $Node, $Id, $Code, $Mode)
+            . (Join-Path $Root 'DemoDialogs.ps1')
+            $script:LibraryRoot = $Library
+            $script:NodePath = $Node
+            if (-not $Node) { . (Join-Path $Root 'PlayerEnvironment.ps1'); $script:NodePath = Resolve-PlayerNode }
+            Invoke-DemoLibrary @{ command = 'metadata'; id = $Id } | Out-Null
+            $launchArguments = @{ DemoPath = (Join-Path $Library ($Id + '.demo.json')); NoController = $true; CodePath = $Code; WindowMode = $Mode }
+            & (Join-Path $Root 'Start-Replay.ps1') @launchArguments
+        } @($PSScriptRoot, $script:LibraryRoot, $script:NodePath, $script:selectedDemo.id, $script:CodePath, $script:replayMode) $window 'Opening isolated playback' -Cancellable $false
+    } finally { $script:launching = $false }
     $script:ReplayProcessId = $started.ProcessId
     $script:ControlPath = $started.ControlPath
     $script:profile = $started.ProfilePath
@@ -284,6 +295,7 @@ function Start-DemoReplay {
     $chooseDemo.IsEnabled = $false
     $windowMode.IsEnabled = $false
     Update-ControllerSummaryLinks
+    if ($script:exitRequested) { Request-Stop }
 }
 
 $openLibrary = {
@@ -294,8 +306,6 @@ $openLibrary = {
     try {
         $selected = Show-InteractionPicker $window
         if ($selected) { $script:selectedDemo = $selected }
-        $entries = @(Invoke-DemoLibrary @{ command = 'list' })
-        if ($script:selectedDemo) { $script:selectedDemo = $entries | Where-Object id -eq $script:selectedDemo.id | Select-Object -First 1 }
         $script:summaryStamp = $null
         $script:summaryRefreshAt = [DateTime]::MinValue
         $script:lastFault = $null
@@ -367,7 +377,13 @@ function Start-SwitchedPlayback {
     if ($selection.demoPath) { $arguments.DemoPath = $selection.demoPath }
     elseif ($selection.playlistPath) { $arguments.PlaylistPath = $selection.playlistPath }
     else { $arguments.SessionPath = $selection.file; $arguments.RequestIndex = [int]$selection.requestIndex; $arguments.RequestCount = [int]$selection.requestCount }
-    $launch = & (Join-Path $PSScriptRoot 'Start-Replay.ps1') @arguments
+    $script:launching = $true
+    try {
+        $launch = Invoke-DemoBackgroundOperation {
+            param($Token, $Launcher, $LaunchArguments)
+            & $Launcher @LaunchArguments
+        } @((Join-Path $PSScriptRoot 'Start-Replay.ps1'), $arguments) $window ('Opening ' + $script:replayMode + ' playback') -Cancellable $false
+    } finally { $script:launching = $false }
     $script:ControlPath = $launch.ControlPath
     $script:ReplayProcessId = $launch.ProcessId
     $script:stopSent = $false
@@ -376,6 +392,7 @@ function Start-SwitchedPlayback {
     $script:switching = $false
     $script:connectionFailures = 0
     $status.Text = 'Preparing ' + $script:replayMode
+    if ($script:exitRequested) { Request-Stop }
 }
 
 $windowMode.Add_SelectionChanged({
@@ -434,6 +451,12 @@ $nextStep.Add_Click({
 $stop.Add_Click({ Request-Stop })
 $window.Add_Closing({
     param($sender, $eventArgs)
+    if ($script:launching) {
+        $eventArgs.Cancel = $true
+        $script:exitRequested = $true
+        $status.Text = 'Finishing launch before closing its isolated target...'
+        return
+    }
     if (-not $script:closeAllowed -and $ReplayProcessId) {
         $eventArgs.Cancel = $true
         $script:exitRequested = $true
@@ -447,6 +470,7 @@ $timer = [System.Windows.Threading.DispatcherTimer]::new()
 $timer.Interval = [TimeSpan]::FromMilliseconds(150)
 $timer.Add_Tick({
     try {
+        if ($script:launching) { return }
         if (-not $ReplayProcessId -and [DateTime]::UtcNow -ge $script:summaryRefreshAt) {
             $script:summaryRefreshAt = [DateTime]::UtcNow.AddSeconds(2)
             Refresh-ControllerSummaries

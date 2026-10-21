@@ -16,9 +16,17 @@ $heartbeat = [Windows.Threading.DispatcherTimer]::new()
 $heartbeat.Interval = [TimeSpan]::FromMilliseconds(20)
 $script:ticks = 0
 $script:disabledTicks = 0
+$script:latencyClock = $null
 $heartbeat.Add_Tick({
     $script:ticks++
-    if (-not $owner.IsEnabled) { $script:disabledTicks++ }
+    if ($owner.IsEnabled -and $owner.Resources.Contains('DemoPlayerOperation') -and -not $owner.FindName('Load').IsEnabled) { $script:disabledTicks++ }
+    if ($script:latencyClock) {
+        $now = $script:latencyClock.Elapsed.TotalMilliseconds
+        $script:maxInputDelay = [Math]::Max($script:maxInputDelay, $now - $script:lastInput)
+        $script:lastInput = $now
+        $owner.FindName('SavedSearch').Text = 'Responsive search ' + $script:ticks
+        $owner.FindName('ShowPrompt').IsChecked = -not $owner.FindName('ShowPrompt').IsChecked
+    }
 })
 
 function Test-LifecycleCase([string]$Name, [scriptblock]$Test) {
@@ -38,6 +46,11 @@ function Assert-HelperStopped {
 
 try {
     . (Join-Path $scratch 'DemoDialogs.ps1')
+    $owner = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel><Button x:Name="Load"/><CheckBox x:Name="ShowPrompt"/><TextBox x:Name="SavedSearch"/></StackPanel>
+</Window>
+'@ $null
     $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
     $script:LibraryRoot = Join-Path $scratch 'library'
     $heartbeat.Start()
@@ -60,6 +73,47 @@ process.stdin.on('end', () => setTimeout(() => {
         $script:disabledTicks = 0
         & $refresh
         if ($script:ticks -lt 3 -or $script:disabledTicks -lt 3) { throw 'Saved refresh blocked window events or left reentrant controls enabled.' }
+    }
+    Test-LifecycleCase 'large request serialization and response decoding keep input delays below 250ms' {
+        [IO.File]::WriteAllText($helperPath, @'
+process.stdin.resume();
+process.stdin.on('end', () => {
+    const items = Array.from({ length: 20000 }, (_, index) => ({
+        index, message: { text: 'Synthetic nested payload '.repeat(8), metadata: { flags: [true, false], number: index } }
+    }));
+    process.stdout.write(JSON.stringify({ ok: true, result: { items } }));
+});
+'@)
+        $rows = @(for ($i = 0; $i -lt 5000; $i++) { @{ index = $i; nested = @{ text = 'Synthetic request'; values = @(1,2,3) } } })
+        $script:lastInput = 0
+        $script:maxInputDelay = 0
+        $script:latencyClock = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $result = Invoke-DemoLibrary @{ command = 'inspect'; rows = $rows } $owner
+            $script:maxInputDelay = [Math]::Max($script:maxInputDelay, $script:latencyClock.Elapsed.TotalMilliseconds - $script:lastInput)
+        } finally { $script:latencyClock = $null }
+        if ($result.items.Count -ne 20000 -or $result.items[19999].message.metadata.number -ne 19999) { throw 'Large JSON result lost its shape or content.' }
+        if ($script:maxInputDelay -gt 250) { throw ('Input was blocked for ' + [Math]::Round($script:maxInputDelay,1) + 'ms (limit250ms).') }
+        if (-not $owner.IsEnabled -or -not $owner.FindName('ShowPrompt').IsEnabled -or -not $owner.FindName('SavedSearch').IsEnabled) { throw 'Independent UI controls were disabled.' }
+        Write-Output ('MAXIMUM BACKGROUND INPUT DELAY: ' + [Math]::Round($script:maxInputDelay,1) + 'ms (limit250ms); 5000 request objects,20000 response objects.')
+    }
+    Test-LifecycleCase 'user cancellation promptly reaps the worker helper and restores conflicting controls' {
+        [IO.File]::WriteAllText($helperPath, @'
+require('node:fs').writeFileSync(require('node:path').join(__dirname, 'helper.pid'), String(process.pid));
+process.stdin.resume();
+setTimeout(() => {}, 45000);
+'@)
+        $cancel = [Windows.Threading.DispatcherTimer]::new()
+        $cancel.Interval = [TimeSpan]::FromMilliseconds(300)
+        $cancel.Add_Tick({ if (Test-Path -LiteralPath $pidPath) { $owner.Resources['DemoPlayerOperation'].Cancellation.Cancel(); $cancel.Stop() } })
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $cancel.Start()
+        try {
+            try { Invoke-DemoLibrary @{ command = 'read' } $owner | Out-Null; throw 'Cancellation incorrectly returned success.' }
+            catch { if (-not $_.Exception.Data['DemoPlayerOperationCancelled']) { throw } }
+        } finally { $cancel.Stop() }
+        Assert-HelperStopped
+        if ($clock.Elapsed.TotalSeconds -gt 3 -or -not $owner.FindName('Load').IsEnabled -or $owner.Resources.Contains('DemoPlayerOperation')) { throw 'Cancellation did not promptly restore the window and release its worker.' }
     }
     Test-LifecycleCase 'the 30-second budget includes a blocked stdin write' {
         [IO.File]::WriteAllText($helperPath, @'
@@ -170,7 +224,7 @@ process.stdin.on('end', () => {
         }
     }
     if ($failures.Count) { throw ($failures -join "`n") }
-    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 5 runtime cases; real 30-second deadlines, blocked input, completion contract, streaming history, owner routing/cancellation and process cleanup.'
+    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 7 runtime cases;250ms large-JSON input budget, independent controls, explicit cancellation, real30-second deadlines, blocked input, completion contract, streaming history, owner routing and process cleanup.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()

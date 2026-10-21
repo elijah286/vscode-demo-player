@@ -252,6 +252,10 @@ async function listDemos(root) {
     return entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
 
+async function entryMetadata(root, id) {
+    return summarize(await readEntry(root, id));
+}
+
 async function withLock(root, operation) {
     await fs.mkdir(root, { recursive: true });
     const lockPath = path.join(root, '.library.lock');
@@ -425,4 +429,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, entryMetadata, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch };
