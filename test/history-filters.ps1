@@ -63,6 +63,12 @@ foreach ($call in $ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Invoke-DemoLibrary'
 }, $true)) {
+    $scope = $call.Parent
+    while ($scope -and $scope -isnot [Management.Automation.Language.FunctionDefinitionAst]) { $scope = $scope.Parent }
+    if ($scope -and $scope.Name -eq 'Invoke-DemoLibrary') {
+        Assert-Equal ($call.CommandElements.Extent.Text -contains '-CancellationToken') $true 'Background worker preserves cancellation without a WPF owner'
+        continue
+    }
     Assert-Equal $call.CommandElements.Count 3 'Every dialog library operation supplies its owner'
     Assert-Equal ($call.CommandElements[2].Extent.Text -in @('$dialog', '$Owner')) $true 'Every dialog library operation routes through its current owner'
 }
@@ -418,7 +424,13 @@ try {
         $script:refreshCalls = 0
         $script:summaryErrors = 0
         $script:refreshEntries = @([pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 4; output = 2 } })
-        function Invoke-DemoLibrary { param($Request, $Owner) $script:refreshCalls++; return $script:refreshEntries }
+        function Invoke-DemoLibrary {
+            param($Request, $Owner)
+            Assert-Equal $Request.command 'metadata' 'Background refresh reads only selected metadata'
+            Assert-Equal $Request.id 'synthetic' 'Background refresh targets the selected entry'
+            $script:refreshCalls++
+            return $script:refreshEntries
+        }
         function Set-IdleView { Update-ControllerSummaryLinks }
         function Show-DemoError { param($Owner, $ErrorRecord) $script:summaryErrors++ }
         function Show-DemoSummaryAuthoringNotice { param($Owner, $Id, $Scope) $script:summaryLaunch = "$Id/$Scope" }
@@ -450,6 +462,7 @@ try {
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'Removed selection disables action'
         $script:selectedDemo = [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 0; output = 0 } }
         $script:summaryStamp = $null
+        [IO.File]::WriteAllText($file, '{}')
         function Invoke-DemoLibrary { throw 'Synthetic library read failed' }
         Refresh-ControllerSummaries
         Assert-Equal $script:summaryErrors 1 'Refresh failure is explicitly surfaced'
