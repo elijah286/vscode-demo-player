@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.16](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.16/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.17](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.17/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -523,6 +523,16 @@ field, never in a recording or chat. The dialog links to
 separately from ChatGPT subscriptions; your project needs API billing, quota and
 model access. The default is **gpt-4.1-mini**, a low-cost, low-latency model.
 Changing the model does not test access or send a request.
+The model must support Responses API strict JSON-schema outputs with string
+patterns; the default has been verified with real prompt and reply summaries.
+
+Starting with v0.2.17, only the OpenAI helper enables Node's trusted Windows
+certificate store. This supports HTTPS inspection with a certificate trusted
+by Windows without disabling TLS verification, changing global settings, or
+copying certificates. Certificate, DNS, timeout and other connection failures
+are reported separately; a certificate failure is not reported as a timeout.
+If a certificate is still untrusted, ask your network administrator to check
+the chain rather than disabling certificate validation.
 
 The key is encrypted with Windows DPAPI for the current Windows user in
 `%LOCALAPPDATA%\VSCodeDemoPlayer\ai-settings.json`; the model ID is not secret.
@@ -536,6 +546,9 @@ are left untouched and are no longer used by application AI actions.
 missing prompts and supported outputs in the current selection. Each short source
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
+The response uses a strict JSON schema with a required one-line summary field
+bounded to 300 characters, then local validation before review. Plain prose
+that merely ignores a length instruction is no longer the response contract.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
 sent and selected model before any request. Review it for secrets: displayed
 answer text may contain private content even after filtering. Raw tool

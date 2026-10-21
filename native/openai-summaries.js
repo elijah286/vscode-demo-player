@@ -57,7 +57,16 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         response = await fetchImpl(ENDPOINT, {
             method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
             headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, input: summaryPrompt(source, kind, { partial, combine }), max_output_tokens: 1024, store: false })
+            body: JSON.stringify({
+                model, input: summaryPrompt(source, kind, { partial, combine }), max_output_tokens: 1024, store: false,
+                text: { format: {
+                    type: 'json_schema', name: 'demo_player_summary', strict: true,
+                    schema: {
+                        type: 'object', properties: { summary: { type: 'string', pattern: '^[^\\r\\n]{1,300}$' } },
+                        required: ['summary'], additionalProperties: false
+                    }
+                } }
+            })
         });
         if (response.status === 401) {
             await response.body?.cancel();
@@ -66,7 +75,18 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         body = await readResponse(response);
     } catch (error) {
         if (error instanceof SummaryError) throw error;
-        throw new SummaryError('OpenAI could not be reached or the 90-second request deadline expired. Check your connection and retry explicitly. No summaries were saved.');
+        const code = error.cause?.code ?? error.code;
+        if (['SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+            'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID'].includes(code)) {
+            throw new SummaryError('OpenAI HTTPS certificate validation failed. Demo Player uses the Windows trust store; ask your network administrator to check the certificate chain. TLS verification remains enabled. No summaries were saved.', 'OPENAI_TLS');
+        }
+        if (error.name === 'TimeoutError' || error.name === 'AbortError' || ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) {
+            throw new SummaryError('The OpenAI request timed out. Retry explicitly after checking your connection. No summaries were saved.', 'OPENAI_TIMEOUT');
+        }
+        if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+            throw new SummaryError('The OpenAI hostname could not be resolved. Check DNS and network settings, then retry explicitly. No summaries were saved.', 'OPENAI_DNS');
+        }
+        throw new SummaryError('OpenAI could not be reached because the network connection failed. Check your network or proxy settings and retry explicitly. No summaries were saved.', 'OPENAI_NETWORK');
     }
     if (!response.ok) {
         const message = response.status === 429
@@ -87,7 +107,15 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         throw new SummaryError('OpenAI returned malformed output. No summaries were saved.');
     }
     if (content.some(part => part.type === 'refusal')) throw new SummaryError('OpenAI declined to summarize this source. No summaries were saved; summarize it manually.');
-    const summary = content.filter(part => part.type === 'output_text').map(part => part.text).join('').trim();
+    const text = content.filter(part => part.type === 'output_text').map(part => part.text).join('');
+    let structured;
+    try { structured = JSON.parse(text); }
+    catch { throw new SummaryError('OpenAI returned an invalid structured summary. No summaries were saved.'); }
+    if (!structured || typeof structured !== 'object' || Array.isArray(structured) ||
+        Object.keys(structured).length !== 1 || typeof structured.summary !== 'string') {
+        throw new SummaryError('OpenAI returned an invalid structured summary. No summaries were saved.');
+    }
+    const summary = structured.summary.trim();
     if (!summary) throw new SummaryError('OpenAI returned an empty summary. No summaries were saved.');
     try { validatePromptSummaries([summary], 1); }
     catch { throw new SummaryError('OpenAI returned an invalid summary (one line, at most 300 characters required). No summaries were saved; try again or edit manually.'); }

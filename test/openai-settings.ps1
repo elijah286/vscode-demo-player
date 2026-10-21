@@ -94,7 +94,17 @@ try {
         Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'input'; source = 'Short prompt.' }) $progress $key 'gpt-4.1-mini' | Out-Null
         Assert-True ($summaryCalls.Count -eq 1 -and -not $summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Short sources still use exactly one request without reduction.'
     } finally { ${function:Invoke-DemoLibrary} = $originalInvoke }
-    Write-Output ('OPENAI SETTINGS/SOURCE CHUNKING PASSED: ' + $assertions + ' assertions; DPAPI, key controls, exact source coverage, Unicode boundaries, bounded multi-level reduction and explicit part failures. No real key or network request.')
+    $script:NodePath = if ($NodePath) { $NodePath } else { (Get-Command node.exe -ErrorAction Stop).Source }
+    $script:LibraryRoot = Join-Path $scratch 'library'
+    foreach ($helper in @('openai-summaries.js', 'library-cli.js')) {
+        $state = Start-DemoLibraryProcess @{ command = 'unknown-test-command' } $helper
+        try {
+            $arguments = $state.Process.StartInfo.Arguments
+            Assert-True ($arguments.StartsWith('--use-system-ca ') -eq ($helper -eq 'openai-summaries.js')) 'Only OpenAI helper processes explicitly enable the trusted Windows certificate store.'
+            Assert-True (-not $arguments.Contains('reject-unauthorized') -and -not $arguments.Contains('insecure')) 'Certificate verification must never be disabled.'
+        } finally { Stop-DemoLibraryProcess $state }
+    }
+    Write-Output ('OPENAI SETTINGS/SOURCE CHUNKING PASSED: ' + $assertions + ' assertions; DPAPI, key controls, exact source coverage, reduction/failures and production OpenAI-only Windows trust arguments. No real key or network request.')
 } finally {
     $env:LOCALAPPDATA = $original
     Remove-Item -LiteralPath $scratch -Recurse -Force

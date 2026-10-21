@@ -7,7 +7,8 @@ function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli
     $operation = if ($Request.command -in @('list', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'generateSummary')) { $Request.command } else { 'unknown' }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $script:NodePath
-    $start.Arguments = '"' + (Join-Path $PSScriptRoot ('native\' + $Helper)) + '"'
+    $trust = if ($Helper -eq 'openai-summaries.js') { '--use-system-ca ' } else { '' }
+    $start.Arguments = $trust + '"' + (Join-Path $PSScriptRoot ('native\' + $Helper)) + '"'
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardInput = $true
