@@ -1,13 +1,13 @@
-function Start-DemoLibraryProcess([hashtable]$Request) {
+function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js') {
     if (-not $script:NodePath) {
         $script:NodePath = Resolve-PlayerNode
     }
     $Request.root = $script:LibraryRoot
     $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(($Request | ConvertTo-Json -Depth 10 -Compress))
-    $operation = if ($Request.command -in @('list', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read')) { $Request.command } else { 'unknown' }
+    $operation = if ($Request.command -in @('list', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'generateSummary')) { $Request.command } else { 'unknown' }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $script:NodePath
-    $start.Arguments = '"' + (Join-Path $PSScriptRoot 'native\library-cli.js') + '"'
+    $start.Arguments = '"' + (Join-Path $PSScriptRoot ('native\' + $Helper)) + '"'
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardInput = $true
@@ -52,8 +52,10 @@ function Stop-DemoLibraryProcess($State) {
     }
 }
 
-function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
-    $state = Start-DemoLibraryProcess $Request
+function Invoke-DemoLibrary([hashtable]$Request, $Owner,
+    [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js',
+    [ValidateRange(1,95)][int]$TimeoutSeconds = 30, [switch]$KeepOwnerEnabled) {
+    $state = Start-DemoLibraryProcess $Request $Helper
     $process = $state.Process
     $timer = $null
     $onTick = $null
@@ -73,13 +75,13 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
             $onTick = {
                 try {
                     & $completeInput $state
-                    if ($state.Process.HasExited -or $state.Clock.ElapsedMilliseconds -ge 30000) { $frame.Continue = $false }
+                    if ($state.Process.HasExited -or $state.Clock.ElapsedMilliseconds -ge ($TimeoutSeconds * 1000)) { $frame.Continue = $false }
                 } catch { $state.Failure = $_; $frame.Continue = $false }
             }.GetNewClosure()
             $onClosed = { $state.Cancelled = $true; $frame.Continue = $false }.GetNewClosure()
             $timer.Add_Tick($onTick)
             $Owner.Add_Closed($onClosed)
-            $Owner.IsEnabled = $false
+            if (-not $KeepOwnerEnabled) { $Owner.IsEnabled = $false }
             $Owner.Cursor = [System.Windows.Input.Cursors]::Wait
             $timer.Start()
             [System.Windows.Threading.Dispatcher]::PushFrame($frame)
@@ -88,7 +90,7 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
                 Complete-DemoLibraryInput $state
                 if ($process.HasExited) { break }
                 $process.WaitForExit(50) | Out-Null
-            } while ($state.Clock.ElapsedMilliseconds -lt 30000)
+            } while ($state.Clock.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000))
         }
         if ($state.Cancelled) {
             $failure = [OperationCanceledException]::new("The demo library operation '" + $state.Operation + "' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.")
@@ -98,7 +100,7 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
         if ($state.Failure) { throw $state.Failure }
         if (-not $process.HasExited) {
             $phase = if ($state.InputClosed) { 'waiting for helper exit' } else { 'sending the request' }
-            throw ("The demo library operation '" + $state.Operation + "' exceeded 30 seconds while " + $phase + '. No success was confirmed. Refresh the library before retrying.')
+            throw ("The demo library operation '" + $state.Operation + "' exceeded " + $TimeoutSeconds + ' seconds while ' + $phase + '. No success was confirmed. Refresh the library before retrying.')
         }
         Complete-DemoLibraryInput $state
         if (-not $state.InputClosed) { throw 'The demo library helper exited before the request was sent. No success was confirmed.' }
@@ -106,7 +108,14 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner) {
         $text = $output.GetAwaiter().GetResult()
         if (-not $text) { throw ('The demo library helper returned no result. ' + $errors.GetAwaiter().GetResult()) }
         $response = ConvertFrom-Json -InputObject $text
-        if (-not $response.ok -or $process.ExitCode -ne 0) { throw $response.error }
+        if (-not $response.ok -or $process.ExitCode -ne 0) {
+            if ($response.code -eq 'OPENAI_AUTH') {
+                $failure = [InvalidOperationException]::new($response.error)
+                $failure.Data['OpenAIAuth'] = $true
+                throw $failure
+            }
+            throw $response.error
+        }
         return $response.result
     } finally {
         if ($timer) { $timer.Stop(); $timer.Remove_Tick($onTick) }
@@ -821,9 +830,9 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'i
     }
 }
 
-function Show-DemoSummaryDialog($Owner, [string]$Id) {
-    $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
-    $outputs = @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner)
+function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
+    $entry = if ($Generated) { $Generated.Entry } else { Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner }
+    $outputs = if ($Generated) { @($Generated.Outputs) } else { @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner) }
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Input / Output Summaries"
@@ -848,6 +857,13 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
     if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
     $outputDrafts = [object[]]::new($entry.recording.turns.Count)
     if ($null -ne $entry.recording.outputSummaries) { $outputDrafts = [object[]]$entry.recording.outputSummaries.Clone() }
+    if ($Generated) {
+        $dialog.Title = 'Review AI Summaries'
+        foreach ($draft in $Generated.Drafts) {
+            if ($draft.kind -eq 'input') { $drafts[$draft.index] = $draft.summary }
+            else { $outputDrafts[$draft.index] = $draft.summary }
+        }
+    }
     $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Index = -1 }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
@@ -877,7 +893,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
             }
         }
     })
-    $exchange.SelectedIndex = 0
+    $exchange.SelectedIndex = if ($Generated) { 2 * $Generated.Drafts[0].index + [int]($Generated.Drafts[0].kind -eq 'output') } else { 0 }
     $dialog.FindName('Clear').Add_Click({
         $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
         $dialog.Tag.Outputs = [object[]]::new($entry.recording.turns.Count)
@@ -898,18 +914,8 @@ function Show-DemoSummaryDialog($Owner, [string]$Id) {
 }
 
 function Show-DemoSummaryAuthoringNotice($Owner, [string]$Id, [ValidateSet('both', 'input', 'output')][string]$Scope = 'both') {
-    if ($Scope -eq 'input') {
-        $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing AI summaries of user prompts only (300 characters each), including short prompts. Recorded assistant replies are not sent or summarized by this action. Existing summaries are preserved. Use the same dedicated authoring window, provider/model selection and editable review as other summary actions. Review the shown prompts for secrets before consenting; provider terms and usage limits apply. Approve or delete drafts and save the reviewed batch. The controller counts all saved summaries, including manual ones. Original chat prompts remain unchanged; playback never calls AI.', 'AI Prompt Summaries', 'OKCancel', 'Information')
-        if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'input' }
-        return
-    }
-    if ($Scope -eq 'output') {
-        $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing AI summaries of recorded assistant responses/tool status only (300 characters each). User prompts are not sent or summarized by this action. Existing summaries are preserved. Unsupported outputs need manual summaries; no result is invented. Switch to the dedicated authoring window to set up your provider, review the recorded output, consent and select a model. Raw tool arguments/results, reasoning and metadata are excluded; shown answer text can still contain secrets, so review it first. Edit, approve or delete drafts and save the reviewed batch. Return here to use the selection and enable Show summary of output. The original answers remain unchanged in chat; playback never calls AI.', 'AI Response Summaries', 'OKCancel', 'Information')
-        if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner 'output' }
-        return
-    }
-    $answer = [System.Windows.MessageBox]::Show($Owner, 'Generate missing summaries for long inputs and recorded assistant outputs/tool status (300 characters each). Short inputs and existing summaries are preserved. Unsupported output structures require manual summaries; no result is invented. A separate VS Code authoring window uses your existing editor AI providers and sign-in, without copying credentials or installing extensions. Other editor windows are not reused or reloaded. If no model is available, finish provider setup in that window and choose Retry. Nothing is sent until you review the shown user queries and assistant output, consent, and select a model. Provider terms and limits apply. Do not send private content without permission. Edit, approve, or delete each draft and save the batch. Return here to use the selection and enable Show summary of output. Playback keeps full originals and never calls AI.', 'AI Input / Output Summaries', 'OKCancel', 'Information')
-    if ($answer -eq 'OK') { Start-DemoSummaryAuthoring $Id $Owner }
+    . (Join-Path $PSScriptRoot 'PlayerAI.ps1')
+    Invoke-DemoOpenAISummaries $Owner $Id $Scope
 }
 
 function Show-DemoClearSummariesNotice($Owner, [string]$Id) {

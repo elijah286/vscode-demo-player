@@ -1,0 +1,122 @@
+const { readEntry, validatePromptSummaries } = require('./demo-library');
+const { recordedOutput, summaryPrompt } = require('./prompt-summary-authoring');
+
+const ENDPOINT = 'https://api.openai.com/v1/responses';
+const DEFAULT_MODEL = 'gpt-4.1-mini';
+const MODEL_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,179}$/;
+
+class SummaryError extends Error {
+    constructor(message, code = 'OPENAI_FAILED') { super(message); this.code = code; }
+}
+
+async function prepareSummaries(root, id, scope) {
+    if (!['both', 'input', 'output'].includes(scope)) throw new SummaryError('Choose prompt, output, or combined summaries.');
+    const entry = await readEntry(root, id);
+    const candidates = [];
+    const manualOutputs = [];
+    const outputs = entry.recording.turns.map((turn, index) => {
+        const request = turn.snapshot.requests[0];
+        const output = recordedOutput(request);
+        const source = output.text + '\n\n' + output.notice;
+        if (scope !== 'output' && !entry.recording.promptSummaries?.[index]) {
+            candidates.push({ index, kind: 'input', source: request.message.text });
+        }
+        if (scope !== 'input' && !entry.recording.outputSummaries?.[index]) {
+            if (output.text) candidates.push({ index, kind: 'output', source });
+            else manualOutputs.push(index + 1);
+        }
+        return source;
+    });
+    if (candidates.some(candidate => candidate.source.length > 64000) ||
+        candidates.reduce((size, candidate) => size + candidate.source.length, 0) > 1024 * 1024) {
+        throw new SummaryError('This selection is too large for AI summary review. Choose fewer exchanges or summarize them manually.');
+    }
+    return { entry, outputs, candidates, manualOutputs };
+}
+
+async function readResponse(response) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > 65536) throw new SummaryError('OpenAI returned an oversized response. No summaries were saved.');
+        chunks.push(chunk);
+    }
+    try { return JSON.parse(Buffer.concat(chunks, size).toString('utf8')); }
+    catch { throw new SummaryError('OpenAI returned invalid JSON. No summaries were saved.'); }
+}
+
+async function generateOpenAISummary({ apiKey, model, source, kind }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
+    if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(apiKey)) {
+        throw new SummaryError('Enter a valid OpenAI API key in Settings.', 'OPENAI_AUTH');
+    }
+    if (typeof model !== 'string' || !MODEL_PATTERN.test(model)) throw new SummaryError('Enter a valid OpenAI model ID in Settings.');
+    if (typeof source !== 'string' || !source.trim() || source.length > 64000 || !['input', 'output'].includes(kind)) {
+        throw new SummaryError('The recorded summary source or kind is invalid. No request was sent.');
+    }
+    let response;
+    let body;
+    try {
+        response = await fetchImpl(ENDPOINT, {
+            method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
+            headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, input: summaryPrompt(source, kind), max_output_tokens: 1024, store: false })
+        });
+        if (response.status === 401) {
+            await response.body?.cancel();
+            throw new SummaryError('OpenAI rejected the API key. Replace it in Settings; no summaries were saved.', 'OPENAI_AUTH');
+        }
+        body = await readResponse(response);
+    } catch (error) {
+        if (error instanceof SummaryError) throw error;
+        throw new SummaryError('OpenAI could not be reached or the 90-second request deadline expired. Check your connection and retry explicitly. No summaries were saved.');
+    }
+    if (!response.ok) {
+        const message = response.status === 429
+            ? 'OpenAI quota or rate limit reached. Check API billing and limits, then retry explicitly.'
+            : response.status === 403 ? 'OpenAI denied access. Check project permissions and model access.'
+                : response.status === 400 || response.status === 404 ? 'OpenAI rejected the request or model. Check the model ID and API access in Settings.'
+                    : 'OpenAI failed to generate a summary (HTTP ' + response.status + '). Retry explicitly later.';
+        throw new SummaryError(message + ' No summaries were saved.');
+    }
+    if (!body || body.status !== 'completed' || !Array.isArray(body.output)) throw new SummaryError('OpenAI did not complete the summary. No summaries were saved; try another model or summarize manually.');
+    if (body.output.some(item => !item || typeof item !== 'object' ||
+        (item.type === 'message' && !Array.isArray(item.content)))) {
+        throw new SummaryError('OpenAI returned malformed output. No summaries were saved.');
+    }
+    const content = body.output.filter(item => item.type === 'message').flatMap(item => item.content);
+    if (content.some(part => !part || typeof part !== 'object' ||
+        (part.type === 'output_text' && typeof part.text !== 'string'))) {
+        throw new SummaryError('OpenAI returned malformed output. No summaries were saved.');
+    }
+    if (content.some(part => part.type === 'refusal')) throw new SummaryError('OpenAI declined to summarize this source. No summaries were saved; summarize it manually.');
+    const summary = content.filter(part => part.type === 'output_text').map(part => part.text).join('').trim();
+    if (!summary) throw new SummaryError('OpenAI returned an empty summary. No summaries were saved.');
+    try { validatePromptSummaries([summary], 1); }
+    catch { throw new SummaryError('OpenAI returned an invalid summary (one line, at most 300 characters required). No summaries were saved; try again or edit manually.'); }
+    return summary;
+}
+
+async function main() {
+    let input = '';
+    for await (const chunk of process.stdin) {
+        input += chunk;
+        if (input.length > 4 * 1024 * 1024) throw new SummaryError('Summary request exceeds the size limit.');
+    }
+    const request = JSON.parse(input);
+    if (request.command === 'prepareSummaries') return prepareSummaries(request.root, request.id, request.scope);
+    if (request.command === 'generateSummary') return generateOpenAISummary(request);
+    throw new SummaryError('Unknown OpenAI summary command.');
+}
+
+if (require.main === module) {
+    main().then(result => process.stdout.write(JSON.stringify({ ok: true, result }))).catch(error => {
+        process.stdout.write(JSON.stringify({
+            ok: false, code: error instanceof SummaryError ? error.code : 'OPENAI_FAILED',
+            error: error instanceof SummaryError ? error.message : 'Summary preparation failed. Check the saved selection and try again.'
+        }));
+        process.exitCode = 1;
+    });
+}
+
+module.exports = { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary };

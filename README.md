@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.14](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.14/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.15](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.15/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -492,17 +492,9 @@ combined action below. Raw tool arguments/results, reasoning and metadata remain
 excluded; displayed answer text can still contain secrets, so review it before
 consenting. Unsupported-only outputs still require a manual summary.
 
-The response-only action reuses the completed provider-setup, editable review
-and output-overlay features; it is not a separate summary format or playback
-implementation. Approve or delete every draft and **Save reviewed summaries for
-playback**, return to the picker, and use the selection. Then enable **Show summary
-of output** in the controller (the output-summary checkbox). Full answers remain
-unchanged in chat. Cancel, provider errors and stale output-summary edits save
-no partial batch; concurrent input-only edits are preserved. To regenerate an
-existing output summary, clear that output draft in **Review / edit summaries**
-and save it first. The response-only scope survives provider retry, window reload
-and later queued selections. The dedicated Command Palette action is
-**Demo Player: Generate AI Summaries of Responses**.
+Starting with v0.2.15, every application AI-summary action uses the OpenAI API
+directly, without depending on VS Code providers, Copilot sign-in, model-access
+permissions or a separate authoring window. Playback still never invokes AI.
 
 The controller also offers separate **Generate AI prompt summaries (saved/total)**
 and **Generate AI output summaries (saved/total)** links for the selected interaction.
@@ -514,96 +506,67 @@ interaction selected, the links show **(0/0)** and are disabled. They are also
 disabled during playback; stop playback before authoring.
 The prompt link generates only missing prompt summaries, including short prompts;
 the output link generates only missing reply summaries. Both reuse the same
-dedicated authoring window, provider/model selection, consent and editable review.
+in-app key settings, source consent and editable review.
 Existing summaries are preserved. Cancellation or unsaved drafts do not increase
 the counts. Unsupported-only output still needs a manual summary, not an invented
-answer. **Demo Player: Generate AI Summaries of Prompts** retries prompt-only work;
-the existing combined picker action retains its long-prompt eligibility rules.
+answer. The combined picker action generates all missing prompts, including
+short prompts, plus supported missing output summaries.
 
 These output-summary controls require v0.2.12 or later; they are not present
 in v0.2.11.
 
-**Summarize inputs / outputs with AI...**, available beside the selection action and
-on the **Saved selections** tab, opens a separate VS Code authoring window,
-never the playback window. Starting with v0.2.14, it uses your
-existing VS Code AI providers and sign-in instead of an empty isolated profile.
-No credentials are copied, no extensions are automatically installed, and
-unrelated editor windows are not reused or reloaded. Copilot uses your existing
-account/allowance: a separate API token is not required, but a model must be
-available and provider limits/terms still apply. The dedicated **Demo Player
-Summary Authoring** workspace and request inbox persist locally under
-`%LOCALAPPDATA%\VSCodeDemoPlayer\summary-authoring-existing`.
-The older isolated authoring profile remains untouched; it is not migrated or deleted.
-This window can access your normal provider/account capabilities; it is not a
-security sandbox. Review synthetic or recorded content before consenting.
-Do not use this workspace for normal editing. For isolated testing, set
-`VSCODE_DEMO_PLAYER_SUMMARY_ROOT` to a separate synthetic profile root before
-starting the controller; never point it at a normal VS Code profile.
-That explicit test override isolates extensions and shared account storage too.
-Later selections are queued while generation/review is active; reopening the
-picker action brings the existing authoring window forward without reloading it.
-During initial startup, another selection is queued with a visible startup
-message instead of launching a duplicate window. If you close the window before
-its extension initializes, allow up to two minutes for that startup guard to expire.
-VS Code may ask whether **Transcript Playback** may access your provider's models;
-grant access only if you want to generate summaries. Canceling sends no content.
+**Settings**, immediately left of **Check for updates**, lets you save, replace
+or delete an OpenAI API key and change the model ID. AI generation prompts for
+a key only when one is missing or OpenAI rejects it. Enter the key in the masked
+field, never in a recording or chat. The dialog links to
+[OpenAI API keys](https://platform.openai.com/api-keys). API usage is billed
+separately from ChatGPT subscriptions; your project needs API billing, quota and
+model access. The default is **gpt-4.1-mini**, a low-cost, low-latency model.
+Changing the model does not test access or send a request.
 
-Before content consent, VS Code discovers/activates registered Language Model
-providers. If none are ready (or discovery fails), a **modal** setup dialog
-explains the problem. **Find providers** opens the GitHub Copilot extension
-listing, but does not install, enable, sign in, or send prompts for you.
-You may use another provider. Complete provider setup and account access in
-this dedicated window, including any required reload. Then choose **Retry**,
-or **Prompt summaries: Retry / set up AI** in the status bar. Reload restores
-the last selection for retry. Discovery is retried explicitly, not treated as
-successful generation. Dismiss/cancel leaves all library bytes unchanged;
-manual summaries still work. Generation/save failures also use modal errors.
-Discovery has a 15-second limit; a slow provider can be retried after setup.
-Switch to the dedicated authoring window if another player window covers it.
+The key is encrypted with Windows DPAPI for the current Windows user in
+`%LOCALAPPDATA%\VSCodeDemoPlayer\ai-settings.json`; the model ID is not secret.
+The saved key is never displayed or included in recordings, exports, command-line
+arguments or application logs. DPAPI is not protection from other software running
+as your Windows user. Deleting the saved key removes its local ciphertext; revoke
+the key at OpenAI if it may have been exposed. Older VS Code authoring profiles
+are left untouched and are no longer used by application AI actions.
 
-There is no per-exchange chooser: one batch covers every unsummarized input that
-exceeds the 300-character budget after whitespace normalization, plus missing
-output summaries for all exchanges with supported recorded assistant text or
-tool status. Exactly 300 input characters fits; 301 needs a summary.
-This is a stable text budget, not a guarantee that text fits every resized
-window without scrolling. Short prompts and existing summaries are preserved.
-The eligible original user queries and filtered recorded assistant output/tool
-status are shown for privacy review before one explicit batch consent and one
-model selection. Consent covers both sources, provider terms and usage limits.
-Each summary has a separate request; output requests use recorded results, not
-the user's desired outcome. Raw tool arguments/results, reasoning, SDK event
-archives and unsupported structures are omitted with an explicit notice;
-they are not recursively dumped into provider requests. Review displayed text
-for secrets before consenting. If no supported output remains, use the manual
-editor; no successful outcome is assumed. Original full payloads stay local
-and unchanged. No AI calls occur during presentation.
-Progress identifies the exchange and summary kind. The batch is cancellable, with a
-90-second limit per request. Failures, cancellation, over-context input, and
-invalid/overlong output leave the entire library unchanged; no partial results
-are saved. Once generation completes, a **Review input/output summaries** panel opens
-automatically, with a kind-labeled exchange list, the read-only source and an
-editable summary with a live character count. Use **Previous** / **Next** or
-the list to compare exchanges. **Approve & next** approves one summary;
-**Delete summary & next** removes only that input or output summary (inputs revert
-to excerpts; outputs show a missing-summary notice). **Approve all remaining** preserves deletions. Editing an
-approved or deleted summary makes it pending again. Blank, multiline and
-over-budget summaries cannot be approved; delete the summary instead.
-**Save reviewed summaries for playback** is available only after every draft
-has been approved or deleted. It saves the reviewed batch once.
-**Cancel** or closing the panel leaves the library unchanged. Switching editor
-tabs retains review edits. Invalid decisions or changed exchange order/count
-are rejected without saving.
-Use **Demo Player: Summarize Inputs and Outputs** in that window's Command Palette to
-retry a canceled batch. To regenerate saved summaries, clear them first.
-Return to the picker and click **Use selected exchanges** or **Use saved selection**;
-either reads the latest saved summaries without refreshing or reselecting.
-Enable **Show prompt summary** in the controller to display them; this toggle
-stays off by default. The native chat prompt itself intentionally remains full-length.
-Close the authoring window when finished. Your existing providers and
-provider-managed authentication stay where VS Code manages them; they are not
-copied, shipped or committed. Playback profiles remain disposable and
-never make AI requests. Live provider/account readiness requires your own
-installation/sign-in and is not established by synthetic-provider tests.
+**Summarize inputs / outputs with AI...** on either picker tab generates the
+missing prompts and supported outputs in the current selection. Each summary
+uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
+and `store: false`. This does not override OpenAI's service data-retention rules.
+The **Generate OpenAI Summaries** consent dialog shows the exact text being
+sent and selected model before any request. Review it for secrets: displayed
+answer text may contain private content even after filtering. Raw tool
+arguments/results, reasoning, SDK event archives and unsupported structures are
+excluded with a notice, not recursively dumped. Output requests summarize
+recorded results rather than the user's desired outcome. Unsupported-only
+outputs need manual summaries; no success is invented. Full recordings remain
+local and unchanged, but the consented text is sent to OpenAI.
+
+Progress identifies the exchange and summary kind. **Cancel** stops the helper;
+already sent requests may still incur charges. There is a 90-second limit per
+request and no automatic retries. A rejected key opens replacement settings;
+save a replacement and explicitly start generation again. Billing, access,
+network and invalid-output failures are reported explicitly. Cancellation or
+failure saves no partial batch. Sources are limited to 64,000 characters each
+and 1 MiB of source characters per batch; choose fewer exchanges if needed.
+
+After successful generation, **Review AI Summaries** opens the existing
+input/output editor with generated drafts, original source previews and a live
+character count. Select each **Input (You)** or **Output (AI)** to review/edit it.
+Summaries must be one line and at most 300 characters. **Delete this summary**
+or **Clear all summaries** changes only drafts until **Save summaries** is clicked.
+**Cancel** or closing the editor saves nothing. Existing summaries are preserved
+unless you edit them. To regenerate a saved summary, clear and save it first.
+Stale concurrent edits are rejected atomically rather than overwritten.
+
+Return to **Use selected exchanges** or **Use saved selection**; no refresh or
+reselection is needed. Enable **Show prompt summary** and/or **Show summary of
+output** in the controller to display saved summaries in the presentation dialog.
+Both toggles stay off by default, and the original full chat text is unchanged.
+Manual summaries work without a key or network access.
 
 Summaries are optional package metadata and survive export/import. Concurrent
 summary edits are rejected rather than overwritten; reopen the editor to reload.
@@ -616,12 +579,17 @@ unchanged. Playback always types the full original prompt, never invokes AI,
 and works without sign-in or network access. No recording-specific summaries
 are shipped.
 
-Authoring-only native acceptance creates a synthetic multi-prompt recording
+Legacy VS Code-provider authoring-only native acceptance creates a synthetic multi-prompt recording
 and library entry in an isolated profile when no fixture is supplied. It tests
 missing-provider guidance, then supplies an in-process synthetic provider to
 exercise the real consent/progress/review webview, approval/edit/delete/all
 actions, 300-character playback fidelity and cancellation. No external AI
-requests or real-library/profile changes occur:
+requests or real-library/profile changes occur. This tests the retained
+development-only provider path, not the application's direct OpenAI integration.
+The production integration is covered by `test\openai-settings.ps1`,
+`native\test\openai-summaries.test.js`, and `test\controller-ui.ps1` with isolated
+profiles and synthetic HTTP responses; these do not establish real key/account
+readiness or incur OpenAI charges:
 
 ```powershell
 Set-Location native
