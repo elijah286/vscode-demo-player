@@ -31,10 +31,16 @@ $script:ticks = 0
 $script:disabledTicks = 0
 $heartbeat.Add_Tick({
     $script:ticks++
-    if (-not $owner.IsEnabled) { $script:disabledTicks++ }
+    if ($owner.IsEnabled -and $owner.Resources.Contains('DemoPlayerOperation') -and
+        -not $owner.FindName('Load').IsEnabled -and -not $owner.FindName('Summary').IsEnabled -and -not $owner.FindName('Exchange').IsEnabled) { $script:disabledTicks++ }
 })
 try {
     . (Join-Path $scratch 'DemoDialogs.ps1')
+    $owner = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel><Button x:Name="Load"/><CheckBox x:Name="ShowPrompt"/><TextBox x:Name="SavedSearch"/><TextBox x:Name="Summary"/><ComboBox x:Name="Exchange"/></StackPanel>
+</Window>
+'@ $null
     $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
     $script:LibraryRoot = Join-Path $scratch 'library'
     $heartbeat.Start()
@@ -51,6 +57,8 @@ try {
     $saved = Invoke-DemoLibrary @{ command = 'capture'; file = $source; indices = @(0); title = 'Synthetic demo'; sha256 = $inspection.sha256 } $owner
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id } $owner
     if ($entry.recording.turns[0].snapshot.requests[0].response[0].value -ne $answer) { throw 'Actual library read lost saved response content.' }
+    $metadata = Invoke-DemoLibrary @{ command = 'metadata'; id = $saved.id } $owner
+    if ($metadata.id -ne $saved.id -or $metadata.PSObject.Properties['recording']) { throw 'Actual metadata transported the recording or lost selection identity.' }
     $previousContext = [Threading.SynchronizationContext]::Current
     try {
         [Threading.SynchronizationContext]::SetSynchronizationContext([Windows.Threading.DispatcherSynchronizationContext]::new())
@@ -94,7 +102,8 @@ try {
     $script:disabledTicks = 0
     $result = Invoke-DemoLibrary @{ command = 'success' } $owner
     if ($result.title -ne 'Synthetic result') { throw 'The helper did not return the expected result.' }
-    if ($script:ticks -lt 3 -or $script:disabledTicks -lt 3) { throw 'The dialog did not process window events with controls disabled while loading.' }
+    if ($script:ticks -lt 3 -or $script:disabledTicks -lt 3) { throw 'The dialog did not process window events with only conflicting actions disabled while loading.' }
+    if (-not $owner.FindName('ShowPrompt').IsEnabled -or -not $owner.FindName('SavedSearch').IsEnabled) { throw 'Background reads disabled independent presentation/search controls.' }
     if (-not $owner.IsEnabled -or $owner.Cursor) { throw 'The dialog did not restore its enabled state and cursor after loading.' }
     foreach ($command in @('failure', 'timeout')) {
         $expected = if ($command -eq 'failure') { 'Synthetic helper failure' } else { 'exceeded 30 seconds' }
@@ -102,7 +111,7 @@ try {
         catch { if ($_.Exception.Message -notmatch $expected) { throw } }
         if (-not $owner.IsEnabled -or $owner.Cursor) { throw 'The dialog did not restore its enabled state and cursor after a helper error.' }
     }
-    Write-Output 'CAPTURE HELPER PASSED: all 11 real CLI commands preserve isolated recording/summary payloads; reads work with and without a WPF owner; dispatcher remains responsive, controls are disabled, errors propagate, the 30-second timeout is enforced, and owner state is restored.'
+    Write-Output 'CAPTURE HELPER PASSED: all 12 real CLI commands preserve isolated recording/summary payloads; reads work with and without a WPF owner; only conflicting actions are disabled, independent controls remain available, errors propagate, the 30-second timeout is enforced, and owner state is restored.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()

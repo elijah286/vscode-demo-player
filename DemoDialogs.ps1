@@ -4,7 +4,7 @@ function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli
     }
     $Request.root = $script:LibraryRoot
     $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(($Request | ConvertTo-Json -Depth 10 -Compress))
-    $operation = if ($Request.command -in @('list', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'generateSummary')) { $Request.command } else { 'unknown' }
+    $operation = if ($Request.command -in @('list', 'metadata', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'generateSummary')) { $Request.command } else { 'unknown' }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $script:NodePath
     $trust = if ($Helper -eq 'openai-summaries.js') { '--use-system-ca ' } else { '' }
@@ -53,52 +53,164 @@ function Stop-DemoLibraryProcess($State) {
     }
 }
 
-function Invoke-DemoLibrary([hashtable]$Request, $Owner,
-    [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js',
-    [ValidateRange(1,95)][int]$TimeoutSeconds = 30, [switch]$KeepOwnerEnabled) {
-    $state = Start-DemoLibraryProcess $Request $Helper
-    $process = $state.Process
-    $timer = $null
-    $onTick = $null
-    $onClosed = $null
-    $ownerStateSaved = $false
+function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments, $Owner,
+    [string]$Activity, [switch]$KeepOwnerEnabled, [bool]$Cancellable = $true) {
+    if ($Owner.Resources.Contains('DemoPlayerOperation')) { throw 'This window already has an operation in progress. Wait or cancel it before retrying.' }
+    $cancellation = [Threading.CancellationTokenSource]::new()
+    $worker = [PowerShell]::Create()
+    $runspace = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $worker.Runspace = $runspace
+    $controls = [Collections.Generic.List[object]]::new()
+    $state = @{ Cancellation = $cancellation; OwnerClosed = $false; Finished = $false; Job = $null; Failure = $null; Clock = [Diagnostics.Stopwatch]::StartNew() }
+    # Nested PowerShell dispatcher callbacks must not resolve the caller's progress/timer to our locals.
+    $operationWindow = $null
+    $operationTimer = [Windows.Threading.DispatcherTimer]::new()
+    $frame = [Windows.Threading.DispatcherFrame]::new()
+    $closed = { $state.OwnerClosed = $true; if ($Cancellable) { $cancellation.Cancel() } }.GetNewClosure()
     try {
-        $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
-        if ($Owner) {
-            $enabled = $Owner.IsEnabled
-            $cursor = $Owner.Cursor
-            $ownerStateSaved = $true
-            $frame = [System.Windows.Threading.DispatcherFrame]::new()
-            $timer = [System.Windows.Threading.DispatcherTimer]::new()
-            $timer.Interval = [TimeSpan]::FromMilliseconds(50)
-            $completeInput = ${function:Complete-DemoLibraryInput}
-            $onTick = {
-                try {
-                    & $completeInput $state
-                    if ($state.Process.HasExited -or $state.Clock.ElapsedMilliseconds -ge ($TimeoutSeconds * 1000)) { $frame.Continue = $false }
-                } catch { $state.Failure = $_; $frame.Continue = $false }
-            }.GetNewClosure()
-            $onClosed = { $state.Cancelled = $true; $frame.Continue = $false }.GetNewClosure()
-            $timer.Add_Tick($onTick)
-            $Owner.Add_Closed($onClosed)
-            if (-not $KeepOwnerEnabled) { $Owner.IsEnabled = $false }
-            $Owner.Cursor = [System.Windows.Input.Cursors]::Wait
-            $timer.Start()
-            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
-        } else {
-            do {
-                Complete-DemoLibraryInput $state
-                if ($process.HasExited) { break }
-                $process.WaitForExit(50) | Out-Null
-            } while ($state.Clock.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000))
+        $Owner.Resources.Add('DemoPlayerOperation', $state)
+        if (-not $KeepOwnerEnabled) {
+            foreach ($name in @('ChooseDemo', 'PlayPause', 'NextStep', 'Stop', 'WindowMode', 'AISettings',
+                'GeneratePromptSummaries', 'GenerateOutputSummaries', 'Load', 'Browse', 'Refresh', 'AddLocation',
+                'SavedRefresh', 'Select', 'Save', 'Import', 'Export', 'Delete', 'Rename', 'Summaries',
+                'AiSummaries', 'AiResponses', 'ClearSummaries', 'SelectionSummaries', 'SelectionAiSummaries',
+                'SelectionAiResponses', 'SelectionClearSummaries', 'Sessions', 'Demos', 'Turns',
+                'Source', 'Reviewed', 'Title', 'SavedTitle', 'SelectAll', 'SelectAvailable', 'ClearSelection',
+                'RawPayload', 'Summary', 'Exchange', 'Clear', 'DeleteSummary')) {
+                if ($Owner.Tag.Scan -and $name -in @('Load', 'Browse', 'Refresh', 'AddLocation')) { continue }
+                $control = $Owner.FindName($name)
+                if ($control) {
+                    $controls.Add(@{ Control = $control; Enabled = $control.IsEnabled })
+                    $control.IsEnabled = $false
+                }
+            }
+            if ($Owner.IsVisible) {
+                $operationWindow = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Working - Demo Player" SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" ShowActivated="False" Topmost="True">
+ <StackPanel Margin="16" Width="360">
+  <TextBlock x:Name="Activity" TextWrapping="Wrap" AutomationProperties.AutomationId="LibraryActivity"/>
+  <ProgressBar IsIndeterminate="True" Height="5" Margin="0,12,0,12"/>
+  <Button x:Name="CancelOperation" Content="Cancel operation" HorizontalAlignment="Right" Padding="12,5"
+          AutomationProperties.AutomationId="CancelLibraryOperation"/>
+ </StackPanel>
+</Window>
+'@ $Owner
+                $operationWindow.FindName('Activity').Text = $Activity
+                $operationWindow.FindName('CancelOperation').IsEnabled = $Cancellable
+                if (-not $Cancellable) { $operationWindow.FindName('CancelOperation').Content = 'Preparing playback...' }
+                $operationWindow.FindName('CancelOperation').Add_Click({ $cancellation.Cancel() }.GetNewClosure())
+                $operationWindow.Add_Closing({
+                    param($sender, $eventArgs)
+                    if (-not $state.Finished) {
+                        if ($Cancellable) { $cancellation.Cancel() } else { $eventArgs.Cancel = $true }
+                    }
+                }.GetNewClosure())
+                $operationWindow.Show()
+            }
         }
-        if ($state.Cancelled) {
-            $failure = [OperationCanceledException]::new("The demo library operation '" + $state.Operation + "' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.")
+        # Serialization, process I/O and JSON decoding all run outside the WPF dispatcher.
+        $null = $worker.AddScript({
+            param($Code, $Values, $Token)
+            $ErrorActionPreference = 'Stop'
+            try {
+                $result = @(& ([scriptblock]::Create($Code)) $Token @Values)
+                [pscustomobject]@{ Result = $result; Failure = $null }
+            } catch { [pscustomobject]@{ Result = $null; Failure = $_ } }
+        }).AddArgument($Work.ToString()).AddArgument($Arguments).AddArgument($cancellation.Token)
+        $Owner.Add_Closed($closed)
+        $runspace.OpenAsync()
+        $operationTimer.Interval = [TimeSpan]::FromMilliseconds(40)
+        $operationTimer.Add_Tick({
+            try {
+            if ($runspace.RunspaceStateInfo.State -eq 'Broken') {
+                $state.Failure = $runspace.RunspaceStateInfo.Reason
+                $frame.Continue = $false
+                return
+            }
+            if (-not $state.Job -and $runspace.RunspaceStateInfo.State -eq 'Opened') { $state.Job = $worker.BeginInvoke() }
+            if ($operationWindow) {
+                $operationWindow.FindName('Activity').Text = if ($cancellation.IsCancellationRequested) {
+                    'Cancelling... No success has been confirmed.'
+                } else { $Activity + ' (' + [int]$state.Clock.Elapsed.TotalSeconds + 's)' }
+                $operationWindow.FindName('CancelOperation').IsEnabled = $Cancellable -and -not $cancellation.IsCancellationRequested
+            }
+            if ($state.Job -and $state.Job.IsCompleted) { $frame.Continue = $false }
+            } catch { $state.Failure = $_; $frame.Continue = $false }
+        }.GetNewClosure())
+        $operationTimer.Start()
+        [Windows.Threading.Dispatcher]::PushFrame($frame)
+        if ($state.Failure) { throw $state.Failure }
+        $packets = @(if ($state.Job) { $worker.EndInvoke($state.Job) })
+        if ($state.OwnerClosed) {
+            $failure = [OperationCanceledException]::new($Activity + ' was cancelled because its window closed. No success was confirmed. Refresh the library before retrying.')
             $failure.Data['DemoPlayerOwnerClosed'] = $true
             throw $failure
         }
-        if ($state.Failure) { throw $state.Failure }
+        if ($cancellation.IsCancellationRequested) {
+            $failure = [OperationCanceledException]::new('Operation cancelled. No success was confirmed. Refresh the library before retrying.')
+            $failure.Data['DemoPlayerOperationCancelled'] = $true
+            throw $failure
+        }
+        if ($packets.Count -ne 1) { throw 'The background operation returned no valid result. No success was confirmed.' }
+        if ($packets[0].Failure) { throw $packets[0].Failure }
+        return $packets[0].Result
+    } finally {
+        $operationTimer.Stop()
+        $Owner.Remove_Closed($closed)
+        $state.Finished = $true
+        if ($operationWindow) { $operationWindow.Close() }
+        foreach ($saved in $controls) { $saved.Control.IsEnabled = $saved.Enabled }
+        $Owner.Resources.Remove('DemoPlayerOperation')
+        $worker.Dispose()
+        $runspace.Dispose()
+        $cancellation.Dispose()
+        $state.Clock.Stop()
+    }
+}
+
+function Invoke-DemoLibrary([hashtable]$Request, $Owner,
+    [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js',
+    [ValidateRange(1,95)][int]$TimeoutSeconds = 30, [switch]$KeepOwnerEnabled,
+    [Threading.CancellationToken]$CancellationToken = [Threading.CancellationToken]::None) {
+    if ($Owner) {
+        $activity = switch ($Request.command) {
+            'list' { 'Loading saved selections' }
+            'metadata' { 'Loading selection details' }
+            'read' { 'Reading the saved interaction' }
+            'inspect' { 'Loading and inspecting the conversation' }
+            'capture' { 'Saving selected exchanges' }
+            'export' { 'Exporting the saved selection' }
+            'prepareSummaries' { 'Preparing summary sources' }
+            'generateSummary' { 'Generating an AI summary' }
+            default { 'Updating the demo library' }
+        }
+        return Invoke-DemoBackgroundOperation {
+            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout)
+            . $Source
+            if (-not $Node) { . (Join-Path (Split-Path $Source -Parent) 'PlayerEnvironment.ps1'); $Node = Resolve-PlayerNode }
+            $script:NodePath = $Node
+            $script:LibraryRoot = $Root
+            Invoke-DemoLibrary $Request -Helper $Helper -TimeoutSeconds $Timeout -CancellationToken $Token
+        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled
+    }
+    $state = Start-DemoLibraryProcess $Request $Helper
+    $process = $state.Process
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        do {
+            if ($CancellationToken.IsCancellationRequested) { break }
+            Complete-DemoLibraryInput $state
+            if ($process.HasExited) { break }
+            $process.WaitForExit(50) | Out-Null
+        } while ($state.Clock.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000))
+        if ($CancellationToken.IsCancellationRequested) {
+            $failure = [OperationCanceledException]::new('Operation cancelled. No success was confirmed. Refresh the library before retrying.')
+            $failure.Data['DemoPlayerOperationCancelled'] = $true
+            throw $failure
+        }
         if (-not $process.HasExited) {
             $phase = if ($state.InputClosed) { 'waiting for helper exit' } else { 'sending the request' }
             throw ("The demo library operation '" + $state.Operation + "' exceeded " + $TimeoutSeconds + ' seconds while ' + $phase + '. No success was confirmed. Refresh the library before retrying.')
@@ -119,12 +231,7 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
         }
         return $response.result
     } finally {
-        if ($timer) { $timer.Stop(); $timer.Remove_Tick($onTick) }
-        if ($onClosed) { $Owner.Remove_Closed($onClosed) }
-        try { Stop-DemoLibraryProcess $state }
-        finally {
-            if ($ownerStateSaved) { $Owner.IsEnabled = $enabled; $Owner.Cursor = $cursor }
-        }
+        Stop-DemoLibraryProcess $state
     }
 }
 
@@ -138,6 +245,10 @@ function New-DemoDialog([string]$Xaml, $Owner) {
 function Show-DemoError($Owner, $Failure) {
     if ($Failure.Exception -is [OperationCanceledException] -and $Failure.Exception.Data['DemoPlayerOwnerClosed']) {
         Write-Warning $Failure.Exception.Message
+        return
+    }
+    if ($Failure.Exception -is [OperationCanceledException] -and $Failure.Exception.Data['DemoPlayerOperationCancelled']) {
+        [System.Windows.MessageBox]::Show($Owner, $Failure.Exception.Message, 'Operation cancelled', 'OK', 'Information') | Out-Null
         return
     }
     [System.Windows.MessageBox]::Show($Owner, $Failure.Exception.Message, 'Demo Player', 'OK', 'Error') | Out-Null
@@ -1027,14 +1138,14 @@ function Show-InteractionPickerWindow($dialog) {
     $dialog.FindName('Select').Add_Click({
         try {
             if (-not $list.SelectedItem) { throw 'Choose a saved selection first.' }
-            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'read'; id = $list.SelectedItem.Entry.id } $dialog
+            $dialog.Tag.Result = Invoke-DemoLibrary @{ command = 'metadata'; id = $list.SelectedItem.Entry.id } $dialog
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
     })
     foreach ($name in @('Select', 'Summaries', 'AiSummaries', 'AiResponses', 'ClearSummaries', 'Rename', 'Export', 'Delete')) {
         $dialog.FindName($name).IsEnabled = $false
     }
-    & $refresh
+    $dialog.Add_ContentRendered({ try { & $refresh } catch { Show-DemoError $dialog $_ } })
     if ($dialog.ShowDialog()) { return $dialog.Tag.Result }
     return $null
 }
