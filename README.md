@@ -661,6 +661,13 @@ read it; concurrent writes are rejected with a visible busy error. After a
 helper crash, inspect the library and ensure no writer is running before
 manually removing `.library.lock`. Library helper operations time out after
 30 seconds, startup after 45 seconds, and HTTP calls after one second.
+If VS Code's updater is preventing new windows, Open fails immediately with
+instructions to save your work and choose **Restart to Update** in VS Code,
+rather than waiting for startup to time out. The update guard checks the
+`vscode-updating` mutex's presence, not thread ownership, matching VS Code's
+startup behavior. It does not stop, bypass, or modify the updater or other editor
+windows. Recordings and summaries remain unchanged. Unexpected target exit
+before readiness also displays an error instead of only resetting to Open.
 Three consecutive connection failures initiate stop. Stop first allows eight
 seconds for normal closure, then requests scoped window closure and waits six
 more seconds; if it still cannot close, it asks you to close that isolated

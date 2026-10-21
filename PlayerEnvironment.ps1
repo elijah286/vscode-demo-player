@@ -18,6 +18,18 @@ function Resolve-PlayerVSCode([string]$CodePath) {
     throw 'VS Code was not found. Install desktop VS Code from https://code.visualstudio.com/ and try again. For a portable installation, use -CodePath pointing to Code.exe.'
 }
 
+function Assert-PlayerVSCodeLaunchAvailable {
+    $updateMutex = $null
+    try {
+        # VS Code blocks on the mutex's existence, even when no thread owns it.
+        if ([Threading.Mutex]::TryOpenExisting('vscode-updating', [ref]$updateMutex)) {
+            throw 'VS Code is currently being updated and is refusing new playback windows. Save your work in VS Code and choose Restart to Update to finish the update, then try Open again. Your recordings and summaries have not been changed.'
+        }
+    } finally {
+        if ($updateMutex) { $updateMutex.Dispose() }
+    }
+}
+
 function Resolve-PlayerNode([string]$NodePath) {
     if (-not $NodePath) {
         $bundled = Join-Path $PSScriptRoot 'runtime\node.exe'

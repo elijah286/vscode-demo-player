@@ -34,6 +34,7 @@ $controllerScript = Join-Path ([System.IO.Path]::GetDirectoryName($extension)) '
 if (-not (Test-Path -LiteralPath $controllerScript)) { throw 'The replay controller script was not found.' }
 . (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
 $code = Resolve-PlayerVSCode $CodePath
+Assert-PlayerVSCodeLaunchAvailable
 $profile = if ($UserDataPath) { [System.IO.Path]::GetFullPath($UserDataPath) } else { Join-Path ([System.IO.Path]::GetTempPath()) ('historical-replay-player-' + [guid]::NewGuid().ToString('N')) }
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
 if ([System.IO.Path]::GetDirectoryName($profile) -ine $temporaryRoot -or [System.IO.Path]::GetFileName($profile) -notmatch '^historical-replay-(player|agents)-[a-f0-9]{32}$') {

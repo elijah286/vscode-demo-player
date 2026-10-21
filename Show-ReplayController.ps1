@@ -486,12 +486,19 @@ $timer.Add_Tick({
         }
         if (-not $ReplayProcessId) { return }
         if (-not (Test-ReplayAlive)) {
+            $startupFailureToReport = -not $script:pairedVisible -and (-not $script:stopping -or $script:connectionStop)
             if (-not $script:stopping -or $script:connectionStop) {
                 $connectionFailure = if ($script:connectionStop) { $script:lastFault } else { $null }
                 $script:lastFault = if ($script:pairedVisible) { 'The isolated VS Code target closed.' } else { 'The isolated player exited before it was ready.' }
                 if ($connectionFailure) { $script:lastFault += ' Control connection failed: ' + $connectionFailure }
             }
             Reset-ReplaySession
+            if ($startupFailureToReport -and $script:standalone -and -not $script:exitRequested) {
+                $failure = [Management.Automation.ErrorRecord]::new(
+                    [InvalidOperationException]::new($script:lastFault),
+                    'ReplayStartupFailed', [Management.Automation.ErrorCategory]::OpenError, $null)
+                Show-DemoError $window $failure
+            }
             return
         }
         if (-not $script:pairedVisible -and -not $script:stopping -and [DateTime]::UtcNow -gt $script:preparedDeadline) {
