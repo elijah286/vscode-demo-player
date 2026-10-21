@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$NodePath,
     [Parameter(Mandatory = $true)][string]$EvidenceRoot,
     [string]$ApplicationRoot,
-    [switch]$Installed
+    [switch]$Installed,
+    [switch]$LargeSummarySources
 )
 
 $ErrorActionPreference = 'Stop'
@@ -121,6 +122,10 @@ $snapshot = @{
     }
 }
 [System.IO.File]::WriteAllText($source, ($snapshot | ConvertTo-Json -Depth 20 -Compress) + "`n", $utf8)
+if ($LargeSummarySources) {
+    $snapshot.v.requests[1].response[0].value += (' Synthetic saved response text.' * 40000) + ' Final synthetic outcome: failed.'
+    [System.IO.File]::WriteAllText($source, ($snapshot | ConvertTo-Json -Depth 20 -Compress) + "`n", $utf8)
+}
 $sourceBeforeCapture = [IO.File]::ReadAllText($source)
 . (Join-Path $root 'DemoDialogs.ps1')
 $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
@@ -581,6 +586,12 @@ try {
     Remove-Item -LiteralPath (Join-Path $evidence 'delay-summary')
     if (Get-AppWindow 'Review AI Summaries') { throw 'Canceled generation opened a partial review.' }
     Write-Output 'OPENAI UI PASSED: masked key/link, consent cancellation, encrypted retention/delete/re-prompt, rejected-key replacement, explicit retry, combined/prompt/output drafts, save/cancel, counters, progress cancellation, Settings left of updates. All HTTP responses synthetic; no real API key or paid request.'
+    if ($LargeSummarySources) {
+        $requests = @(Get-Content -LiteralPath (Join-Path $evidence 'openai-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        if (@($requests | Where-Object { $_.kind -eq 'output' }).Count -lt 40) { throw 'The >1MiB output did not exercise multiple bounded requests and combination.' }
+        Write-Output 'LARGE SUMMARY UI PASSED: short prompts with a >1MiB reply reach consent and chunked combined/output generation, editable review/save/cancel and counters.'
+        return
+    }
     $countEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, 'Manually saved second reply'); expected = @($countEntry.recording.outputSummaries) } | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes external summary save without reselecting' | Out-Null

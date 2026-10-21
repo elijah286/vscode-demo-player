@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const library = require('../demo-library');
 const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
 
@@ -45,8 +46,24 @@ test('output summaries preserve failure/omission instructions and never answer e
 
 test('invalid inputs fail before any HTTP request', async () => {
     for (const change of [{ apiKey: 'short' }, { apiKey: key + '\n' }, { model: '' }, { model: '../other' },
-        { source: '' }, { source: 'x'.repeat(64001) }, { kind: 'other' }]) {
+        { source: '' }, { source: 'x'.repeat(64001) }, { kind: 'other' }, { partial: 'yes' }, { combine: 'yes' }]) {
         await assert.rejects(generateOpenAISummary({ ...request, ...change }, { fetchImpl: () => assert.fail('No request allowed') }));
+    }
+});
+
+test('partial and combined requests preserve source kind and qualify incomplete context', async () => {
+    for (const kind of ['input', 'output']) {
+        await generateOpenAISummary({ ...request, kind, partial: true, combine: true }, {
+            fetchImpl: async (_url, options) => {
+                const body = JSON.parse(options.body);
+                assert.match(body.input, /ordered partial summaries of ONE recorded source/);
+                assert.match(body.input, /only one segment of a longer source/);
+                assert.match(body.input, /preserving failures, uncertainty and qualifications/);
+                if (kind === 'output') assert.match(body.input, /Do not assume the user request succeeded/);
+                assert.ok(body.input.endsWith(JSON.stringify(request.source)));
+                return Response.json(completed('A qualified partial summary.'));
+            }
+        });
     }
 });
 
@@ -102,4 +119,93 @@ test('preparation includes short prompts, isolates scopes, filters output and pr
     assert.ok((await prepareSummaries(root, entry.id, 'output')).candidates.every(candidate => candidate.kind === 'output'));
     assert.deepEqual(await fs.readFile(file), before);
     await assert.rejects(prepareSummaries(root, entry.id, 'invalid'), /Choose prompt/);
+});
+
+test('short prompts with bounded replies exceeding 1MiB in aggregate and a single long reply remain eligible without truncation', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openai-large-selection-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const source = path.join(root, 'synthetic.jsonl');
+    const short = Array.from({ length: 100 }, (_, index) => ({
+        result: {}, message: { text: ('Short prompt ' + index + '. ').padEnd(256, 'p') },
+        response: [{ value: ('Bounded reply ' + index + '. ').padEnd(11000, 'r') }]
+    }));
+    const longText = 'Start of synthetic reply. ' + 'Long saved content. '.repeat(60000) + ' Final result: failed.';
+    for (const [title, requests] of [['Many short exchanges', short], ['One long exchange', [
+        { result: {}, message: { text: 'Short prompt.' }, response: [{ value: longText }] }
+    ]]]) {
+        await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests } }) + '\n');
+        const inspection = await library.inspectTranscript(source);
+        const entry = await library.addPackage(root, await library.createPackage(source, requests.map((_, index) => index), title, inspection.sha256));
+        const file = path.join(root, entry.id + '.demo.json');
+        const before = await fs.readFile(file);
+        const prepared = await prepareSummaries(root, entry.id, 'both');
+        assert.equal(prepared.candidates.length, requests.length * 2);
+        assert.ok(prepared.candidates.reduce((count, item) => count + item.source.length, 0) > 1024 * 1024);
+        if (requests === short) assert.ok(prepared.candidates.every(item => item.source.length < 64000));
+        else assert.ok(prepared.candidates.find(item => item.kind === 'output').source.includes(longText));
+        assert.deepEqual(await fs.readFile(file), before);
+    }
+});
+
+test('Windows transient summary-save locks retry only replacement; persistent failure preserves bytes and removes temporary files', {
+    skip: process.platform !== 'win32'
+}, async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openai-save-lock-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const source = path.join(root, 'synthetic.jsonl');
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests: [
+        { result: {}, message: { text: 'Synthetic prompt' }, response: [{ value: 'Synthetic reply' }] }
+    ] } }) + '\n');
+    const inspection = await library.inspectTranscript(source);
+    const entry = await library.addPackage(root, await library.createPackage(source, [0], 'Synthetic save lock', inspection.sha256));
+    const originalRename = fs.rename;
+    let attempts = 0;
+    let persistent = false;
+    t.mock.method(fs, 'rename', async (...args) => {
+        attempts++;
+        if (persistent || attempts <= 2) throw Object.assign(new Error('Synthetic Windows sharing violation.'), { code: 'EPERM' });
+        return originalRename(...args);
+    });
+
+    await library.savePromptSummaries(root, entry.id, ['Reviewed summary'], null);
+    assert.equal(attempts, 3);
+    assert.deepEqual((await library.readEntry(root, entry.id)).recording.promptSummaries, ['Reviewed summary']);
+    const file = path.join(root, entry.id + '.demo.json');
+    const before = await fs.readFile(file);
+    attempts = 0;
+    persistent = true;
+    await assert.rejects(library.savePromptSummaries(root, entry.id, ['Must not be saved'], ['Reviewed summary']), { code: 'EPERM' });
+    assert.equal(attempts, 11);
+    assert.deepEqual(await fs.readFile(file), before);
+    assert.ok(!(await fs.readdir(root)).some(name => name.endsWith('.tmp') || name === '.library.lock'));
+});
+
+test('the real helper stdin preserves Unicode split across byte chunks for long requests', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'openai-unicode-cli-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const source = '\u754c\u{1f642}'.repeat(20000);
+    const preload = path.join(root, 'synthetic-fetch.cjs');
+    await fs.writeFile(preload, `
+        global.fetch = async (_url, options) => {
+            const body = JSON.parse(options.body);
+            if (!body.input.endsWith(JSON.stringify(${JSON.stringify(source)}))) throw new Error('Unicode source changed');
+            return Response.json(${JSON.stringify(completed('Faithful synthetic Unicode summary.'))});
+        };
+    `);
+    const bytes = Buffer.from(JSON.stringify({ ...request, source, command: 'generateSummary' }));
+    const split = bytes.indexOf(Buffer.from('\u754c')) + 1;
+    const child = spawn(process.execPath, ['--require', preload, path.join(__dirname, '..', 'openai-summaries.js')], { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', text => { stdout += text; });
+    child.stderr.setEncoding('utf8').on('data', text => { stderr += text; });
+    const closed = new Promise((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', resolve);
+    });
+    child.stdin.write(bytes.subarray(0, split));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    child.stdin.end(bytes.subarray(split));
+    assert.equal(await closed, 0, stderr || stdout);
+    assert.deepEqual(JSON.parse(stdout), { ok: true, result: 'Faithful synthetic Unicode summary.' });
 });

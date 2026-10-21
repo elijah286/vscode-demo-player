@@ -278,7 +278,13 @@ async function atomicEntry(root, entry, replacing = false) {
             catch (error) { if (error.code !== 'ENOENT') throw error; await fs.rename(temporary, destination); return; }
             throw new Error('Library entry already exists.');
         }
-        await fs.rename(temporary, destination);
+        for (let attempt = 0; ; attempt++) {
+            try { await fs.rename(temporary, destination); break; }
+            catch (error) {
+                if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 10) throw error;
+                await new Promise(resolve => setTimeout(resolve, Math.min(200, 25 * (attempt + 1))));
+            }
+        }
     } catch (error) { failure = error; throw error; }
     finally {
         try { await fs.rm(temporary, { force: true }); }

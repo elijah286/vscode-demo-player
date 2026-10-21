@@ -95,6 +95,36 @@ function Show-PlayerAISettings($Owner, [switch]$RequireKey, [switch]$Rejected) {
     finally { $dialog.FindName('Key').Clear() }
 }
 
+function Split-PlayerAISummarySource([string]$Source) {
+    for ($offset = 0; $offset -lt $Source.Length;) {
+        $length = [Math]::Min(64000, $Source.Length - $offset)
+        if ($offset + $length -lt $Source.Length -and [char]::IsHighSurrogate($Source[$offset + $length - 1])) { $length-- }
+        $Source.Substring($offset, $length)
+        $offset += $length
+    }
+}
+
+function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]$Model) {
+    $parts = @(Split-PlayerAISummarySource $Candidate.source)
+    $combine = $false
+    do {
+        $notes = [Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $parts.Count; $index++) {
+            $phase = if ($combine) { 'Combining summaries' } else { 'Summarizing source' }
+            $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count
+            $summary = Invoke-DemoLibrary @{
+                command = 'generateSummary'; apiKey = $ApiKey; model = $Model
+                source = $parts[$index]; kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
+            } $Progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
+            $notes.Add($summary)
+        }
+        if ($parts.Count -eq 1) { return $summary }
+        $parts = @(Split-PlayerAISummarySource ($notes -join "`n"))
+        $combine = $true
+    } while ($parts.Count)
+    throw 'The recorded summary source is empty. No summary was generated.'
+}
+
 function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','input','output')][string]$Scope) {
     if ($script:openAISummaryBusy) { throw 'An AI summary is already being generated or reviewed.' }
     $script:openAISummaryBusy = $true
@@ -119,7 +149,7 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
  </DockPanel>
 </Window>
 '@ $Owner
-        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply. Review for secrets before consenting. Only the shown source text plus summarization instructions is sent, one request per summary, with API response storage disabled (OpenAI retention policies still apply). Raw tool arguments/results, reasoning and metadata are excluded. Existing summaries are kept; unsupported outputs need manual editing. Nothing is saved until you review and save the drafts. Canceling cannot undo an API request or its charges.'
+        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Long sources are automatically split into bounded parts, then their summaries are combined with additional requests; no source text is dropped. Review for secrets before consenting. Only shown source text, intermediate summaries and summarization instructions are sent, with API response storage disabled (OpenAI retention policies still apply). Raw tool arguments/results, reasoning and metadata are excluded. Existing summaries are kept; unsupported outputs need manual editing. Nothing is saved until you review and save the drafts. Canceling cannot undo requests or their charges.'
         $consent.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object { 'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" + $_.source }) -join "`r`n`r`n---`r`n`r`n")
         $consent.FindName('Generate').Add_Click({ $consent.DialogResult = $true })
         if (-not $consent.ShowDialog()) { return }
@@ -142,7 +172,7 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
             try {
                 foreach ($candidate in $prepared.candidates) {
                     $progress.FindName('Progress').Text = 'Generating ' + ($progress.Tag.Drafts.Count + 1) + '/' + @($prepared.candidates).Count + ': Exchange ' + ($candidate.index + 1) + ' ' + $candidate.kind
-                    $summary = Invoke-DemoLibrary @{ command = 'generateSummary'; apiKey = $key; model = $settings.model; source = $candidate.source; kind = $candidate.kind } $progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
+                    $summary = Invoke-PlayerAISummary $candidate $progress $key $settings.model
                     $progress.Tag.Drafts.Add([pscustomobject]@{ index = $candidate.index; kind = $candidate.kind; summary = $summary })
                 }
                 $progress.DialogResult = $true

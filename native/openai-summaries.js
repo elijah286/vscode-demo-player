@@ -27,10 +27,6 @@ async function prepareSummaries(root, id, scope) {
         }
         return source;
     });
-    if (candidates.some(candidate => candidate.source.length > 64000) ||
-        candidates.reduce((size, candidate) => size + candidate.source.length, 0) > 1024 * 1024) {
-        throw new SummaryError('This selection is too large for AI summary review. Choose fewer exchanges or summarize them manually.');
-    }
     return { entry, outputs, candidates, manualOutputs };
 }
 
@@ -46,12 +42,13 @@ async function readResponse(response) {
     catch { throw new SummaryError('OpenAI returned invalid JSON. No summaries were saved.'); }
 }
 
-async function generateOpenAISummary({ apiKey, model, source, kind }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
+async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
     if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(apiKey)) {
         throw new SummaryError('Enter a valid OpenAI API key in Settings.', 'OPENAI_AUTH');
     }
     if (typeof model !== 'string' || !MODEL_PATTERN.test(model)) throw new SummaryError('Enter a valid OpenAI model ID in Settings.');
-    if (typeof source !== 'string' || !source.trim() || source.length > 64000 || !['input', 'output'].includes(kind)) {
+    if (typeof source !== 'string' || !source.length || (!source.trim() && !partial) || source.length > 64000 || !['input', 'output'].includes(kind) ||
+        typeof partial !== 'boolean' || typeof combine !== 'boolean') {
         throw new SummaryError('The recorded summary source or kind is invalid. No request was sent.');
     }
     let response;
@@ -60,7 +57,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind }, { fetchImp
         response = await fetchImpl(ENDPOINT, {
             method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
             headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, input: summaryPrompt(source, kind), max_output_tokens: 1024, store: false })
+            body: JSON.stringify({ model, input: summaryPrompt(source, kind, { partial, combine }), max_output_tokens: 1024, store: false })
         });
         if (response.status === 401) {
             await response.body?.cancel();
@@ -99,6 +96,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind }, { fetchImp
 
 async function main() {
     let input = '';
+    process.stdin.setEncoding('utf8');
     for await (const chunk of process.stdin) {
         input += chunk;
         if (input.length > 4 * 1024 * 1024) throw new SummaryError('Summary request exceeds the size limit.');
