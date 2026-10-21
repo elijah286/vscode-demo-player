@@ -542,6 +542,8 @@ Generation rejects over-budget, unfinished or role-narrated drafts explicitly,
 without slicing text or automatically retrying paid requests.
 Manual and existing summaries retain their **300-character** storage limit.
 The overlay wraps the full saved text and scrolls when resized too short.
+Manual dimensions are retained for both the resize thumb and native window-edge
+resizing, including through playback updates, output-mode changes and Stop.
 History fills in batches of four bubbles per dispatcher tick so wrapping long
 summaries does not monopolize input handling as a conversation grows.
 An older summary already saved mid-word cannot be restored by enlarging the
@@ -988,6 +990,12 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\controller-u
 Run UI tests only on an interactive desktop. It opens and normally closes only
 its own test windows. Evidence and synthetic library files stay in the supplied
 directory and must not be committed.
+Use source-controller mode (omit `-Installed`) for routine tests of a packaged
+payload. Installed-launcher mode holds the app's single-instance mutex and must
+use a coordinated desktop/installation slot, not run alongside the user's app.
+The harness waits for asynchronous saved selections to load after restart and
+stops only its exact failed-test controllers if acceptance fails, so a failed
+test cannot leave the installed-app mutex held.
 
 ## Layout
 

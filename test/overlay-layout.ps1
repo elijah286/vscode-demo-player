@@ -233,6 +233,15 @@ try {
     Arrange-Overlay 820 180
     Assert-Layout ($showElapsed.IsEnabled -and $promptPanel.Visibility -eq 'Visible' -and $conversationPanel.Visibility -eq 'Collapsed') 'Output off must restore legacy mode and toggles.'
     Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1) 'Legacy wide timer position must return.'
+    $handled = $false
+    $null = $script:overlayResizeTracker.OnMessage([IntPtr]::Zero, 0x0005, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$handled)
+    Assert-Layout (-not $script:overlayResizeTracker.NativeResize -and -not $handled) 'Automatic WM_SIZE must not disable automatic sizing or swallow window messages.'
+    $null = $script:overlayResizeTracker.OnMessage([IntPtr]::Zero, 0x0214, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$handled)
+    Assert-Layout ($script:overlayResizeTracker.NativeResize -and -not $handled) 'Native edge/grip sizing must be tracked without intercepting native resizing.'
+    $script:overlayWindow.Width = 480
+    $script:overlayWindow.Height = 260
+    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($script:overlayWindow.Width -eq 480 -and $script:overlayWindow.Height -eq 260) 'Polling and restored legacy mode must retain native manual dimensions just like thumb resizing.'
 
     $controllerPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Show-ReplayController.ps1'
     $tokens = $parseErrors = $null

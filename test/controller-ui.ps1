@@ -246,6 +246,18 @@ function Start-TestPlayer {
     return [pscustomobject]@{ ProcessId = $controller.ProcessId }
 }
 
+function Stop-FailedTestControllers {
+    $owned = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object {
+        $_.CommandLine -and $_.CommandLine.Contains($library) -and
+        ($_.CommandLine.Contains((Join-Path $root 'Show-ReplayController.ps1')) -or
+         $_.CommandLine.Contains((Join-Path $root 'Start-InstalledPlayer.ps1')))
+    })
+    foreach ($candidate in $owned) {
+        Stop-Process -Id $candidate.ProcessId -ErrorAction Stop
+        Write-Warning ('Stopped owned failed-test controller ' + $candidate.ProcessId + '; the real library and unrelated applications were not touched.')
+    }
+}
+
 $tasks = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
 $originalAppData = $env:APPDATA
 $originalProfile = $env:USERPROFILE
@@ -273,10 +285,11 @@ $sdkRecords = @(
     @{ type = 'assistant.turn_end'; timestamp = '2026-10-16T12:00:06Z'; data = @{} }
 )
 [IO.File]::WriteAllText($sdkSource, (($sdkRecords | ForEach-Object { $_ | ConvertTo-Json -Depth 12 -Compress }) -join "`n") + "`n", $utf8)
-$launch = Start-TestPlayer
-$script:controllerId = $launch.ProcessId
+$uiFailed = $false
 $replayId = 0
 try {
+    $launch = Start-TestPlayer
+    $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'standalone controller'
     $play = Find-Element $window 'Id' 'PlayPause'
     if ($play.Current.IsEnabled) { throw 'Play must be disabled without a selected demo.' }
@@ -719,7 +732,8 @@ try {
     if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or
         (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'AI' -or
         (Find-Element $overlay 'Id' 'Message2Label').Current.Name -ne 'You') { throw 'History must preserve all speaker labels.' }
-    if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Next Step moved the fixed timer.' }
+    $nextTimerBounds = (Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle
+    if ([Math]::Abs($nextTimerBounds.Top - $timerTop) -gt 1) { throw ('Next Step moved the fixed timer. Expected top=' + $timerTop + '; actual=' + $nextTimerBounds + '; overlay=' + $overlay.Current.BoundingRectangle) }
     Save-WindowImage $overlay 'conversation-output1-input2.png'
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'second answer complete' | Out-Null
     Wait-Until { (Find-Element $overlay 'Id' 'Message2Text').Current.Name -ceq 'Show the next recorded interaction.' -and
@@ -756,7 +770,7 @@ try {
     $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay after Stop'
     if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -cne $overlaySummary -or
         (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:00:00') { throw 'Stop must restore the selected demo presentation, not stale playback progress.' }
-    if ([Math]::Abs($overlay.Current.BoundingRectangle.Width - $resized.Width) -gt 2 -or [Math]::Abs($overlay.Current.BoundingRectangle.Height - $resized.Height) -gt 2) { throw 'Stop reset the resized overlay.' }
+    if ([Math]::Abs($overlay.Current.BoundingRectangle.Width - $resized.Width) -gt 2 -or [Math]::Abs($overlay.Current.BoundingRectangle.Height - $resized.Height) -gt 2) { throw ('Stop reset the resized overlay. Expected=' + $resized + '; actual=' + $overlay.Current.BoundingRectangle) }
     Save-WindowImage $window 'controller-after-stop.png'
     Invoke-Button $window 'PlayPause'
     $replay = Wait-Until {
@@ -787,13 +801,17 @@ try {
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'persisted selections after restart'
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     $list = Find-Element $dialog 'Id' 'DemoList'
-    if ($list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -ne 2) { throw 'Saved library did not survive application restart.' }
+    Wait-Until {
+        $list = Find-Element $dialog 'Id' 'DemoList'
+        $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 2
+    } 'both saved selections finish loading after application restart' | Out-Null
     ([System.Windows.Automation.WindowPattern]$dialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
     Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, capture/save, rename/select, manual input/output save/reopen/cancel/clear, inclusion cancel/exclude/reinclude with stable summaries/counts, direct synthetic OpenAI settings/consent/review/recovery, retained resize/wrapping, default-off output and Auto continue, Input1 then Input1+Output1 then retained history+Input2 then four bubbles with explicit missing Output2, labeled You/AI, fixed cumulative 00:01:01/00:03:03 timer, Auto continue reading dwell and final-step refusal without Next, manual restart, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, scoped Stop/close, persistence, unchanged edit target. No paid requests or real library/settings changes.'
 } catch {
+    $uiFailed = $true
     Write-Output $_.ScriptStackTrace
     Write-Output $_.Exception.Message
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
@@ -811,8 +829,14 @@ try {
         }
         Save-WindowImage $failedWindow 'failure.png'
     }
+    $failedOverlay = Get-AppWindow 'Playback overlay'
+    if ($failedOverlay) {
+        Write-Output ('Failure overlay bounds: ' + $failedOverlay.Current.BoundingRectangle)
+        Save-WindowImage $failedOverlay 'failure-overlay.png'
+    }
     throw
 } finally {
+    if ($uiFailed) { Stop-FailedTestControllers }
     foreach ($title in @('Generating AI Summaries', 'Review AI Summaries', 'Generate OpenAI Summaries', 'OpenAI Settings', 'Input / Output Summaries', 'Find interaction')) {
         $child = Get-AppWindow $title
         if ($child) { ([System.Windows.Automation.WindowPattern]$child.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close() }
@@ -823,8 +847,10 @@ try {
         $process = Get-Process -Id $replayId -ErrorAction SilentlyContinue
         if ($process) { $process.CloseMainWindow() | Out-Null }
     }
-    foreach ($task in $tasks) {
-        if (-not $task.Wait(3000)) { Write-Warning 'An automation invocation did not finish within its cleanup timeout.' }
+    if (-not $uiFailed) {
+        foreach ($task in $tasks) {
+            if (-not $task.Wait(3000)) { Write-Warning 'An automation invocation did not finish within its cleanup timeout.' }
+        }
     }
     $env:APPDATA = $originalAppData
     $env:USERPROFILE = $originalProfile
