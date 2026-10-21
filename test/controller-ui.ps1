@@ -90,7 +90,7 @@ global.fetch = async (url, options) => {
     const reject = path.join(__dirname, 'reject-next-key');
     if (fs.existsSync(reject)) { fs.unlinkSync(reject); return Response.json({ error: { message: 'Synthetic rejected key' } }, { status: 401 }); }
     if (fs.existsSync(path.join(__dirname, 'delay-summary'))) return new Promise(() => {});
-    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Synthetic OpenAI ' + kind + ' summary.' }] }] });
+    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary: 'Synthetic OpenAI ' + kind + ' summary.' }) }] }] });
 };
 '@)
 $library = Join-Path $evidence 'library'

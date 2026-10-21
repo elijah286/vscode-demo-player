@@ -9,7 +9,7 @@ const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = req
 
 const key = 'synthetic-key-not-a-real-openai-key';
 const request = { apiKey: key, model: DEFAULT_MODEL, source: 'Synthetic user request: name three colors.', kind: 'input' };
-const completed = text => ({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }] });
+const completed = summary => ({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 const reply = body => async () => Response.json(body);
 
 test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or response storage', async () => {
@@ -24,6 +24,14 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
         assert.equal(body.store, false);
         assert.equal(body.max_output_tokens, 1024);
         assert.equal(body.tools, undefined);
+        assert.equal(body.text.format.type, 'json_schema');
+        assert.equal(body.text.format.strict, true);
+        assert.deepEqual(body.text.format.schema.required, ['summary']);
+        assert.equal(body.text.format.schema.additionalProperties, false);
+        const pattern = new RegExp(body.text.format.schema.properties.summary.pattern);
+        assert.ok(pattern.test('x'.repeat(300)));
+        assert.ok(!pattern.test('x'.repeat(301)));
+        assert.ok(!pattern.test('one\ntwo'));
         assert.ok(body.input.endsWith(JSON.stringify(request.source)));
         assert.ok(!options.body.includes(key));
         return Response.json(completed('Name three colors.'));
@@ -95,6 +103,35 @@ test('network failures, refusal, incomplete, empty, multiline, long and oversize
     await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => { throw new Error(key); } }), /could not be reached/);
     await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => new Response('not JSON') }), /invalid JSON/);
     await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => new Response('x'.repeat(65537)) }), /oversized/);
+});
+
+test('certificate, timeout, DNS and other network failures stay distinct without leaking causes or keys', async () => {
+    for (const [name, code, expectedCode, pattern] of [
+        ['TypeError', 'SELF_SIGNED_CERT_IN_CHAIN', 'OPENAI_TLS', /certificate validation failed/],
+        ['TypeError', 'CERT_HAS_EXPIRED', 'OPENAI_TLS', /certificate validation failed/],
+        ['TimeoutError', undefined, 'OPENAI_TIMEOUT', /request timed out/],
+        ['TypeError', 'UND_ERR_CONNECT_TIMEOUT', 'OPENAI_TIMEOUT', /request timed out/],
+        ['TypeError', 'ENOTFOUND', 'OPENAI_DNS', /hostname could not be resolved/],
+        ['TypeError', 'ECONNRESET', 'OPENAI_NETWORK', /network connection failed/]
+    ]) {
+        const failure = Object.assign(new Error(key), { name, cause: Object.assign(new Error('Private cause ' + key), { code }) });
+        let calls = 0;
+        await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => { calls++; throw failure; } }), error => {
+            assert.equal(error.code, expectedCode);
+            assert.match(error.message, pattern);
+            assert.ok(!error.message.includes(key));
+            assert.ok(!error.message.includes('Private cause'));
+            return true;
+        });
+        assert.equal(calls, 1);
+    }
+});
+
+test('structured summaries reject plain prose, missing/extra fields and invalid JSON instead of silently accepting malformed responses', async () => {
+    for (const text of ['Plain summary without JSON', '{}', '{"summary":"Valid text","extra":true}', '{"summary":null}', '[]']) {
+        const body = { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }] };
+        await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(body) }), /invalid structured summary/);
+    }
 });
 
 test('preparation includes short prompts, isolates scopes, filters output and preserves saved values/original bytes', async t => {
