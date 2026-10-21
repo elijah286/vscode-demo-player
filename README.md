@@ -280,6 +280,12 @@ with a 30-second helper limit and conflicting actions disabled until done.
 Request serialization, helper I/O and response decoding run in a background
 runspace, including asynchronous worker startup. The window itself remains
 enabled: searches and independent presentation controls still respond.
+Transport JSON uses the in-box .NET decoder with case-insensitive dictionaries
+and arrays instead of recursively allocating PowerShell note-property wrappers
+for the entire recording. This reduces garbage-collection pauses during large
+responses. Small, explicit WPF view models remain unchanged; values, arrays,
+case-insensitive field access and save/export JSON are preserved. Malformed JSON,
+empty property names and case-ambiguous property names still fail explicitly.
 Slow library operations show an activity label, elapsed seconds, an animated
 indicator and **Cancel operation**. Closing that activity window also cancels.
 Saved selections start loading after the picker is visible, rather than
