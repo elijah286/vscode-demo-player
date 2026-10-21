@@ -28,6 +28,7 @@ $script:NodePath = $NodePath
 $script:CodePath = $CodePath
 . (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
 . (Join-Path $PSScriptRoot 'DemoDialogs.ps1')
+. (Join-Path $PSScriptRoot 'PlayerAI.ps1')
 . (Join-Path $PSScriptRoot 'PlayerUpdates.ps1')
 $profile = $null
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
@@ -111,6 +112,7 @@ if (-not $script:standalone) {
         </ComboBox>
     <DockPanel Grid.Row="11" Margin="0,12,0,0">
       <Button x:Name="CheckUpdates" DockPanel.Dock="Right" Content="Check for updates" Padding="8,0" AutomationProperties.AutomationId="CheckUpdates"/>
+      <Button x:Name="AISettings" DockPanel.Dock="Right" Content="Settings" Padding="8,0" Margin="0,0,6,0" AutomationProperties.AutomationId="AISettings" ToolTip="OpenAI API key and summary model"/>
       <TextBlock x:Name="UpdateNotice" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,8,0" AutomationProperties.AutomationId="UpdateNotice"/>
     </DockPanel>
   </Grid>
@@ -136,6 +138,7 @@ $nextStep = $window.FindName('NextStep')
 $stop = $window.FindName('Stop')
 $chooseDemo = $window.FindName('ChooseDemo')
 $checkUpdates = $window.FindName('CheckUpdates')
+$window.FindName('AISettings').Add_Click({ try { Show-PlayerAISettings $window | Out-Null } catch { Show-DemoError $window $_ } })
 $updateNotice = $window.FindName('UpdateNotice')
 $showPrompt = $window.FindName('ShowPrompt')
 $showElapsed = $window.FindName('ShowElapsed')

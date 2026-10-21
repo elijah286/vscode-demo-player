@@ -73,6 +73,25 @@ $evidence = Join-Path ([System.IO.Path]::GetFullPath($EvidenceRoot)) ('run-' + [
 $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = Join-Path $evidence 'summary-authoring'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 Write-Output ('UI evidence: ' + $evidence)
+$testCodePath = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
+$openAIPreload = Join-Path $evidence 'openai-preload.js'
+[IO.File]::WriteAllText($openAIPreload, @'
+if (!process.argv[1]?.endsWith('openai-summaries.js')) return;
+const fs = require('node:fs');
+const path = require('node:path');
+global.fetch = async (url, options) => {
+    if (url !== 'https://api.openai.com/v1/responses') throw new Error('Unexpected synthetic API endpoint');
+    if (!['synthetic-openai-key-for-ui-tests', 'synthetic-replaced-openai-key-for-ui-tests'].some(key => options.headers.Authorization === 'Bearer ' + key)) throw new Error('Unexpected synthetic key');
+    const body = JSON.parse(options.body);
+    if (body.store !== false || body.tools || options.redirect !== 'error') throw new Error('Unsafe synthetic API request');
+    const kind = body.input.startsWith('Summarize what the recorded assistant') ? 'output' : 'input';
+    fs.appendFileSync(path.join(__dirname, 'openai-requests.jsonl'), JSON.stringify({ kind, model: body.model }) + '\n');
+    const reject = path.join(__dirname, 'reject-next-key');
+    if (fs.existsSync(reject)) { fs.unlinkSync(reject); return Response.json({ error: { message: 'Synthetic rejected key' } }, { status: 401 }); }
+    if (fs.existsSync(path.join(__dirname, 'delay-summary'))) return new Promise(() => {});
+    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Synthetic OpenAI ' + kind + ' summary.' }] }] });
+};
+'@)
 $library = Join-Path $evidence 'library'
 $source = Join-Path $evidence 'synthetic-source.jsonl'
 $target = Join-Path $evidence 'synthetic-target.txt'
@@ -180,11 +199,12 @@ function Start-TestPlayer {
     if (-not $Installed) {
         $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        $start.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + (Join-Path $root 'Show-ReplayController.ps1') + '" -LibraryRoot "' + $library + '" -NodePath "' + $NodePath + '"'
+        $start.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + (Join-Path $root 'Show-ReplayController.ps1') + '" -LibraryRoot "' + $library + '" -NodePath "' + $NodePath + '" -CodePath "' + $testCodePath + '"'
         $start.UseShellExecute = $false
         $start.CreateNoWindow = $true
         $start.RedirectStandardOutput = $true
         $start.RedirectStandardError = $true
+        $start.EnvironmentVariables['NODE_OPTIONS'] = '--require "' + $openAIPreload.Replace('\', '\\') + '"'
         $script:controllerProcess = [Diagnostics.Process]::Start($start)
         $script:controllerOutput = $script:controllerProcess.StandardOutput.ReadToEndAsync()
         $script:controllerErrors = $script:controllerProcess.StandardError.ReadToEndAsync()
@@ -192,8 +212,9 @@ function Start-TestPlayer {
     }
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = Join-Path $root 'VSCodeDemoPlayer.exe'
-    $start.Arguments = '-LibraryRoot "' + $library + '"'
+    $start.Arguments = '-LibraryRoot "' + $library + '" -CodePath "' + $testCodePath + '"'
     $start.UseShellExecute = $false
+    $start.EnvironmentVariables['NODE_OPTIONS'] = '--require "' + $openAIPreload.Replace('\', '\\') + '"'
     $process = [Diagnostics.Process]::Start($start)
     try {
         if (-not $process.WaitForExit(10000) -or $process.ExitCode -ne 0) { throw 'Installed launcher failed to start.' }
@@ -209,8 +230,10 @@ function Start-TestPlayer {
 $tasks = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
 $originalAppData = $env:APPDATA
 $originalProfile = $env:USERPROFILE
+$originalLocalAppData = $env:LOCALAPPDATA
 $env:APPDATA = Join-Path $evidence 'AppData'
 $env:USERPROFILE = Join-Path $evidence 'Home'
+$env:LOCALAPPDATA = Join-Path $evidence 'LocalAppData'
 $storage = Join-Path $env:APPDATA ('Code\User\workspaceStorage\' + ('a' * 32))
 [IO.Directory]::CreateDirectory((Join-Path $storage 'chatSessions')) | Out-Null
 Copy-Item -LiteralPath $source -Destination (Join-Path $storage 'chatSessions\synthetic.jsonl')
@@ -458,40 +481,38 @@ try {
     if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($cleared.recording.outputSummaries) } | Out-Null
+    Invoke-Button $dialog 'AiPromptSummaries'
+    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'missing key prompts inside the player'
+    if (-not (Find-Element $settingsDialog 'Id' 'OpenAIKey').Current.IsPassword) { throw 'API key entry must be masked.' }
+    Find-Element $settingsDialog 'Id' 'OpenAIKeyLink' | Out-Null
+    Invoke-Button $settingsDialog 'CancelOpenAISettings'
+    Wait-Until { -not (Get-AppWindow 'OpenAI Settings') } 'cancel missing key' | Out-Null
+    if (Test-Path -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')) { throw 'Canceling key entry sent an API request.' }
+    Invoke-Button $dialog 'AiPromptSummaries'
+    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'enter synthetic key'
+    ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-openai-key-for-ui-tests')
+    Invoke-Button $settingsDialog 'SaveOpenAISettings'
+    $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'review shown sources before transmission'
+    Invoke-Button $aiConsent 'CancelOpenAIGeneration'
+    Wait-Until { -not (Get-AppWindow 'Generate OpenAI Summaries') } 'decline content transmission' | Out-Null
+    if (Test-Path -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')) { throw 'Declining source consent sent an API request.' }
     foreach ($action in @(
-        @{ Button = 'AiPromptSummaries'; Title = 'AI Input / Output Summaries'; Scope = 'both' },
-        @{ Button = 'AiResponseSummaries'; Title = 'AI Response Summaries'; Scope = 'output' }
+        @{ Button = 'AiPromptSummaries'; Kind = 'input'; Save = $false },
+        @{ Button = 'AiResponseSummaries'; Kind = 'output'; Save = $true }
     )) {
-    $priorAuthoringIds = @(Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) } | Select-Object -ExpandProperty ProcessId)
-    Invoke-Button $dialog $action.Button
-    $aiConsent = Wait-Until { Get-AppWindow $action.Title } 'AI authoring setup notice'
-    Invoke-DialogButton $aiConsent 'OK'
-    $authoring = Wait-Until {
-        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object {
-            $_.CommandLine -and $_.CommandLine.Contains($root) -and $_.CommandLine.Contains($env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT) -and
-            $_.CommandLine -notlike '*--type=*' -and $_.ProcessId -notin $priorAuthoringIds
-        } | Select-Object -First 1
-    } 'separate isolated AI authoring process'
-    $authoringId = [int]$authoring.ProcessId
-    Wait-Until {
-        $requests = Get-ChildItem -LiteralPath (Join-Path $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT 'requests') -Filter '*.json' -File
-        foreach ($queued in $requests) {
-            $request = Get-Content -LiteralPath $queued.FullName -Raw | ConvertFrom-Json
-            $requestScope = if ($request.scope) { $request.scope } else { 'both' }
-            if ($request.file -eq (Join-Path $library ($summaryEntry.id + '.demo.json')) -and $requestScope -eq $action.Scope) { return $true }
-        }
-        return $false
-    } 'authoring launch queues the correct scoped request' | Out-Null
-    Wait-Until { (Get-Process -Id $authoringId).MainWindowHandle -ne [IntPtr]::Zero } 'AI authoring workbench window' 30 | Out-Null
-    if (-not (Get-Process -Id $authoringId).WaitForInputIdle(5000)) { throw 'AI authoring window did not become responsive.' }
-    Wait-Until {
-        $ownedAuthoring = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
-        if (-not $ownedAuthoring) { return $true }
-        if ($ownedAuthoring.MainWindowHandle -ne [IntPtr]::Zero) { $ownedAuthoring.CloseMainWindow() | Out-Null }
-        return $ownedAuthoring.WaitForExit(1000)
-    } 'dismiss setup dialogs and close only the synthetic authoring window' 60 | Out-Null
-    $authoringId = 0
+        Invoke-Button $dialog $action.Button
+        $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'saved key reused without prompting'
+        Invoke-Button $aiConsent 'ConfirmOpenAIGeneration'
+        $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'OpenAI drafts reviewed in the player'
+        $draft = (Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        if ($draft -ne ('Synthetic OpenAI ' + $action.Kind + ' summary.')) { throw 'The generated draft is missing from the review dialog.' }
+        if ($action.Save) { Invoke-Button $review 'SaveSummaries' } else { Invoke-Button $review 'Cancel' }
+        Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'close AI draft review' | Out-Null
     }
+    $generatedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    if ($generatedEntry.recording.promptSummaries[0] -cne $overlaySummary -or $generatedEntry.recording.promptSummaries[1] -or
+        $generatedEntry.recording.outputSummaries[1] -cne 'Synthetic OpenAI output summary.') { throw 'AI save/cancel did not preserve its scope or existing manual summaries.' }
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($generatedEntry.recording.outputSummaries) } | Out-Null
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
     $selectedControls = Wait-Until {
@@ -505,18 +526,61 @@ try {
     } 'selected demo and both presentation controls ready'
     if ($selectedControls.PlayPause.Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
     foreach ($action in @(
-        @{ Id = 'GeneratePromptSummaries'; Title = 'AI Prompt Summaries' },
-        @{ Id = 'GenerateOutputSummaries'; Title = 'AI Response Summaries' }
+        @{ Id = 'GeneratePromptSummaries' },
+        @{ Id = 'GenerateOutputSummaries' }
     )) {
         $link = Wait-Until {
             $candidate = Find-Element $window 'Id' $action.Id
             if ($candidate.Current.IsEnabled -and $candidate.Current.Name -match '\(1/2\)$') { return $candidate }
         } 'controller links display separate saved summaries out of total exchanges'
         Invoke-Button $window $action.Id
-        $notice = Wait-Until { Get-AppWindow $action.Title } 'scoped controller authoring notice'
-        Invoke-DialogButton $notice 'Cancel'
-        Wait-Until { -not (Get-AppWindow $action.Title) } 'controller authoring cancellation' | Out-Null
+        $notice = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'scoped controller consent'
+        Invoke-Button $notice 'CancelOpenAIGeneration'
+        Wait-Until { -not (Get-AppWindow 'Generate OpenAI Summaries') } 'controller authoring cancellation' | Out-Null
     }
+    $settingsButton = Find-Element $window 'Id' 'AISettings'
+    if ($settingsButton.Current.BoundingRectangle.Right -gt (Find-Element $window 'Id' 'CheckUpdates').Current.BoundingRectangle.Left) { throw 'Settings must be left of Check for updates.' }
+    Invoke-Button $window 'AISettings'
+    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'manage saved key'
+    $settingsPath = Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\ai-settings.json'
+    if ([IO.File]::ReadAllText($settingsPath).Contains('synthetic-openai-key-for-ui-tests')) { throw 'The settings file contains a plaintext key.' }
+    Invoke-Button $settingsDialog 'DeleteOpenAIKey'
+    Wait-Until { -not (Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json).encryptedKey } 'saved key deletion' | Out-Null
+    Invoke-Button $settingsDialog 'CancelOpenAISettings'
+    Wait-Until { -not (Get-AppWindow 'OpenAI Settings') } 'close settings after deletion' | Out-Null
+    Invoke-Button $window 'GeneratePromptSummaries'
+    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'generation prompts again after deletion'
+    ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-openai-key-for-ui-tests')
+    Invoke-Button $settingsDialog 'SaveOpenAISettings'
+    $notice = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'rejected key test consent'
+    [IO.File]::WriteAllText((Join-Path $evidence 'reject-next-key'), 'synthetic')
+    Invoke-Button $notice 'ConfirmOpenAIGeneration'
+    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'rejected key prompts for replacement'
+    if ((Find-Element $settingsDialog 'Id' 'OpenAISettingsError').Current.Name -notlike '*rejected*') { throw 'Rejected key is not reported explicitly.' }
+    ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-replaced-openai-key-for-ui-tests')
+    Invoke-Button $settingsDialog 'SaveOpenAISettings'
+    Wait-Until { -not (Get-AppWindow 'OpenAI Settings') } 'replacement saved without automatic paid retry' | Out-Null
+    if (Get-AppWindow 'Review AI Summaries') { throw 'Rejected-key generation must not create reviewable success.' }
+    Invoke-Button $window 'GeneratePromptSummaries'
+    $notice = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'explicit retry after key replacement'
+    Invoke-Button $notice 'ConfirmOpenAIGeneration'
+    $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'prompt-only AI review'
+    Invoke-Button $review 'SaveSummaries'
+    Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'AI prompt save' | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'GeneratePromptSummaries').Current.Name -match '\(2/2\)$' } 'AI prompt save updates the counter' | Out-Null
+    $generatedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    if ($generatedEntry.recording.promptSummaries[1] -ne 'Synthetic OpenAI input summary.') { throw 'AI prompt summary was not saved.' }
+    Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($generatedEntry.recording.promptSummaries) } | Out-Null
+    [IO.File]::WriteAllText((Join-Path $evidence 'delay-summary'), 'synthetic')
+    Invoke-Button $window 'GenerateOutputSummaries'
+    $notice = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'generation cancellation consent'
+    Invoke-Button $notice 'ConfirmOpenAIGeneration'
+    $generating = Wait-Until { Get-AppWindow 'Generating AI Summaries' } 'cancellable OpenAI request'
+    Invoke-Button $generating 'CancelOpenAISummaryProgress'
+    Wait-Until { -not (Get-AppWindow 'Generating AI Summaries') -and (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'cancel request restores the controller' | Out-Null
+    Remove-Item -LiteralPath (Join-Path $evidence 'delay-summary')
+    if (Get-AppWindow 'Review AI Summaries') { throw 'Canceled generation opened a partial review.' }
+    Write-Output 'OPENAI UI PASSED: masked key/link, consent cancellation, encrypted retention/delete/re-prompt, rejected-key replacement, explicit retry, combined/prompt/output drafts, save/cancel, counters, progress cancellation, Settings left of updates. All HTTP responses synthetic; no real API key or paid request.'
     $countEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, 'Manually saved second reply'); expected = @($countEntry.recording.outputSummaries) } | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes external summary save without reselecting' | Out-Null
@@ -652,26 +716,28 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual input/output save/reopen/cancel/clear, isolated AI authoring launch/close, overlay resize/wrapping/retained size, default-off conversation checkbox, Input1 then Input1+Output1 then Output1+Input2 then Input2+missing-output guidance, labeled You/AI bubbles, fixed top cumulative 00:01:01/00:03:03 timer, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual input/output save/reopen/cancel/clear, direct OpenAI key/settings/consent/generation/review/cancellation/recovery, overlay resize/wrapping/retained size, default-off conversation checkbox, Input1 then Input1+Output1 then Output1+Input2 then Input2+missing-output guidance, labeled You/AI bubbles, fixed top cumulative 00:01:01/00:03:03 timer, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, unchanged edit target.'
 } catch {
+    Write-Output $_.ScriptStackTrace
+    Write-Output $_.Exception.Message
     if ($script:controllerProcess -and $script:controllerProcess.HasExited) {
         Write-Output ('Controller output: ' + $script:controllerOutput.GetAwaiter().GetResult())
         Write-Output ('Controller error: ' + $script:controllerErrors.GetAwaiter().GetResult())
     }
     $failedWindow = Get-AppWindow 'Demo Player'
     if ($failedWindow) {
-        $failedStatus = Find-Element $failedWindow 'Id' 'Status'
-        Write-Output ('Controller status: ' + $failedStatus.Current.Name + ' | ' + $failedStatus.Current.HelpText)
+        $statusCondition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'Status')
+        $failedStatus = $failedWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $statusCondition)
+        if ($failedStatus) { Write-Output ('Controller status: ' + $failedStatus.Current.Name + ' | ' + $failedStatus.Current.HelpText) }
+        else {
+            $failedWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+                ForEach-Object { Write-Output ('Failure dialog: ' + $_.Current.Name) }
+        }
         Save-WindowImage $failedWindow 'failure.png'
     }
-    Write-Output $_.ScriptStackTrace
     throw
 } finally {
-    if ($authoringId) {
-        $authoringProcess = Get-Process -Id $authoringId -ErrorAction SilentlyContinue
-        if ($authoringProcess) { $authoringProcess.CloseMainWindow() | Out-Null }
-    }
-    foreach ($title in @('Input / Output Summaries', 'Find interaction')) {
+    foreach ($title in @('Generating AI Summaries', 'Review AI Summaries', 'Generate OpenAI Summaries', 'OpenAI Settings', 'Input / Output Summaries', 'Find interaction')) {
         $child = Get-AppWindow $title
         if ($child) { ([System.Windows.Automation.WindowPattern]$child.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close() }
     }
@@ -686,4 +752,5 @@ try {
     }
     $env:APPDATA = $originalAppData
     $env:USERPROFILE = $originalProfile
+    $env:LOCALAPPDATA = $originalLocalAppData
 }
