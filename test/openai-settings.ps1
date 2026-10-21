@@ -53,7 +53,48 @@ try {
         Assert-True ($dialog.FindName('Key').Password -eq '') 'A saved key is never placed into the UI field.'
         Assert-True ($dialog.FindName('KeyLink').Inlines.FirstInline.Text -like '*platform.openai.com/api-keys*') 'The key dialog links to OpenAI key management.'
     } finally { $dialog.Close() }
-    Write-Output ('OPENAI SETTINGS PASSED: ' + $assertions + ' assertions; current-user DPAPI, atomic replacement/delete, masked entry and OpenAI link. No real key or network request.')
+    $unicodeSource = ('x' * 63999) + [char]::ConvertFromUtf32(0x1F642) + ('y' * 64001)
+    $parts = @(Split-PlayerAISummarySource $unicodeSource)
+    Assert-True (($parts -join '') -ceq $unicodeSource) 'Chunking must preserve every original character in order.'
+    Assert-True (@($parts | Where-Object { $_.Length -gt 64000 }).Count -eq 0) 'Every API source part is bounded.'
+    Assert-True ($parts[0].Length -eq 63999) 'Chunk boundaries must not split a UTF-16 surrogate pair.'
+    $progress = [pscustomobject]@{ Label = [pscustomobject]@{ Text = '' } }
+    $progress | Add-Member -MemberType ScriptMethod -Name FindName -Value { param($Name) return $this.Label }
+    $originalInvoke = ${function:Invoke-DemoLibrary}
+    try {
+        function Invoke-DemoLibrary($Request, $Owner, [string]$Helper, [int]$TimeoutSeconds, [switch]$KeepOwnerEnabled) {
+            $script:summaryCalls.Add($Request)
+            if ($script:failSummaryCall -and $script:summaryCalls.Count -eq $script:failSummaryCall) { throw 'Synthetic part failure.' }
+            return ('s' * 300)
+        }
+        foreach ($kind in @('input', 'output')) {
+            $script:summaryCalls = [Collections.Generic.List[object]]::new()
+            $script:failSummaryCall = 0
+            $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = $kind; source = $unicodeSource }) $progress $key 'gpt-4.1-mini'
+            Assert-True ($result.Length -eq 300) 'A long source produces one final overlay summary.'
+            Assert-True ($summaryCalls.Count -eq 4) 'Three source parts are summarized and then combined once.'
+            Assert-True (@($summaryCalls | Where-Object { $_.source.Length -gt 64000 }).Count -eq 0) 'Every helper request stays within the API input budget.'
+            Assert-True (($summaryCalls[0..2].source -join '') -ceq $unicodeSource) 'All original source parts reach the helper without truncation.'
+            Assert-True (@($summaryCalls | Where-Object { $_.kind -ne $kind }).Count -eq 0) 'Input/output kind is preserved through reduction.'
+            Assert-True ($summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Source parts have explicit incomplete-context instructions.'
+            Assert-True ($summaryCalls[3].combine -and -not $summaryCalls[3].partial) 'Final reduction combines notes rather than claiming they are original output.'
+        }
+        $script:summaryCalls = [Collections.Generic.List[object]]::new()
+        $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'output'; source = ('x' * (64000 * 214)) }) $progress $key 'gpt-4.1-mini'
+        Assert-True ($summaryCalls.Count -eq 217 -and $result.Length -eq 300) 'Large note sets are reduced over bounded intermediate levels, not rejected.'
+        Assert-True (@($summaryCalls | Where-Object { $_.source.Length -gt 64000 }).Count -eq 0) 'Intermediate reduction requests are bounded too.'
+        $script:summaryCalls = [Collections.Generic.List[object]]::new()
+        $script:failSummaryCall = 2
+        $failed = $false
+        try { Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'output'; source = $unicodeSource }) $progress $key 'gpt-4.1-mini' | Out-Null }
+        catch { $failed = $_.Exception.Message -eq 'Synthetic part failure.' }
+        Assert-True ($failed -and $summaryCalls.Count -eq 2) 'A part failure stops generation explicitly without retrying or producing a partial draft.'
+        $script:summaryCalls = [Collections.Generic.List[object]]::new()
+        $script:failSummaryCall = 0
+        Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'input'; source = 'Short prompt.' }) $progress $key 'gpt-4.1-mini' | Out-Null
+        Assert-True ($summaryCalls.Count -eq 1 -and -not $summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Short sources still use exactly one request without reduction.'
+    } finally { ${function:Invoke-DemoLibrary} = $originalInvoke }
+    Write-Output ('OPENAI SETTINGS/SOURCE CHUNKING PASSED: ' + $assertions + ' assertions; DPAPI, key controls, exact source coverage, Unicode boundaries, bounded multi-level reduction and explicit part failures. No real key or network request.')
 } finally {
     $env:LOCALAPPDATA = $original
     Remove-Item -LiteralPath $scratch -Recurse -Force

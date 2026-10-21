@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.15](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.15/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.16](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.16/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -533,7 +533,7 @@ the key at OpenAI if it may have been exposed. Older VS Code authoring profiles
 are left untouched and are no longer used by application AI actions.
 
 **Summarize inputs / outputs with AI...** on either picker tab generates the
-missing prompts and supported outputs in the current selection. Each summary
+missing prompts and supported outputs in the current selection. Each short source
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
@@ -547,11 +547,19 @@ local and unchanged, but the consented text is sent to OpenAI.
 
 Progress identifies the exchange and summary kind. **Cancel** stops the helper;
 already sent requests may still incur charges. There is a 90-second limit per
-request and no automatic retries. A rejected key opens replacement settings;
+request and no automatic retries. Starting with v0.2.16, long sources are automatically split into
+parts of at most 64,000 characters. Each part is summarized in order, then
+intermediate summaries are combined into one overlay summary with additional
+bounded requests; no original source is silently truncated. Both source and
+combination requests incur API charges and are covered by the source-consent
+notice. Progress shows source/combination phase and part number; cancellation
+or any part failure stops the batch without saving partial drafts. Short
+sources still use one request each, with no cap on their aggregate batch size.
+A rejected key opens replacement settings;
 save a replacement and explicitly start generation again. Billing, access,
 network and invalid-output failures are reported explicitly. Cancellation or
-failure saves no partial batch. Sources are limited to 64,000 characters each
-and 1 MiB of source characters per batch; choose fewer exchanges if needed.
+failure saves no partial batch. Existing recording storage limits still apply;
+the former 64,000-character source / 1 MiB whole-selection rejection is removed.
 
 After successful generation, **Review AI Summaries** opens the existing
 input/output editor with generated drafts, original source previews and a live

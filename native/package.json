@@ -2,7 +2,7 @@
   "name": "historical-transcript-replay",
   "displayName": "Transcript Playback",
   "description": "Replay original local chat transcripts in the native VS Code interface without model or tool execution.",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "publisher": "local",
   "engines": {
     "vscode": "^1.140.0"
