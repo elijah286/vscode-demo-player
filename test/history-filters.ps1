@@ -514,9 +514,10 @@ try {
         outputSummaries = @('First recorded result', 'Second recorded result')
     } }
     $outputs = @('First original answer', 'Second original answer')
-    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Index = -1 }
+    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Included = @($true, $true); Index = -1 }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
+    $include = $dialog.FindName('Include')
     foreach ($label in @('Exchange 1 - Input', 'Exchange 1 - Output', 'Exchange 2 - Input', 'Exchange 2 - Output')) {
         $exchange.Items.Add($label) | Out-Null
     }
@@ -585,4 +586,30 @@ try {
     Assert-Equal $dialog.Tag.Summaries[0] 'Replacement draft' 'Editing after clear can save a new summary'
     Assert-Equal ($null -eq $dialog.Tag.Summaries[1]) $true 'Editing one draft keeps other drafts cleared'
 } finally { $dialog.Close() }
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'PlayerAI.ps1')
+$script:summaryRequests = [Collections.Generic.List[object]]::new()
+function Invoke-DemoLibrary($Request, $Owner, $Helper, $TimeoutSeconds, [switch]$KeepOwnerEnabled) {
+    $script:summaryRequests.Add($Request)
+    if ($Request.combine) {
+        Assert-Equal ($Request.source.Contains('Should I use blue or green?')) $true 'Final original question survives even when a partial model omitted it'
+        return 'Should I use blue or green?'
+    }
+    return 'A partial summary without a question.'
+}
+$progressDialog = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><TextBlock x:Name="Progress"/></Window>
+'@ $null
+try {
+    $source = ('Saved context. ' * 5000) + 'Should I use blue or green?'
+    $result = Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'output'; source = $source }) $progressDialog 'synthetic-key' 'synthetic-model'
+    Assert-Equal $result 'Should I use blue or green?' 'Chunk/combined pipeline keeps final question and alternatives'
+    Assert-Equal $script:summaryRequests.Count 3 'Two chunks combine in one bounded request'
+    Assert-Equal (@($script:summaryRequests | Where-Object { $_.source.Length -gt 64000 }).Count) 0 'Closing context must respect source-size cap'
+    Assert-Equal ((@(Split-PlayerAISummarySource $source)) -join '') $source 'Chunking preserves every source character'
+    $surrogates = ('x' * 63999) + [char]0xD83D + [char]0xDE00 + 'tail'
+    $parts = @(Split-PlayerAISummarySource $surrogates)
+    Assert-Equal $parts[0].Length 63999 'Chunk boundary must not split a surrogate pair'
+    Assert-Equal ($parts -join '') $surrogates 'Unicode chunking is lossless'
+} finally { $progressDialog.Close() }
 Write-Output ('HISTORY FILTER/SELECTION/XAML CHECKS PASSED: ' + $count + ' assertions; no desktop window was displayed.')

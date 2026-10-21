@@ -1,4 +1,4 @@
-const { readEntry, validatePromptSummaries } = require('./demo-library');
+const { readEntry, validatePromptSummaries, includedTurnIndices } = require('./demo-library');
 const { recordedOutput, summaryPrompt } = require('./prompt-summary-authoring');
 
 const ENDPOINT = 'https://api.openai.com/v1/responses';
@@ -14,14 +14,15 @@ async function prepareSummaries(root, id, scope) {
     const entry = await readEntry(root, id);
     const candidates = [];
     const manualOutputs = [];
+    const included = new Set(includedTurnIndices(entry.recording));
     const outputs = entry.recording.turns.map((turn, index) => {
         const request = turn.snapshot.requests[0];
         const output = recordedOutput(request);
         const source = output.text + '\n\n' + output.notice;
-        if (scope !== 'output' && !entry.recording.promptSummaries?.[index]) {
+        if (included.has(index) && scope !== 'output' && !entry.recording.promptSummaries?.[index]) {
             candidates.push({ index, kind: 'input', source: request.message.text });
         }
-        if (scope !== 'input' && !entry.recording.outputSummaries?.[index]) {
+        if (included.has(index) && scope !== 'input' && !entry.recording.outputSummaries?.[index]) {
             if (output.text) candidates.push({ index, kind: 'output', source });
             else manualOutputs.push(index + 1);
         }

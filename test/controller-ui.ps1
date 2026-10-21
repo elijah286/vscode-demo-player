@@ -490,8 +490,23 @@ try {
     $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'reopen summary editor'
     if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $overlaySummary) { throw 'Summary editor did not reload the saved summary.' }
     (Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Unsaved draft')
+    ([System.Windows.Automation.TogglePattern](Find-Element $summaryDialog 'Id' 'IncludeInPlayback').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Invoke-Button $summaryDialog 'Cancel'
     Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'cancel summary edit' | Out-Null
+    if (@((Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }).recording.playbackIncluded | Where-Object { $_ -eq $false }).Count) { throw 'Cancel wrote inclusion drafts.' }
+    Invoke-Button $dialog 'EditPromptSummaries'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'inclusion editor'
+    ([System.Windows.Automation.TogglePattern](Find-Element $summaryDialog 'Id' 'IncludeInPlayback').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Invoke-Button $summaryDialog 'SaveSummaries'
+    Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'inclusion saved' | Out-Null
+    $excluded = Invoke-DemoLibrary @{ command = 'metadata'; id = $summaryEntry.id }
+    if ($excluded.count -ne 1 -or $excluded.totalCount -ne 2 -or $excluded.presentation.overlay.promptSummary -ne 'Show the next recorded interaction.') { throw 'Exclusion must change playback/count, not shift summary alignment.' }
+    Invoke-Button $dialog 'EditPromptSummaries'
+    $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'reinclude original exchange'
+    if ((Find-Element $summaryDialog 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -cne $overlaySummary) { throw 'Excluded original summary disappeared from editor.' }
+    ([System.Windows.Automation.TogglePattern](Find-Element $summaryDialog 'Id' 'IncludeInPlayback').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Invoke-Button $summaryDialog 'SaveSummaries'
+    Wait-Until { -not (Get-AppWindow 'Input / Output Summaries') } 'reinclusion saved' | Out-Null
     Invoke-Button $dialog 'EditPromptSummaries'
     $summaryDialog = Wait-Until { Get-AppWindow 'Input / Output Summaries' } 'summary clear draft editor'
     Invoke-Button $summaryDialog 'ClearSummaryDrafts'
@@ -699,15 +714,16 @@ try {
     if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Completion moved the fixed timer.' }
     Save-WindowImage $overlay 'conversation-input1-output1.png'
     Invoke-Button $window 'NextStep'
-    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $outputSummary -and
-        (Find-Element $overlay 'Id' 'SecondText').Current.Name -ceq 'Show the next recorded interaction.' } 'Output1 replaces Input1 above Input2' | Out-Null
-    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'AI' -or
-        (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'You') { throw 'Next must swap speaker alignment and labels.' }
+    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary -and
+        (Find-Element $overlay 'Id' 'Message2Text').Current.Name -ceq 'Show the next recorded interaction.' } 'Input2 appends below retained Input1 and Output1' | Out-Null
+    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or
+        (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'AI' -or
+        (Find-Element $overlay 'Id' 'Message2Label').Current.Name -ne 'You') { throw 'History must preserve all speaker labels.' }
     if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Next Step moved the fixed timer.' }
     Save-WindowImage $overlay 'conversation-output1-input2.png'
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'second answer complete' | Out-Null
-    Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq 'Show the next recorded interaction.' -and
-        (Find-Element $overlay 'Id' 'SecondText').Current.Name -like '*summary missing*' } 'Input2 plus explicit missing Output2 replaces previous context' | Out-Null
+    Wait-Until { (Find-Element $overlay 'Id' 'Message2Text').Current.Name -ceq 'Show the next recorded interaction.' -and
+        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -like '*summary missing*' } 'Missing Output2 appends to four-message history' | Out-Null
     if ((Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:03:03' -or
         [Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Final output changed fixed cumulative timer semantics.' }
     Save-WindowImage $overlay 'conversation-input2-missing-output2.png'
@@ -717,6 +733,18 @@ try {
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Start Over restarts the selected demo' | Out-Null
     Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary } 'Start Over resets conversation to Input1' | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'Start Over returns to first exchange' | Out-Null
+    $auto = Find-Element $window 'Id' 'AutoContinue'
+    $autoPattern = [System.Windows.Automation.TogglePattern]$auto.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    if ($autoPattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Auto continue must default off.' }
+    $dwell = [Diagnostics.Stopwatch]::StartNew()
+    $autoPattern.Toggle()
+    Start-Sleep -Milliseconds 1000
+    if ((Find-Element $window 'Id' 'Status').Current.Name -ne 'Exchange complete  1/2') { throw 'Auto continue skipped newly revealed output before reading dwell.' }
+    Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'Auto continue finishes final exchange without Next Step' 30 | Out-Null
+    if ($dwell.Elapsed.TotalSeconds -lt 2 -or (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Auto continue missed dwell or looped after last exchange.' }
+    $autoPattern.Toggle()
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'manual restart after auto run' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Wait-Until { (Find-Element $overlay 'Id' 'PromptText').Current.Name -ceq $overlaySummary -and $showElapsed.Current.IsEnabled } 'output off restores legacy input-only mode and elapsed choice' | Out-Null
     Invoke-Button $window 'Stop'
@@ -764,7 +792,7 @@ try {
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, SDK raw-event preview, native capture/save, rename/select, manual input/output save/reopen/cancel/clear, direct OpenAI key/settings/consent/generation/review/cancellation/recovery, overlay resize/wrapping/retained size, default-off conversation checkbox, Input1 then Input1+Output1 then Output1+Input2 then Input2+missing-output guidance, labeled You/AI bubbles, fixed top cumulative 00:01:01/00:03:03 timer, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, final-step refusal, Start Over, scoped Stop, target closure/reopen, paused close, persistence, unchanged edit target.'
+    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, capture/save, rename/select, manual input/output save/reopen/cancel/clear, inclusion cancel/exclude/reinclude with stable summaries/counts, direct synthetic OpenAI settings/consent/review/recovery, retained resize/wrapping, default-off output and Auto continue, Input1 then Input1+Output1 then retained history+Input2 then four bubbles with explicit missing Output2, labeled You/AI, fixed cumulative 00:01:01/00:03:03 timer, Auto continue reading dwell and final-step refusal without Next, manual restart, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, scoped Stop/close, persistence, unchanged edit target. No paid requests or real library/settings changes.'
 } catch {
     Write-Output $_.ScriptStackTrace
     Write-Output $_.Exception.Message

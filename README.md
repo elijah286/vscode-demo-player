@@ -455,8 +455,8 @@ available width and adjusts its height to fit, bounded by the screen work area.
 Your chosen dimensions survive prompt
 updates, checkbox changes, Stop, and mode switches within that controller session.
 
-**Show summary of output** is also off by default. Enable it for a bounded
-two-message conversation overlay: a right-aligned blue **You** input bubble and
+**Show summary of output** is also off by default. Enable it for a scrolling
+text-message history: right-aligned blue **You** input bubbles and
 a left-aligned neutral **AI** output bubble, each with a contrasting text label.
 This mode includes the input even if **Show prompt summary** is unchecked, and
 always pins working time at the top at every width. **Show elapsed time** is
@@ -466,14 +466,25 @@ The timer itself never animates or moves with the bubbles.
 
 The first input appears before playback. Only after the entire recorded reply
 finishes, a down arrow and its reviewed output summary appear below that input.
-**Next Step** moves the latest output above the new input; the next completion
-replaces that older context with the current input and output. At most two
-messages are retained, not an accumulating transcript. Brief fade/slide
-transitions honor the Windows client-area animation preference. Polling and
+**Next Step** appends the next input at the bottom. Previous messages remain,
+bounded to the current recording (at most 100 included exchanges / 200 bubbles).
+The view follows new inputs. Outputs follow the bottom only if you were already
+near it (within 24 layout units), so reading older messages is not interrupted.
+Automatic height grows with short history up to 600 layout units or the available
+work area; longer history scrolls below the fixed timer. Manual resizing is retained.
+Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
 reset the conversation deterministically. A missing/deleted output summary
 shows explicit guidance to generate or edit it before playback, never an
 invented success or a paraphrase of the user request.
+
+**Auto continue** defaults off. When enabled, a completed exchange waits for a
+nonblocking reading dwell before advancing: one second plus one second per 35
+visible-summary characters, bounded to 2-10 seconds. Output mode uses the newly
+revealed output summary; prompt-only mode uses the visible input. Unchecking,
+manual Next Step, Pause/Start Over, Stop, selection/mode changes, or connection
+failure cancel pending advancement. It never advances from preparation, ready,
+paused or faulted states, and the last exchange finishes without looping.
 
 Run the responsive layout regression without opening interactive windows:
 
@@ -490,6 +501,30 @@ use its original excerpt; blank output remains explicitly missing. Then **Save s
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn, and optional `outputSummaries` (one string or `null` per turn).
 Legacy packages and playlists without output fields still load.
+
+The editor's **Include in playback** checkbox belongs to the original exchange
+(both its input and output), not its summary. Excluded exchanges remain visible
+and editable here for re-inclusion. The included/total count updates in the editor;
+at least one exchange must remain included. Save commits inclusion and summaries
+atomically with stale-editor protection; Cancel writes nothing. Next-run playback,
+timing, progress, generation candidates and summary-link counts use included
+exchanges only, in their original saved order. The complete recording, source
+indices, payload hashes and all summaries remain unchanged by exclusion.
+Export/import preserves the optional `playbackIncluded` boolean array aligned to
+the original saved turns; legacy recordings include every turn.
+
+Output summaries must preserve the actual question the assistant asked, including
+alternatives or a requested decision, especially the final question answered by a
+following "yes"/"no". Both provider prompts (including partial/combined requests)
+and review guidance require this, retain speaker voice and forbid invented
+questions or successful outcomes. Existing saved summaries are not rewritten or
+sent for paid regeneration automatically. Review/edit them manually, or explicitly
+delete and save the relevant summary, then generate its missing replacement and
+review before saving.
+For long OpenAI output sources, every combination request also retains up to
+3,600 trailing characters of the original assistant source as verbatim grounding,
+so its closing question/choices do not depend solely on a partial model summary.
+This is part of the already displayed/consented source, not another exchange.
 
 Use **Clear all summaries...** in the interaction picker to remove all saved overlay
 summaries, including AI-generated and manually edited summaries, after

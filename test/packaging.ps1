@@ -64,6 +64,10 @@ function Test-ControllerFailures {
     }, $true)
     Assert-Equal ($null -ne $tickNode -and $null -ne $clickNode -and $null -ne $stopNode) $true 'Production lifecycle handlers exist'
     $tick = $tickNode.Arguments[0].ScriptBlock.GetScriptBlock()
+    $cancelNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Cancel-AutoContinue'
+    }, $true)
+    ${function:Cancel-AutoContinue} = $cancelNode.Body.GetScriptBlock()
     ${function:Request-Stop} = $stopNode.Body.GetScriptBlock()
     function Test-ReplayAlive { return $script:alive }
     function Reset-ReplaySession { $script:resetObserved = $true }

@@ -40,6 +40,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 <h1>Review input/output summaries</h1>
 <p>Compare each AI draft with its recorded source. Edit, approve, or delete the summary only.
 Playback keeps full originals. Deleted input summaries use excerpts; deleted outputs show an actionable missing-summary notice.</p>
+<p>Keep the speaker's voice and short replies. For AI output, preserve the actual question asked and its alternatives/decision, especially the final question that a following yes/no answers. Do not invent questions or success. Existing saved summaries are never regenerated automatically.</p>
 <main><nav aria-label="Generated summaries"><label for="exchanges">Exchanges</label><select id="exchanges" size="10"></select></nav>
 <section aria-label="Summary comparison">
 <h2 id="heading"></h2>

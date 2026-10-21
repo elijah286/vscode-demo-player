@@ -68,6 +68,10 @@ test('partial and combined requests preserve source kind and qualify incomplete 
                 assert.match(body.input, /only one segment of a longer source/);
                 assert.match(body.input, /preserving failures, uncertainty and qualifications/);
                 if (kind === 'output') assert.match(body.input, /Do not assume the user request succeeded/);
+                if (kind === 'output') {
+                    assert.match(body.input, /actual question and alternatives or decision/);
+                    assert.match(body.input, /ALL recorded questions\/alternatives, especially the last question/);
+                }
                 assert.ok(body.input.endsWith(JSON.stringify(request.source)));
                 return Response.json(completed('A qualified partial summary.'));
             }

@@ -152,6 +152,7 @@ test('conversation advances only on explicit completion, with bounded identities
     assert.equal(ready.completed, false);
     assert.equal(ready.exchange, 1);
     assert.equal(ready.previousOutputSummary, null);
+    assert.deepEqual(ready.history, [{ id: '0:input', input: true, text: 'Input1' }]);
     state.phase = 'response';
     state.responseOrigin = 0;
     state.clock = { now: () => 5000, paused: false };
@@ -164,7 +165,9 @@ test('conversation advances only on explicit completion, with bounded identities
     assert.equal(complete.completed, true);
     assert.notEqual(complete.key, ready.key);
     assert.deepEqual(read().conversation, complete);
+    assert.deepEqual(complete.history.map(message => message.text), ['Input1', 'Output1']);
     state.phase = 'typing';
+    assert.deepEqual(read().conversation.history.map(message => message.text), ['Input1', 'Output1', 'Input2']);
     assert.equal(read().conversation.previousOutputSummary, 'Output1');
     assert.equal(read().promptSummary, 'Input2');
     assert.equal(read().elapsed, '00:01:00');
@@ -175,6 +178,7 @@ test('conversation advances only on explicit completion, with bounded identities
     assert.equal(read().conversation.previousOutputSummary, 'Output2');
     assert.equal(read().promptSummary, 'Input3');
     state.phase = 'complete'; state.turnIndex = 3;
+    assert.deepEqual(read().conversation.history.map(message => message.text), ['Input1', 'Output1', 'Input2', 'Output2', 'Input3', null]);
     assert.equal(read().conversation.outputSummary, null, 'Missing output is explicit, never replaced by the input or invented success');
     for (const phase of ['error', 'stopping', 'stopped']) {
         state.phase = phase; assert.equal(read().conversation.active, false);
@@ -182,6 +186,8 @@ test('conversation advances only on explicit completion, with bounded identities
     state.phase = 'ready'; state.turnIndex = 0; state.presentationRun++;
     assert.notEqual(read().conversation.key, ready.key);
     assert.equal(read().elapsed, '00:00:00');
+    assert.equal(read().conversation.history.length, 1);
+    assert.notEqual(read().conversation.run, ready.run);
     const restarted = read().conversation.key;
     state.recordings[0].fingerprint = 'new selection';
     assert.notEqual(read().conversation.key, restarted, 'A new selection is not confused with the previous process run');

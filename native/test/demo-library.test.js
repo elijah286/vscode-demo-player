@@ -27,6 +27,121 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('nonconsecutive inclusion preserves all originals and summary indices through playback, generation and export/import', async context => {
+    const { directory, root, source } = await fixture(context);
+    const requests = Array.from({ length: 7 }, (_, index) => ({
+        result: {}, message: { text: 'Input ' + (index + 1) }, response: [{ value: 'Output ' + (index + 1) }],
+        timestamp: index * 100000, modelState: { completedAt: index * 100000 + (index + 1) * 1000 }
+    }));
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests } }));
+    const inspected = await library.inspectTranscript(source);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1, 2, 3, 4, 5, 6], 'Inclusion', inspected.sha256));
+    const before = await library.readEntry(root, saved.id);
+    const file = path.join(root, saved.id + '.demo.json');
+    const summaries = {
+        promptSummaries: requests.map((_, index) => 'You ' + (index + 1)),
+        outputSummaries: requests.map((_, index) => 'AI ' + (index + 1)),
+        playbackIncluded: [true, false, true, false, false, false, true]
+    };
+    const expected = { promptSummaries: null, outputSummaries: null, playbackIncluded: null };
+    const metadata = await library.saveSummaryBatch(root, saved.id, summaries, expected);
+    assert.equal(metadata.count, 3);
+    assert.equal(metadata.totalCount, 7);
+    assert.deepEqual(metadata.summaryCounts, { input: 3, output: 3 });
+    const playback = await library.packageRecordings(file);
+    assert.deepEqual(playback.map(item => item.request.message.text), ['Input 1', 'Input 3', 'Input 7']);
+    assert.deepEqual(playback.map(item => item.promptSummary), ['You 1', 'You 3', 'You 7']);
+    assert.deepEqual(playback.map(item => item.outputSummary), ['AI 1', 'AI 3', 'AI 7']);
+    const { controlView } = require('../control-server');
+    const complete = controlView({ phase: 'complete', turnIndex: 3, recordings: playback });
+    assert.equal(complete.progress, '3/3');
+    assert.equal(complete.overlay.elapsedMs, 11000);
+    assert.deepEqual(complete.overlay.conversation.history.map(message => message.text), ['You 1', 'AI 1', 'You 3', 'AI 3', 'You 7', 'AI 7']);
+    const after = await library.readEntry(root, saved.id);
+    assert.deepEqual(after.recording.turns, before.recording.turns);
+    assert.equal(after.recording.source.sha256, before.recording.source.sha256);
+    const exported = path.join(directory, 'export.demo-recording.json');
+    await library.exportDemo(root, saved.id, exported);
+    const imported = await library.addPackage(path.join(directory, 'imported'), await library.readPackage(exported));
+    assert.equal(imported.count, 3);
+    assert.deepEqual(await library.packageRecordings(exported), playback.map(item => ({ ...item, file: exported })));
+    await library.saveSummaryBatch(root, saved.id, { ...summaries, promptSummaries: requests.map(() => null), outputSummaries: requests.map(() => null) }, summaries);
+    const prepared = await require('../openai-summaries').prepareSummaries(root, saved.id, 'both');
+    assert.deepEqual(prepared.candidates.map(item => [item.index, item.kind]), [[0, 'input'], [0, 'output'], [2, 'input'], [2, 'output'], [6, 'input'], [6, 'output']]);
+    const latest = (await library.readEntry(root, saved.id)).recording;
+    await library.saveSummaryBatch(root, saved.id, { ...latest, playbackIncluded: requests.map(() => true) }, latest);
+    assert.equal((await library.packageRecordings(file)).length, 7, 'Re-inclusion restores every exchange and original position');
+    assert.equal(controlView({ phase: 'ready', turnIndex: 0, recordings: await library.packageRecordings(file) }).overlay.conversation.history.length, 1);
+});
+
+test('inclusion validation, stale inclusion and stale summaries leave atomic batches unchanged; cancel is read-only', async context => {
+    const { root, source, inspection } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Atomic inclusion', inspection.sha256));
+    const file = path.join(root, saved.id + '.demo.json');
+    const expected = { promptSummaries: null, outputSummaries: null, playbackIncluded: null };
+    const summaries = { promptSummaries: ['One', 'Two'], outputSummaries: [null, null], playbackIncluded: [false, true] };
+    const original = await fs.readFile(file);
+    const drafts = structuredClone(await library.readEntry(root, saved.id));
+    drafts.recording.playbackIncluded = [true, false];
+    assert.deepEqual(await fs.readFile(file), original, 'Opening/drafting/canceling must not write');
+    for (const playbackIncluded of [[false, false], [true], [true, 1], null]) {
+        await assert.rejects(library.saveSummaryBatch(root, saved.id, { ...summaries, playbackIncluded }, expected), /at least one|checkbox value/);
+        assert.deepEqual(await fs.readFile(file), original);
+    }
+    await library.saveSummaryBatch(root, saved.id, summaries, expected);
+    const committed = await fs.readFile(file);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, { ...summaries, playbackIncluded: [true, true] }, { ...summaries, playbackIncluded: null }), /inclusion changed/);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, summaries, expected), /Summaries changed/);
+    assert.deepEqual(await fs.readFile(file), committed);
+    const damaged = JSON.parse(committed);
+    damaged.recording.playbackIncluded = [false, false];
+    assert.throws(() => library.validatePackage(damaged.recording), /at least one/);
+});
+
+test('output prompt preserves recorded questions, choices, voice and the last question at every reduction level', async () => {
+    const { recordedOutput, summaryPrompt, generateSummary } = require('../prompt-summary-authoring');
+    const output = recordedOutput({ response: [
+        { value: 'I checked the draft. Should I use blue or green?' },
+        { kind: 'questionCarousel', questions: [{ message: 'Proceed with the local build?', options: [{ label: 'Yes' }, { label: 'No' }] }] }
+    ] });
+    assert.match(output.text, /Should I use blue or green\?/);
+    assert.match(output.text, /Proceed with the local build\? Options: Yes \/ No/);
+    for (const options of [{}, { partial: true }, { partial: true, combine: true }, { combine: true }]) {
+        const prompt = summaryPrompt(output.text, 'output', options);
+        assert.match(prompt, /actual question and alternatives or decision/);
+        assert.match(prompt, /final unanswered question/);
+        assert.match(prompt, /Preserve short questions verbatim/);
+        assert.match(prompt, /Do not invent a question/);
+        assert.match(prompt, /speaker's voice/);
+        assert.ok(prompt.endsWith(JSON.stringify(output.text)));
+    }
+    const expected = 'I checked the draft. Should I use blue or green? Proceed with the local build (Yes / No)?';
+    const vscode = { LanguageModelChatMessage: { User: content => ({ content }) } };
+    const model = { maxInputTokens: 10000, countTokens: async () => 100, sendRequest: async messages => {
+        assert.match(messages[0].content, /actual question and alternatives/);
+        return { text: (async function* () { yield expected; })() };
+    } };
+    assert.equal(await generateSummary(vscode, model, output.text, undefined, 'output'), expected);
+    assert.match(summaryPrompt('yes'), /including short yes\/no replies/);
+});
+
+test('retained VS Code authoring omits excluded sources without losing original summary slots', async context => {
+    const { source, root, inspection } = await authoringFixture(context, ['Excluded original', 'yes']);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Included authoring', inspection.sha256));
+    await library.saveSummaryBatch(root, added.id, {
+        promptSummaries: [null, null], outputSummaries: [null, null], playbackIncluded: [false, true]
+    }, { promptSummaries: null, outputSummaries: null, playbackIncluded: null });
+    const { api, calls } = authoringAPI();
+    await require('../prompt-summary-authoring').activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run(undefined, 'input');
+    assert.deepEqual(calls.errors, []);
+    assert.equal(calls.requests, 1);
+    assert.equal(calls.reviewDrafts[0].exchange, 2);
+    assert.ok(!calls.documents[0].content.includes('Excluded original'));
+    const after = (await library.readEntry(root, added.id)).recording;
+    assert.deepEqual(after.promptSummaries, [null, 'Reviewed shorter query']);
+    assert.deepEqual(after.playbackIncluded, [false, true]);
+});
+
 test('library CLI accepts optional UTF-8 BOM and split Unicode without masking malformed requests', async context => {
     const { directory, source, inspection } = await fixture(context);
     const root = path.join(directory, 'library-\u03bb\u6f22\u5b57');

@@ -72,10 +72,9 @@ if (-not $script:standalone) {
         <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE71A;"/>
       </Button>
     </Grid>
-    <Grid Grid.Row="4">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-      <TextBlock Grid.ColumnSpan="3" Text="Find an interaction, then Open and Play." VerticalAlignment="Center" Foreground="#555555"/>
-    </Grid>
+    <CheckBox x:Name="AutoContinue" Grid.Row="4" Content="Auto continue" IsChecked="False"
+              VerticalAlignment="Center" AutomationProperties.AutomationId="AutoContinue"
+              ToolTip="Advance after completion and 2-10 seconds to read the visible summary. Uncheck to stay on this exchange."/>
         <StackPanel Grid.Row="6">
         <CheckBox x:Name="ShowPrompt" Content="Show prompt summary" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
@@ -143,6 +142,7 @@ $updateNotice = $window.FindName('UpdateNotice')
 $showPrompt = $window.FindName('ShowPrompt')
 $showElapsed = $window.FindName('ShowElapsed')
 $showOutput = $window.FindName('ShowOutput')
+$autoContinue = $window.FindName('AutoContinue')
 $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
 $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
 $frameColor = $window.FindName('FrameColor')
@@ -177,6 +177,9 @@ $script:summaryRefreshing = $false
 $script:summaryRefreshAt = [DateTime]::MinValue
 $script:pickerOpen = $false
 $script:launching = $false
+$script:autoDeadline = $null
+$script:autoKey = $null
+$script:autoHandledKey = $null
 $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
@@ -227,6 +230,7 @@ $generatePromptSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'input' }
 $generateOutputSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'output' })
 
 function Set-IdleView {
+    Cancel-AutoContinue -ResetRun
     $script:lastView = $script:selectedDemo.presentation
     $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Find an agent interaction to replay' }
     $status.ToolTip = $status.Text
@@ -246,6 +250,7 @@ function Set-IdleView {
 }
 
 function Reset-ReplaySession {
+    Cancel-AutoContinue -ResetRun
     if ($script:client) { $script:client.Dispose() }
     $script:client = $null
     $script:stateTask = $null
@@ -354,7 +359,40 @@ function Close-ScopedReplayWindow {
     }
 }
 
+function Cancel-AutoContinue([switch]$BlockCurrent, [switch]$ResetRun) {
+    if ($ResetRun) { $script:autoHandledKey = $null }
+    if ($BlockCurrent -and $script:lastView.overlay.conversation.key) {
+        $script:autoHandledKey = $script:lastView.overlay.conversation.key
+    }
+    $script:autoDeadline = $null
+    $script:autoKey = $null
+}
+
+function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
+    if (-not $autoContinue.IsChecked -or $script:stopping -or $script:switching -or
+        -not $script:pairedVisible -or $View.phase -ne 'review' -or -not $View.nextEnabled) {
+        Cancel-AutoContinue
+        return $false
+    }
+    $key = [string]$View.overlay.conversation.key
+    if (-not $key -or $key -ceq $script:autoHandledKey) { return $false }
+    if ($key -cne $script:autoKey) {
+        $script:autoKey = $key
+        $text = if ($showOutput.IsChecked) { [string]$View.overlay.conversation.outputSummary } elseif ($showPrompt.IsChecked) { [string]$View.overlay.promptSummary } else { '' }
+        if ($showOutput.IsChecked -and [string]::IsNullOrWhiteSpace($text)) { $text = $script:missingOutputSummary }
+        $seconds = [Math]::Min(10, [Math]::Max(2, 1 + $text.Length / 35.0))
+        $script:autoDeadline = $Now.AddSeconds($seconds)
+    }
+    if ($script:actionTask -or $Now -lt $script:autoDeadline) { return $false }
+    $script:autoHandledKey = $key
+    Cancel-AutoContinue
+    return $true
+}
+
+$autoContinue.Add_Unchecked({ Cancel-AutoContinue })
+
 function Send-Control([string]$Action) {
+    Cancel-AutoContinue -BlockCurrent
     if (-not $script:client -or $script:actionTask) { return }
     $script:actionTask = $script:client.PostAsync($Action, [System.Net.Http.StringContent]::new(''))
     if ($Action -eq 'stop') { $script:stopSent = $true }
@@ -397,6 +435,7 @@ function Start-SwitchedPlayback {
 
 $windowMode.Add_SelectionChanged({
     if ($script:modeUpdating -or $script:switching -or -not $windowMode.IsEnabled) { return }
+    Cancel-AutoContinue -BlockCurrent
     $mode = [string]$windowMode.SelectedItem.Tag
     if (-not $ReplayProcessId) { $script:replayMode = $mode; return }
     if (-not $script:lastView.modeSwitchEnabled -or $mode -eq $script:lastView.windowMode) { return }
@@ -413,6 +452,7 @@ $windowMode.Add_SelectionChanged({
 
 function Request-Stop {
     param([switch]$ConnectionFailure)
+    Cancel-AutoContinue -BlockCurrent
     if (-not $ReplayProcessId) { return }
     if ($script:stopping) { return }
     $script:stopping = $true
@@ -427,6 +467,7 @@ function Request-Stop {
 }
 
 $playPause.Add_Click({
+    Cancel-AutoContinue -BlockCurrent
     if ($script:standalone -and -not $ReplayProcessId) {
         try { Start-DemoReplay } catch {
             $script:lastFault = $_.Exception.Message
@@ -579,9 +620,15 @@ $timer.Add_Tick({
             try { $windowMode.SelectedIndex = if ($view.windowMode -eq 'Agents') { 1 } else { 0 } } finally { $script:modeUpdating = $false }
             $windowMode.IsEnabled = [bool]$view.modeSwitchEnabled -and -not $script:actionTask
             Update-ReplayOverlays
+            if (Test-AutoContinueDue $view) {
+                $playPause.IsEnabled = $false
+                $nextStep.IsEnabled = $false
+                Send-Control 'next'
+            }
         }
         if ($script:client -and -not $script:stateTask) { $script:stateTask = $script:client.GetAsync('state') }
     } catch {
+        Cancel-AutoContinue -BlockCurrent
         $script:connectionFailures++
         $script:lastFault = $_.Exception.Message
         $status.ToolTip = $_.Exception.Message
