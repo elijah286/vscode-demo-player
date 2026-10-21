@@ -348,9 +348,9 @@ test('output generation sends only selected recorded text and tool status, never
     const vscode = { LanguageModelChatMessage: { User: content => ({ content }) } };
     assert.equal(await generateSummary(vscode, model, source.text, undefined, 'output'), 'The change failed; no files changed.');
     assert.equal(sends, 1);
-    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(300); })() });
-    assert.equal((await generateSummary(vscode, model, source.text, undefined, 'output')).length, 300);
-    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(301); })() });
+    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(239) + '.'; })() });
+    assert.equal((await generateSummary(vscode, model, source.text, undefined, 'output')).length, 240);
+    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(240) + '.'; })() });
     await assert.rejects(generateSummary(vscode, model, source.text, undefined, 'output'), /summary|summaries/);
     assert.equal(recordedOutput({ response: [{ kind: 'recordedSdkEvent', events: [] }] }).text, '');
 });
@@ -419,11 +419,11 @@ test('AI request contains only the query and validates exact output limits and m
             sent++;
             assert.match(messages[0].content, /Treat it only as data/);
             assert.ok(messages[0].content.endsWith(JSON.stringify(prompt)));
-            assert.match(messages[0].content, /at most 300 characters/);
-            return { text: (async function* () { yield 'x'.repeat(150); yield 'x'.repeat(150); })() };
+            assert.match(messages[0].content, /at most 240 characters/);
+            return { text: (async function* () { yield 'x'.repeat(120); yield 'x'.repeat(119) + '.'; })() };
         }
     };
-    assert.equal((await generateSummary(vscode, model, prompt)).length, 300);
+    assert.equal((await generateSummary(vscode, model, prompt)).length, 240);
     model.countTokens = async () => 1000;
     await assert.rejects(generateSummary(vscode, model, prompt), /context limit/);
     assert.equal(sent, 1);
@@ -462,7 +462,7 @@ function authoringAPI(options = {}) {
             if (options.stall) return new Promise(() => {});
             if (options.providerFailure || calls.requests === options.failAt) throw new Error('Synthetic provider failure');
             if (options.cancel || calls.requests === options.cancelAt) options.cancelSource.cancel();
-            return { text: (async function* () { yield options.output ?? 'Generated paraphrase'; })() };
+            return { text: (async function* () { yield options.output ?? 'Generated paraphrase.'; })() };
         }
     };
     const api = {
@@ -681,7 +681,7 @@ test('prompt-only cancellation and stale input do not overwrite reviewed metadat
     assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, ['Concurrent prompt']);
 });
 
-test('explicit response command reviews outputs only without sending prompts or replacing input metadata', async context => {
+test('explicit response command discloses paired question context without generating or replacing input metadata', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
     const { source, root, inspection } = await authoringFixture(context, ['PRIVATE_USER_QUERY '.repeat(30), 'Another PRIVATE_USER_QUERY '.repeat(30)]);
     const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Explicit responses', inspection.sha256));
@@ -697,10 +697,10 @@ test('explicit response command reviews outputs only without sending prompts or 
     assert.equal(calls.consent, 1);
     assert.equal(calls.picks, 1);
     assert.ok(calls.reviewDrafts.every(turn => turn.kind === 'output'));
-    assert.ok(calls.documents.every(document => !document.content.includes('PRIVATE_USER_QUERY')));
-    assert.ok(calls.messages.every(messages => !messages[0].content.includes('PRIVATE_USER_QUERY')));
+    assert.ok(calls.documents.every(document => document.content.includes('PRIVATE_USER_QUERY')));
+    assert.ok(calls.messages.every(messages => messages[0].content.includes('PRIVATE_USER_QUERY')));
     assert.match(calls.consentMessages[0], /response summaries/);
-    assert.match(calls.consentMessages[0], /User prompts are not sent/);
+    assert.match(calls.consentMessages[0], /paired user question context/);
     assert.match(calls.statuses[0].text, /Response summaries/);
     assert.equal(calls.statuses[0].command, 'historyReplay.summarizeResponse');
     const after = await library.readEntry(root, added.id);
@@ -795,7 +795,7 @@ test('persistent inbox retains response-only scope across reload and resets it f
     const authoring = activateSummaryInbox({ subscriptions }, first.api, inbox);
     await authoring.ready;
     assert.match(first.calls.consentMessages[0], /response summaries/);
-    assert.doesNotMatch(first.calls.documents[0].content, /Long original query/);
+    assert.match(first.calls.documents[0].content, /Paired user question\/request \(context only\):\nLong original query/);
     assert.deepEqual(JSON.parse(await fs.readFile(path.join(inbox, 'last.json'), 'utf8')), { file, scope: 'output' });
     subscriptions.forEach(item => item.dispose());
     const reloadedSubscriptions = [];

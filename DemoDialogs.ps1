@@ -951,7 +951,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Originals are always retained. Include in playback selects exchanges for the next run; excluded exchanges remain editable. Preserve the speaker's voice and short replies. AI output must include the actual question asked, its alternatives/decision, especially the final question answered by a following yes/no. Never invent questions or success. Blank output shows a missing-summary notice." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. New AI drafts use complete statements up to 240 characters, in the speaker's voice: I want..., Can you...?, Yes. AI replies must preserve the recorded answer to the user's question and any questions/choices the assistant asks. Say when the reply did not answer; never invent an answer or success. Manual/existing summaries still allow 300 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
    <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>

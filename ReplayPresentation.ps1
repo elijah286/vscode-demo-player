@@ -161,7 +161,7 @@ function Set-ConversationFontSize([double]$Width) {
 
 function Add-ConversationMessages {
     $start = $conversationMessages.Children.Count
-    $limit = [Math]::Min($start + 8, $script:conversationHistory.Count)
+    $limit = [Math]::Min($start + 4, $script:conversationHistory.Count)
     for ($index = $start; $index -lt $limit; $index++) {
         $message = $script:conversationHistory[$index]
         $summary = [string]$message.text
