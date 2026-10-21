@@ -948,11 +948,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Input / Output Summaries"
- Width="760" Height="540" MinWidth="500" MinHeight="400" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Summaries change only the overlay, not original inputs or outputs. Blank input uses its excerpt; blank output shows a missing-summary notice. Summaries are included when exporting." TextWrapping="Wrap" Margin="0,0,0,12"/>
-  <ComboBox x:Name="Exchange" Grid.Row="1" Margin="0,0,0,10" AutomationProperties.AutomationId="SummaryExchange"/>
+  <TextBlock Text="Originals are always retained. Include in playback selects exchanges for the next run; excluded exchanges remain editable. Preserve the speaker's voice and short replies. AI output must include the actual question asked, its alternatives/decision, especially the final question answered by a following yes/no. Never invent questions or success. Blank output shows a missing-summary notice." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <StackPanel Grid.Row="1" Margin="0,0,0,10">
+   <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
+   <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>
+   <TextBlock x:Name="IncludedCount" AutomationProperties.AutomationId="IncludedExchangeCount"/>
+  </StackPanel>
   <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
   <TextBlock Grid.Row="3" Text="Overlay summary (up to 300 characters, one line)" Margin="0,12,0,6"/>
   <TextBox x:Name="Summary" Grid.Row="4" MaxLength="300" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
@@ -976,9 +980,12 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             else { $outputDrafts[$draft.index] = $draft.summary }
         }
     }
-    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Index = -1 }
+    $included = @($entry.recording.turns | ForEach-Object { $true })
+    if ($null -ne $entry.recording.playbackIncluded) { $included = @($entry.recording.playbackIncluded.Clone()) }
+    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Included = $included; Index = -1 }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
+    $include = $dialog.FindName('Include')
     for ($index = 0; $index -lt $entry.recording.turns.Count; $index++) {
         $exchange.Items.Add(('Exchange ' + ($index + 1) + ' - Input (You)')) | Out-Null
         $exchange.Items.Add(('Exchange ' + ($index + 1) + ' - Output (AI)')) | Out-Null
@@ -989,6 +996,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             $turn = [int][Math]::Floor($dialog.Tag.Index / 2)
             if ($dialog.Tag.Index % 2 -eq 0) { $dialog.Tag.Summaries[$turn] = $value }
             else { $dialog.Tag.Outputs[$turn] = $value }
+            $dialog.Tag.Included[$turn] = [bool]$include.IsChecked
         }
     }
     $exchange.Add_SelectionChanged({
@@ -996,6 +1004,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         $dialog.Tag.Index = $exchange.SelectedIndex
         if ($exchange.SelectedIndex -ge 0) {
             $turn = [int][Math]::Floor($exchange.SelectedIndex / 2)
+            $include.IsChecked = [bool]$dialog.Tag.Included[$turn]
             if ($exchange.SelectedIndex % 2 -eq 0) {
                 $dialog.FindName('Original').Text = $entry.recording.turns[$turn].snapshot.requests[0].message.text
                 $summary.Text = [string]$dialog.Tag.Summaries[$turn]
@@ -1004,7 +1013,16 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
                 $summary.Text = [string]$dialog.Tag.Outputs[$turn]
             }
         }
+        $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
     })
+    $updateInclusion = {
+        if ($dialog.Tag.Index -ge 0) {
+            $dialog.Tag.Included[[int][Math]::Floor($dialog.Tag.Index / 2)] = [bool]$include.IsChecked
+            $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
+        }
+    }
+    $include.Add_Checked($updateInclusion)
+    $include.Add_Unchecked($updateInclusion)
     $exchange.SelectedIndex = if ($Generated) { 2 * $Generated.Drafts[0].index + [int]($Generated.Drafts[0].kind -eq 'output') } else { 0 }
     $dialog.FindName('Clear').Add_Click({
         $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
@@ -1016,8 +1034,8 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         try {
             & $storeDraft
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
-                summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs) }
-                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+                summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs); playbackIncluded = @($dialog.Tag.Included) }
+                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }

@@ -46,6 +46,11 @@ function controlView(state) {
         recording.fingerprint, recording.promptSummary, recording.outputSummary,
         current > 1 ? state.recordings[current - 2].outputSummary : null
     ])).digest('hex');
+    const history = state.recordings.slice(0, current).flatMap((item, index) => {
+        const messages = [{ id: index + ':input', input: true, text: item.promptSummary ?? null }];
+        if (index < state.turnIndex) messages.push({ id: index + ':output', input: false, text: item.outputSummary ?? null });
+        return messages;
+    });
     return {
         ...view, current, total, progress: current + '/' + total,
         windowMode: state.windowMode,
@@ -60,7 +65,11 @@ function controlView(state) {
                 previousOutputSummary: current > 1 ? state.recordings[current - 2].outputSummary ?? null : null,
                 outputSummary: recording.outputSummary ?? null,
                 key: (state.presentationRun ?? 0) + ':' + conversationIdentity + ':' + current + ':' + ['review', 'complete'].includes(state.phase),
-                active: ['ready', 'typing', 'response', 'review', 'complete'].includes(state.phase)
+                active: ['ready', 'typing', 'response', 'review', 'complete'].includes(state.phase),
+                history,
+                run: (state.presentationRun ?? 0) + ':' + crypto.createHash('sha256').update(JSON.stringify(
+                    state.recordings.map(item => [item.fingerprint, item.promptSummary, item.outputSummary])
+                )).digest('hex')
             },
             elapsed: timed ? [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(value => String(value).padStart(2, '0')).join(':') : null,
             elapsedMs: elapsedMs ?? null,

@@ -112,6 +112,7 @@ function validatePackage(value) {
     if (!Array.isArray(value.turns) || !value.turns.length || value.turns.length > MAX_TURNS) throw new Error('A demo must contain 1 to 100 exchanges.');
     validatePromptSummaries(value.promptSummaries, value.turns.length);
     validatePromptSummaries(value.outputSummaries, value.turns.length);
+    validatePlaybackIncluded(value.playbackIncluded, value.turns.length);
     const indices = new Set();
     for (const turn of value.turns) {
         if (!Number.isInteger(turn.sourceIndex) || turn.sourceIndex < 0 || indices.has(turn.sourceIndex) || turn.snapshot?.requests?.length !== 1) throw new Error('Invalid or duplicate recorded turn.');
@@ -155,12 +156,25 @@ async function readPackage(file) {
 async function packageRecordings(file) {
     const raw = JSON.parse((await readBounded(file)).toString('utf8'));
     const value = raw.format === FORMAT ? validatePackage(raw) : validateEntry(raw).recording;
-    return value.turns.map((turn, index) => {
+    return includedTurnIndices(value).map(index => {
+        const turn = value.turns[index];
         const recording = validateEditorRecording(extractRecording(file, turn.snapshot, 0));
         if (value.promptSummaries?.[index]) recording.promptSummary = value.promptSummaries[index];
         recording.outputSummary = value.outputSummaries?.[index] ?? null;
         return recording;
     });
+}
+
+function validatePlaybackIncluded(included, count) {
+    if (included === undefined) return;
+    if (!Array.isArray(included) || included.length !== count || included.some(value => typeof value !== 'boolean')) {
+        throw new Error('Supply one Include in playback checkbox value per original exchange.');
+    }
+    if (!included.some(Boolean)) throw new Error('Include at least one exchange in playback.');
+}
+
+function includedTurnIndices(recording) {
+    return recording.turns.flatMap((_, index) => recording.playbackIncluded?.[index] === false ? [] : [index]);
 }
 
 function validatePromptSummaries(summaries, count) {
@@ -197,6 +211,13 @@ async function saveSummaryBatch(root, id, summaries, expected) {
                 throw new Error('Summaries changed since opening this editor. Reopen it before saving.');
             }
         }
+        if (summaries.playbackIncluded !== undefined) {
+            validatePlaybackIncluded(summaries.playbackIncluded, entry.recording.turns.length);
+            if (JSON.stringify(entry.recording.playbackIncluded ?? null) !== JSON.stringify(expected?.playbackIncluded ?? null)) {
+                throw new Error('Playback inclusion changed since opening this editor. Reopen it before saving.');
+            }
+            entry.recording.playbackIncluded = summaries.playbackIncluded;
+        }
         entry.recording.promptSummaries = summaries.promptSummaries;
         entry.recording.outputSummaries = summaries.outputSummaries;
         await atomicEntry(root, entry, true);
@@ -232,7 +253,9 @@ async function libraryIds(root) {
 }
 
 function summarize(entry) {
-    const recordings = entry.recording.turns.map((turn, index) => {
+    const indices = includedTurnIndices(entry.recording);
+    const recordings = indices.map(index => {
+        const turn = entry.recording.turns[index];
         const recording = extractRecording('', turn.snapshot, 0);
         if (entry.recording.promptSummaries?.[index]) recording.promptSummary = entry.recording.promptSummaries[index];
         recording.outputSummary = entry.recording.outputSummaries?.[index] ?? null;
@@ -240,10 +263,10 @@ function summarize(entry) {
     });
     const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
     const summaryCounts = {
-        input: entry.recording.promptSummaries?.filter(Boolean).length ?? 0,
-        output: entry.recording.outputSummaries?.filter(Boolean).length ?? 0
+        input: indices.filter(index => entry.recording.promptSummaries?.[index]).length,
+        output: indices.filter(index => entry.recording.outputSummaries?.[index]).length
     };
-    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: entry.recording.turns[0].snapshot.requests[0].message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
+    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: indices.length, totalCount: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: recordings[0].request.message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
 }
 
 async function listDemos(root) {
@@ -429,4 +452,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, entryMetadata, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, entryMetadata, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch, includedTurnIndices };

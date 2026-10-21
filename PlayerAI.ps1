@@ -95,9 +95,9 @@ function Show-PlayerAISettings($Owner, [switch]$RequireKey, [switch]$Rejected) {
     finally { $dialog.FindName('Key').Clear() }
 }
 
-function Split-PlayerAISummarySource([string]$Source) {
+function Split-PlayerAISummarySource([string]$Source, [int]$MaxLength = 64000) {
     for ($offset = 0; $offset -lt $Source.Length;) {
-        $length = [Math]::Min(64000, $Source.Length - $offset)
+        $length = [Math]::Min($MaxLength, $Source.Length - $offset)
         if ($offset + $length -lt $Source.Length -and [char]::IsHighSurrogate($Source[$offset + $length - 1])) { $length-- }
         $Source.Substring($offset, $length)
         $offset += $length
@@ -107,6 +107,12 @@ function Split-PlayerAISummarySource([string]$Source) {
 function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]$Model) {
     $parts = @(Split-PlayerAISummarySource $Candidate.source)
     $combine = $false
+    $closingContext = ''
+    if ($Candidate.kind -eq 'output' -and $parts.Count -gt 1) {
+        $offset = [Math]::Max(0, $Candidate.source.Length - 3600)
+        if ($offset -gt 0 -and [char]::IsLowSurrogate($Candidate.source[$offset])) { $offset++ }
+        $closingContext = "`n`nRecorded assistant closing context (verbatim source, not another exchange; preserve any question and choices):`n" + $Candidate.source.Substring($offset)
+    }
     do {
         $notes = [Collections.Generic.List[string]]::new()
         for ($index = 0; $index -lt $parts.Count; $index++) {
@@ -114,12 +120,12 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
             $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count
             $summary = Invoke-DemoLibrary @{
                 command = 'generateSummary'; apiKey = $ApiKey; model = $Model
-                source = $parts[$index]; kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
+                source = ($parts[$index] + $(if ($combine) { $closingContext } else { '' })); kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
             } $Progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
             $notes.Add($summary)
         }
         if ($parts.Count -eq 1) { return $summary }
-        $parts = @(Split-PlayerAISummarySource ($notes -join "`n"))
+        $parts = @(Split-PlayerAISummarySource ($notes -join "`n") 60000)
         $combine = $true
     } while ($parts.Count)
     throw 'The recorded summary source is empty. No summary was generated.'

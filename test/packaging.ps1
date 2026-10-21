@@ -21,6 +21,33 @@ function Assert-Fails([scriptblock]$Action, [string]$Pattern) {
         $script:assertions++
     }
 }
+function Test-VSCodeUpdateGuard {
+    $name = 'demo-player-update-test-' + [guid]::NewGuid().ToString('N')
+    $guard = [scriptblock]::Create(${function:Assert-PlayerVSCodeLaunchAvailable}.ToString().Replace("'vscode-updating'", "'$name'"))
+    & $guard
+    $script:assertions++
+    $mutex = [Threading.Mutex]::new($false, $name)
+    try {
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        Assert-Fails { & $guard } 'VS Code is currently being updated.*Restart to Update.*recordings and summaries have not been changed'
+        Assert-Equal ($clock.ElapsedMilliseconds -lt 1000) $true 'Update guard fails before the editor startup timeout'
+        $mutex.WaitOne() | Out-Null
+        try { Assert-Fails { & $guard } 'VS Code is currently being updated' }
+        finally { $mutex.ReleaseMutex() }
+    } finally { $mutex.Dispose() }
+    & $guard
+    $script:assertions++
+    $launcherAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $ApplicationRoot 'Start-Replay.ps1'), [ref]$null, [ref]$null)
+    $check = $launcherAst.Find({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-PlayerVSCodeLaunchAvailable'
+    }, $true)
+    $createProfile = $launcherAst.Find({
+        param($node)
+        $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Member.Value -eq 'CreateDirectory'
+    }, $true)
+    Assert-Equal ($null -ne $check -and $null -ne $createProfile -and $check.Extent.StartOffset -lt $createProfile.Extent.StartOffset) $true 'Update guard runs before creating a profile or launching VS Code'
+}
 function Test-ControllerFailures {
     $controller = Join-Path $ApplicationRoot 'Show-ReplayController.ps1'
     $ast = [Management.Automation.Language.Parser]::ParseFile($controller, [ref]$null, [ref]$null)
@@ -37,9 +64,14 @@ function Test-ControllerFailures {
     }, $true)
     Assert-Equal ($null -ne $tickNode -and $null -ne $clickNode -and $null -ne $stopNode) $true 'Production lifecycle handlers exist'
     $tick = $tickNode.Arguments[0].ScriptBlock.GetScriptBlock()
+    $cancelNode = $ast.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Cancel-AutoContinue'
+    }, $true)
+    ${function:Cancel-AutoContinue} = $cancelNode.Body.GetScriptBlock()
     ${function:Request-Stop} = $stopNode.Body.GetScriptBlock()
     function Test-ReplayAlive { return $script:alive }
     function Reset-ReplaySession { $script:resetObserved = $true }
+    function Show-DemoError($Owner, $Failure) { $script:reportedFailure = $Failure.Exception.Message; $script:failureDialogs++ }
     function Update-ReplayOverlays {}
     function Send-Control([string]$Action) { $script:sentAction = $Action; $script:stopSent = $true }
     $status = [pscustomobject]@{ Text = ''; ToolTip = '' }
@@ -48,6 +80,9 @@ function Test-ControllerFailures {
     $window = [pscustomobject]@{}
     $window | Add-Member -MemberType ScriptMethod -Name Show -Value {}
     $script:ReplayProcessId = 42
+    $script:standalone = $true
+    $script:exitRequested = $false
+    $script:failureDialogs = 0
     $script:switching = $false
     $script:stopping = $false
     $script:pairedVisible = $true
@@ -55,9 +90,16 @@ function Test-ControllerFailures {
     & $tick
     Assert-Equal $script:resetObserved $true 'Closed target resets session'
     Assert-Equal $script:lastFault 'The isolated VS Code target closed.' 'Unexpected closure is not success'
+    Assert-Equal $script:failureDialogs 0 'Normal window closure does not open an error dialog'
     $script:pairedVisible = $false
     & $tick
     Assert-Equal $script:lastFault 'The isolated player exited before it was ready.' 'Early launch exit is explicit'
+    Assert-Equal $script:reportedFailure $script:lastFault 'Early launch exit is displayed, not just reset to Open'
+    Assert-Equal $script:failureDialogs 1 'Early launch exit reports one error'
+    $script:stopping = $true
+    & $tick
+    Assert-Equal $script:failureDialogs 1 'User stop before readiness does not show a startup error'
+    $script:stopping = $false
     $script:alive = $true
     $script:preparedDeadline = [DateTime]::UtcNow.AddSeconds(-1)
     $script:ControlPath = Join-Path $scratch 'missing-control.json'
@@ -128,6 +170,7 @@ try {
         $script:assertions++
     }
     Test-ControllerFailures
+    Test-VSCodeUpdateGuard
     $installer = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'packaging\DemoPlayer.iss') -Raw
     $appShortcuts = @($installer -split '\r?\n' | Where-Object { $_ -match '^Name:.*Filename: "\{app\}\\VSCodeDemoPlayer.exe"' })
     Assert-Equal $appShortcuts.Count 2 'Start menu and optional desktop app shortcuts exist'

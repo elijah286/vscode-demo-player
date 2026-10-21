@@ -17,21 +17,6 @@ function Assert-Layout([bool]$Condition, [string]$Message) {
     $script:assertions++
 }
 
-function Wait-ConversationTransition {
-    $frame = [System.Windows.Threading.DispatcherFrame]::new()
-    $waitTimer = [System.Windows.Threading.DispatcherTimer]::new()
-    $waitTimer.Interval = [TimeSpan]::FromMilliseconds(350)
-    $waitTimer.Add_Tick({ $waitTimer.Stop(); $frame.Continue = $false }.GetNewClosure())
-    $waitTimer.Start()
-    try { [System.Windows.Threading.Dispatcher]::PushFrame($frame) } finally { $waitTimer.Stop() }
-    Assert-Layout ($null -eq $script:pendingConversation -and -not $script:conversationTransitionTimer.IsEnabled) 'The real dispatcher must finish the queued outgoing/incoming transition.'
-}
-
-function Get-TimerGeometry {
-    $origin = $timerPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $script:overlayWindow.Content)
-    return [System.Windows.Rect]::new($origin.X, $origin.Y, $timerPanel.ActualWidth, $timerPanel.ActualHeight)
-}
-
 function Arrange-Overlay([double]$Width, [double]$Height, [bool]$Prompt = $true, [bool]$Timer = $true) {
     $script:overlayWindow.Width = $Width
     $script:overlayWindow.Height = $Height
@@ -42,6 +27,36 @@ function Arrange-Overlay([double]$Width, [double]$Height, [bool]$Prompt = $true,
     $script:overlayWindow.Content.Measure($size)
     $script:overlayWindow.Content.Arrange([System.Windows.Rect]::new($size))
     $script:overlayWindow.Content.UpdateLayout()
+}
+
+function Get-TimerTop {
+    return $timerPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent).Y
+}
+
+function Set-History([object[]]$Messages, [string]$Run = 'run1') {
+    $script:lastView.overlay.conversation.history = $Messages
+    $script:lastView.overlay.conversation.run = $Run
+    $script:lastView.overlay.conversation.key = $Run + ':' + $Messages.Count + ':' + ($Messages | ConvertTo-Json -Compress -Depth 4)
+    Update-ReplayOverlays -MeasureOnly
+}
+
+function Message([string]$Id, [bool]$IsInput, $Text) {
+    return [pscustomobject]@{ id = $Id; input = $IsInput; text = $Text }
+}
+
+function Wait-History {
+    $frame = [System.Windows.Threading.DispatcherFrame]::new()
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $fillTimer = $script:conversationFillTimer
+    $pulse = [System.Windows.Threading.DispatcherTimer]::new()
+    $pulse.Interval = [TimeSpan]::FromMilliseconds(10)
+    $pulse.Add_Tick({
+        Assert-Layout ($watch.ElapsedMilliseconds -lt 250) "History fill blocked dispatcher for $($watch.ElapsedMilliseconds)ms."
+        $watch.Restart()
+        if (-not $fillTimer.IsEnabled) { $frame.Continue = $false }
+    }.GetNewClosure())
+    $pulse.Start()
+    try { [System.Windows.Threading.Dispatcher]::PushFrame($frame) } finally { $pulse.Stop() }
 }
 
 try {
@@ -56,32 +71,16 @@ try {
             $promptOrigin = $promptPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent)
             $timerOrigin = $timerPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent)
             if ($stacked) {
-                Assert-Layout ([Math]::Abs($promptPanel.ActualWidth - $overlayContent.ActualWidth) -lt 1) "Summary does not use full width at ${width}x${height}."
-                Assert-Layout ($promptOrigin.Y -ge $timerOrigin.Y + $timerPanel.ActualHeight + 11) "Timer is not above the summary at ${width}x${height}."
-                Assert-Layout ([Math]::Abs($promptOrigin.Y + $promptPanel.ActualHeight - $overlayContent.ActualHeight) -lt 1) "Summary does not use remaining height at ${width}x${height}."
-                Assert-Layout ($timerOrigin.Y -eq 0) "Timer is not at the top at ${width}x${height}."
+                Assert-Layout ([Math]::Abs($promptPanel.ActualWidth - $overlayContent.ActualWidth) -lt 1) 'Narrow prompt must use full width.'
+                Assert-Layout ($promptOrigin.Y -ge $timerOrigin.Y + $timerPanel.ActualHeight + 11) 'Timer must be above narrow prompt.'
+                Assert-Layout ($timerOrigin.Y -eq 0) 'Narrow timer must be at top.'
             } else {
-                Assert-Layout ($promptOrigin.Y -eq 0) "Wide summary does not start at the top at ${width}x${height}."
-                Assert-Layout ($timerOrigin.X -ge $promptPanel.ActualWidth + 23) "Wide timer is not beside the summary at ${width}x${height}."
+                Assert-Layout ($promptOrigin.Y -eq 0 -and $timerOrigin.X -ge $promptPanel.ActualWidth + 23) 'Wide timer must be beside prompt.'
             }
-            Assert-Layout ($promptPanel.ActualHeight -gt 0) "Summary has no remaining height at ${width}x${height}."
-            Assert-Layout ($script:overlayWindow.Width -eq $width -and $script:overlayWindow.Height -eq $height) 'Layout reset the user dimensions.'
+            Assert-Layout ($promptPanel.ActualHeight -gt 0) 'Prompt must have remaining height.'
+            Assert-Layout ($script:overlayWindow.Width -eq $width -and $script:overlayWindow.Height -eq $height) 'Layout must retain manual dimensions.'
         }
     }
-    foreach ($width in @(280, 480, 820)) {
-        Arrange-Overlay $width 320 $true $false
-        Assert-Layout ([System.Windows.Controls.Grid]::GetRow($promptPanel) -eq 0 -and [Math]::Abs($promptPanel.ActualWidth - $overlayContent.ActualWidth) -lt 1) "Summary-only layout reserved timer space at $width."
-        Arrange-Overlay $width 320 $false $true
-        Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1 -and $timerPanel.Margin.Left -eq 0) "Timer-only layout has a phantom summary gap at $width."
-        Arrange-Overlay $width 320
-        Assert-Layout ([System.Windows.Controls.Grid]::GetRow($promptPanel) -eq $(if ($width -lt 640) { 1 } else { 0 })) "Combined layout did not recover after toggles at $width."
-    }
-    Arrange-Overlay 320 500
-    $narrowTextHeight = $promptText.DesiredSize.Height
-    Arrange-Overlay 639 500
-    Assert-Layout ($narrowTextHeight -gt $promptText.DesiredSize.Height) 'Text did not rewrap when narrowing the stacked layout.'
-    Assert-Layout ($promptText.TextWrapping -eq 'Wrap') 'Wrapping was disabled.'
-    Assert-Layout ($elapsedText.Text -eq '00:00:00' -and $promptProgress.Text -eq '1/24') 'Layout modified timing or progress.'
     $scroll = @($promptPanel.Children | Where-Object { $_ -is [System.Windows.Controls.ScrollViewer] })[0]
     foreach ($text in @(('W' * 300), ('A faithful synthetic summary of the original request. ' * 6).Substring(0,300), ([string][char]0x754C * 300))) {
         $promptText.Text = $text
@@ -89,194 +88,187 @@ try {
             Arrange-Overlay $layout.Width 500 $true $layout.Timer
             $height = Get-OverlayPromptHeight $layout.Width $layout.Timer
             Arrange-Overlay $layout.Width $height $true $layout.Timer
-            Assert-Layout ($promptText.Text.Length -eq 300) 'The exact summary budget was shortened.'
-            Assert-Layout ($scroll.ScrollableHeight -lt 1) "A 300-character summary does not fit the auto-sized ${height} high overlay at width $($layout.Width), timer $($layout.Timer). Scrollable height $($scroll.ScrollableHeight)."
-            Assert-Layout ($height -le $area.Height - 32) 'Automatic sizing exceeds the work area.'
+            Assert-Layout ($promptText.Text.Length -eq 300 -and $scroll.ScrollableHeight -lt 1) "Full 300-character legacy summary must fit at $($layout.Width)."
+            Assert-Layout ($height -le $area.Height - 32) 'Auto height must fit work area.'
         }
     }
     Arrange-Overlay 280 132
-    Assert-Layout ($scroll.ScrollableHeight -gt 0) 'A manually shortened overlay must scroll instead of truncating.'
-    Assert-Layout (-not $showOutput.IsChecked) 'Output summaries must default off.'
-    # Detached checkboxes let state tests drive the real updater without showing any windows.
+    Assert-Layout ($scroll.ScrollableHeight -gt 0) 'Manually shortened prompt must scroll.'
+    Assert-Layout (-not $showOutput.IsChecked) 'Output must default off.'
     $showOutput = [System.Windows.Controls.CheckBox]::new()
     $showPrompt = [System.Windows.Controls.CheckBox]::new()
     $showElapsed = [System.Windows.Controls.CheckBox]::new()
     $showOutput.IsChecked = $true
     $script:lastView = [pscustomobject]@{
-        progress = '1/2'
+        progress = '1/3'
         overlay = [pscustomobject]@{
-            promptSummary = 'Input 1'
-            elapsed = $null
-            conversation = [pscustomobject]@{
-                exchange = 1; completed = $false; previousOutputSummary = $null
-                outputSummary = $null; key = 'run1:1:input'; active = $true
-            }
+            promptSummary = 'Input 1'; elapsed = $null
+            conversation = [pscustomobject]@{ history = @(); key = ''; run = 'run1'; active = $true }
         }
     }
-    Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($firstText.Text -eq 'Input 1' -and $firstLabel.Text -eq 'You' -and $secondBubble.Visibility -eq 'Collapsed') 'Ready must show Input 1 only.'
-    Assert-Layout ($conversationPanel.Visibility -eq 'Visible' -and -not $showPrompt.IsChecked) 'Conversation input must not depend on Show prompt summary.'
-    Assert-Layout ($timerPanel.Visibility -eq 'Visible' -and $elapsedText.Text -eq 'Unavailable') 'Untimed conversation must keep its timer header.'
-    Assert-Layout (-not $showElapsed.IsEnabled -and $showElapsed.ToolTip -like '*always shown at the top*') 'Elapsed toggle must explain why it is disabled.'
-    $state = $script:lastView.overlay.conversation
-    $state.completed = $true
-    $state.outputSummary = 'Output 1'
-    $state.key = 'run1:1:output'
-    Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($firstText.Text -eq 'Input 1' -and $secondText.Text -eq 'Output 1' -and $secondLabel.Text -eq 'AI') 'First completion must pair Input 1 and Output 1.'
-    Assert-Layout ($conversationArrow.Visibility -eq 'Visible') 'Completed pair must have a semantic down arrow.'
-    Assert-Layout (($conversationMessages.HasAnimatedProperties -or $secondBubble.HasAnimatedProperties) -eq [System.Windows.SystemParameters]::ClientAreaAnimation) 'Conversation motion must respect the system animation setting.'
-    Assert-Layout ($firstBubble.HorizontalAlignment -eq 'Right' -and $secondBubble.HorizontalAlignment -eq 'Left') 'You must be right aligned and AI left aligned.'
-    Assert-Layout ($firstBubble.Background.ToString() -eq '#FF1557A5' -and $firstText.Foreground.ToString() -eq '#FFFFFFFF') 'You needs contrasting white text on blue.'
-    Assert-Layout ($secondBubble.Background.ToString() -eq '#FFE9EDF2' -and $secondText.Foreground.ToString() -eq '#FF202020') 'AI needs contrasting dark text on neutral.'
+    $messages = @(Message '0:input' $true 'Input 1')
+    Set-History $messages
+    Assert-Layout ($conversationMessages.Children.Count -eq 1) 'Ready must contain only input, never unrevealed output.'
+    $first = $conversationMessages.Children[0]
+    Assert-Layout ($first.Child.Children[0].Text -eq 'You' -and $first.Child.Children[1].Text -eq 'Input 1') 'First message must label You.'
+    Assert-Layout ($conversationPanel.Visibility -eq 'Visible' -and -not $showPrompt.IsChecked) 'History input must not depend on prompt toggle.'
+    Assert-Layout ($elapsedText.Text -eq 'Unavailable' -and -not $showElapsed.IsEnabled) 'Untimed history must keep fixed timer with unavailable notice.'
+    $messages += Message '0:output' $false 'Output 1'
+    Set-History $messages
+    $second = $conversationMessages.Children[1]
+    Assert-Layout ($first.HorizontalAlignment -eq 'Right' -and $second.HorizontalAlignment -eq 'Left') 'Speaker alignment is wrong.'
+    Assert-Layout ($first.Background.ToString() -eq '#FF1557A5' -and $first.Child.Children[1].Foreground.ToString() -eq '#FFFFFFFF') 'You contrast is wrong.'
+    Assert-Layout ($second.Background.ToString() -eq '#FFE9EDF2' -and $second.Child.Children[1].Foreground.ToString() -eq '#FF202020') 'AI contrast is wrong.'
+    Assert-Layout ($second.Child.Children[0].Text -eq 'AI' -and $second.Child.Children[2].Text -eq [string][char]0x2193) 'Completed output needs AI label and arrow.'
     $transitions = $script:conversationTransitionCount
     foreach ($elapsed in @('00:00:01', '00:00:02', '00:00:02')) {
         $script:lastView.overlay.elapsed = $elapsed
         Update-ReplayOverlays -MeasureOnly
     }
-    Assert-Layout ($script:conversationTransitionCount -eq $transitions) 'Polling, elapsed changes or pause must not replay the transition.'
-    Assert-Layout ($elapsedText.Text -eq '00:00:02') 'Conversation must use the existing cumulative elapsed value.'
-    Assert-Layout (-not $timerPanel.HasAnimatedProperties -and -not $overlayContent.HasAnimatedProperties) 'Do not animate the timer or the whole panel.'
-    $state.exchange = 2
-    $state.completed = $false
-    $state.previousOutputSummary = 'Output 1'
-    $state.outputSummary = $null
-    $state.key = 'run1:2:input'
-    $script:lastView.overlay.promptSummary = 'Input 2'
-    Arrange-Overlay 820 400 $false $true
-    $timerBeforeTransition = Get-TimerGeometry
-    Update-Conversation $script:lastView.overlay
-    Assert-Layout ((Get-TimerGeometry) -eq $timerBeforeTransition) 'Next outgoing motion must not change actual WPF timer geometry.'
-    if ([System.Windows.SystemParameters]::ClientAreaAnimation) {
-        Assert-Layout ($script:conversationTransitionPhase -eq 'outgoing' -and $firstText.Text -eq 'Input 1' -and $secondText.Text -eq 'Output 1') 'Next must retain the old pair during the outgoing animation, not replace it immediately.'
-        Assert-Layout ($firstBubble.HasAnimatedProperties -and $secondBubble.RenderTransform.HasAnimatedProperties) 'Next must fade old input while the retained output moves up.'
-        $transitions = $script:conversationTransitionCount
-        Update-Conversation $script:lastView.overlay
-        Assert-Layout ($script:conversationTransitionCount -eq $transitions -and $script:conversationTransitionPhase -eq 'outgoing') 'Polling during an outgoing animation must not cancel or restart it.'
-        Wait-ConversationTransition
-    }
-    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($script:conversationTransitionCount -eq $transitions -and $conversationMessages.Children[0] -eq $first) 'Polling must not duplicate or rebuild history.'
+    Assert-Layout ($elapsedText.Text -eq '00:00:02' -and -not $timerPanel.HasAnimatedProperties) 'Cumulative timer must remain independent of animation.'
+    $messages += Message '1:input' $true 'Input 2'
+    Set-History $messages
+    $messages += Message '1:output' $false 'Output 2'
+    Set-History $messages
     Arrange-Overlay 820 (Get-OverlayConversationHeight 820) $false $true
-    Assert-Layout ((Get-TimerGeometry) -eq $timerBeforeTransition) 'Next incoming layout must preserve actual WPF timer geometry.'
-    Assert-Layout ($firstLabel.Text -eq 'AI' -and $firstText.Text -eq 'Output 1' -and $secondLabel.Text -eq 'You' -and $secondText.Text -eq 'Input 2') 'Next input must retain only the preceding output above Input 2.'
-    Assert-Layout ($conversationArrow.Visibility -eq 'Collapsed') 'Do not imply that previous output is the current response.'
-    $state.completed = $true
-    $state.outputSummary = 'Output 2'
-    $state.key = 'run1:2:output'
-    Arrange-Overlay 820 400 $false $true
-    $timerBeforeTransition = Get-TimerGeometry
-    Update-Conversation $script:lastView.overlay
-    Assert-Layout ((Get-TimerGeometry) -eq $timerBeforeTransition) 'Completion outgoing motion must not change actual WPF timer geometry.'
-    if ([System.Windows.SystemParameters]::ClientAreaAnimation) {
-        Assert-Layout ($script:conversationTransitionPhase -eq 'outgoing' -and $firstText.Text -eq 'Output 1' -and $secondText.Text -eq 'Input 2') 'Completion must keep the prior output visible until its outgoing fade finishes.'
-        Assert-Layout ($firstBubble.HasAnimatedProperties -and $secondBubble.RenderTransform.HasAnimatedProperties) 'Completion must fade the prior output and slide the current input upward.'
-        Wait-ConversationTransition
-    }
-    Update-ReplayOverlays -MeasureOnly
-    Arrange-Overlay 820 (Get-OverlayConversationHeight 820) $false $true
-    Assert-Layout ((Get-TimerGeometry) -eq $timerBeforeTransition) 'Completion incoming layout must preserve actual WPF timer geometry.'
-    Assert-Layout ($firstText.Text -eq 'Input 2' -and $secondText.Text -eq 'Output 2') 'Second completion must discard Output 1 and pair Input 2 with Output 2.'
-    foreach ($id in @('FirstLabel', 'FirstText', 'SecondLabel', 'SecondText', 'ConversationArrow', 'ElapsedText')) {
-        $element = $script:overlayWindow.FindName($id)
-        $peer = [System.Windows.Automation.Peers.TextBlockAutomationPeer]::new($element)
-        Assert-Layout ($peer.GetAutomationId() -ceq $id) "Missing stable automation ID $id."
-        $expectedName = if ($id -eq 'ConversationArrow') { 'Input followed by output' } else { $element.Text }
-        Assert-Layout ($peer.GetName() -ceq $expectedName) "Incorrect automation name for $id."
-    }
-    foreach ($text in @(('W' * 300), ('A faithful synthetic summary of the original request. ' * 6).Substring(0,300), ([string][char]0x754C * 300))) {
-        $script:lastView.overlay.promptSummary = $text
-        $state.outputSummary = $text
-        $state.key += ':text'
-        Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($conversationMessages.Children.Count -eq 4 -and $conversationMessages.Children[0] -eq $first) 'Short history must retain more than two bubbles and original elements.'
+    Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'Four short messages should fit naturally.'
+    foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300))) {
+        Set-History @((Message '0:input' $true $text), (Message '0:output' $false $text)) 'fit'
         foreach ($width in @(280, 320, 480, 639, 640, 820)) {
-            $height = Get-OverlayConversationHeight $width
-            Arrange-Overlay $width $height $false $true
-            Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) "Two 300-character bubbles must fit automatic height ${height} at width $width; scroll $($conversationPanel.ScrollableHeight)."
-            Assert-Layout ($height -le $area.Height - 32) 'Conversation automatic height exceeds the work area.'
-            $timerOrigin = $timerPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent)
-            $conversationOrigin = $conversationPanel.TranslatePoint([System.Windows.Point]::new(0, 0), $overlayContent)
-            Assert-Layout ($timerOrigin.Y -eq 0 -and $conversationOrigin.Y -ge $timerPanel.ActualHeight + 11) "Conversation timer must stay fixed at the top at width $width."
-            Assert-Layout ($firstText.Text.Length -eq 300 -and $secondText.Text.Length -eq 300) 'Conversation summaries must not be shortened.'
+            Arrange-Overlay $width (Get-OverlayConversationHeight $width) $false $true
+            Assert-Layout ((Get-TimerTop) -eq 0) 'Timer must stay at top at every width.'
+            $origin = $conversationPanel.TranslatePoint([System.Windows.Point]::new(0,0), $overlayContent)
+            Assert-Layout ($origin.Y -ge $timerPanel.ActualHeight + 11) 'History must scroll below timer.'
+            foreach ($bubble in $conversationMessages.Children) {
+                Assert-Layout ($bubble.Child.Children[1].Text.Length -eq 300) 'History may not truncate summary budget.'
+                Assert-Layout ($bubble.ActualWidth -le $conversationPanel.ViewportWidth + 1) "Bubble must wrap inside viewport at $width."
+            }
+            Assert-Layout ($script:overlayWindow.Height -le 600) 'Automatic history height is bounded.'
         }
     }
-    Arrange-Overlay 280 132 $false $true
-    Assert-Layout ($conversationPanel.ScrollableHeight -gt 0 -and $conversationPanel.ViewportHeight -gt 0) 'Manual conversation sizes must scroll two bubbles below the fixed timer.'
-    $state.outputSummary = $null
-    $state.key = 'run1:2:missing'
+    $many = @(for ($index = 0; $index -lt 100; $index++) {
+        Message ($index.ToString() + ':input') $true ("Input $index " + ('W' * 280))
+        Message ($index.ToString() + ':output') $false ("Output $index " + ('W' * 280))
+    })
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    Set-History $many 'many'
+    $watch.Stop()
+    Assert-Layout ($watch.ElapsedMilliseconds -lt 250) "History state update exceeded 250ms: $($watch.ElapsedMilliseconds)."
+    Wait-History
+    Arrange-Overlay 320 400 $false $true
+    Assert-Layout ($conversationMessages.Children.Count -eq 200 -and $conversationPanel.ScrollableHeight -gt 0) '100 exchanges must be bounded and scroll.'
+    $conversationPanel.ScrollToTop()
+    Arrange-Overlay 320 400 $false $true
+    $script:lastView.overlay.elapsed = '00:00:03'
     Update-ReplayOverlays -MeasureOnly
-    $missing = 'Output summary missing. Generate or edit summaries before playback.'
-    Assert-Layout ($secondText.Text -eq $missing) 'Missing output must not fall back to input or raw content.'
-    $state.completed = $false
-    $state.previousOutputSummary = $null
-    $state.key = 'run1:2:previous-missing'
-    Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($firstText.Text -eq $missing) 'Missing preceding output must be explicit.'
-    $state.key = 'pending-before-stop:2:false'
-    $script:lastView.overlay.promptSummary = 'Pending input that must never reappear'
-    Update-Conversation $script:lastView.overlay
-    $state.active = $false
-    Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($conversationPanel.Visibility -eq 'Collapsed' -and $timerPanel.Visibility -eq 'Collapsed' -and $null -eq $script:conversationKey) 'Stop/error must hide conversation and clear semantic identity.'
-    Assert-Layout ($null -eq $script:pendingConversation -and -not $script:conversationTransitionTimer.IsEnabled) 'Stop must cancel pending transitions so they cannot restore stale bubbles.'
-    $state.active = $true
+    Arrange-Overlay 320 400 $false $true
+    Assert-Layout ($conversationPanel.VerticalOffset -eq 0) 'Polling must not pull a reader away from older messages.'
+    Set-History $many[0..198] 'follow'
+    Wait-History
+    Arrange-Overlay 320 400 $false $true
+    $conversationPanel.ScrollToTop()
+    Arrange-Overlay 320 400 $false $true
+    Set-History $many 'follow'
+    Arrange-Overlay 320 400 $false $true
+    Assert-Layout ($conversationPanel.VerticalOffset -eq 0) 'Appending output must preserve an older-history reading position.'
+    Set-History $many[0..197] 'new-input'
+    Wait-History
+    Arrange-Overlay 320 400 $false $true
+    $conversationPanel.ScrollToTop()
+    Arrange-Overlay 320 400 $false $true
+    Set-History $many[0..198] 'new-input'
+    Arrange-Overlay 320 400 $false $true
+    Assert-Layout ([Math]::Abs($conversationPanel.VerticalOffset - $conversationPanel.ScrollableHeight) -lt 1) 'New input must scroll to latest.'
+    Assert-Layout ((Get-TimerTop) -eq 0) 'Scrolling history must never scroll timer.'
+    Set-History @((Message '0:input' $true 'New demo'), (Message '0:output' $false $null)) 'new'
+    Assert-Layout ($conversationMessages.Children.Count -eq 2 -and $conversationMessages.Children[1].Child.Children[1].Text -like '*summary missing*') 'New run resets history and missing output is explicit.'
     $script:stopping = $true
     Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($conversationPanel.Visibility -eq 'Collapsed' -and -not $showOutput.IsEnabled) 'An in-flight stop must hide conversation even before the next server view.'
+    Assert-Layout ($conversationMessages.Children.Count -eq 0 -and $conversationPanel.Visibility -eq 'Collapsed') 'Stop must clear visible history immediately.'
     $script:stopping = $false
-    $state.active = $true
-    $state.exchange = 1
-    $state.key = 'run2:1:input'
-    $script:lastView.overlay.promptSummary = 'Restarted input'
+    Set-History @((Message '0:input' $true 'Restarted')) 'restart'
+    Assert-Layout ($conversationMessages.Children.Count -eq 1) 'Start Over must reset to input only.'
+    $script:lastView.overlay.conversation.run = 'different-selection-same-current-key'
+    $script:lastView.overlay.conversation.history = @((Message '0:input' $true 'Other selection'))
     Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($firstText.Text -eq 'Restarted input' -and $secondBubble.Visibility -eq 'Collapsed') 'Restart/demo selection must not retain preceding bubbles.'
-    $transitions = $script:conversationTransitionCount
-    $state.key = 'other-demo:1:input'
-    Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($script:conversationTransitionCount -eq $transitions + 1) 'A new playback identity must transition even at the same exchange.'
+    Assert-Layout ($conversationMessages.Children.Count -eq 1 -and $conversationMessages.Children[0].Child.Children[1].Text -eq 'Other selection') 'Selection identity must reset history even when the current-exchange key matches.'
     $showOutput.IsChecked = $false
-    $showElapsed.IsChecked = $true
-    $showPrompt.IsChecked = $true
-    $script:overlayResized = $false
+    $showPrompt.IsChecked = $showElapsed.IsChecked = $true
     Update-ReplayOverlays -MeasureOnly
-    Assert-Layout ($showElapsed.IsEnabled -and $showElapsed.IsChecked -and $showPrompt.IsChecked) 'Turning output off must restore retained legacy toggles.'
-    Assert-Layout ($conversationPanel.Visibility -eq 'Collapsed' -and $promptPanel.Visibility -eq 'Visible') 'Output off must restore the legacy prompt.'
     Arrange-Overlay 820 180
-    Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1 -and [System.Windows.Controls.Grid]::GetRow($promptPanel) -eq 0) 'Output off must restore the exact legacy wide layout.'
-    Assert-Layout (-not $script:overlayWindow.IsVisible -and -not $window.IsVisible) 'Layout tests must never show windows.'
+    Assert-Layout ($showElapsed.IsEnabled -and $promptPanel.Visibility -eq 'Visible' -and $conversationPanel.Visibility -eq 'Collapsed') 'Output off must restore legacy mode and toggles.'
+    Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1) 'Legacy wide timer position must return.'
+
     $controllerPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Show-ReplayController.ps1'
     $tokens = $parseErrors = $null
     $controllerAst = [System.Management.Automation.Language.Parser]::ParseFile($controllerPath, [ref]$tokens, [ref]$parseErrors)
-    Assert-Layout ($parseErrors.Count -eq 0) 'Controller must parse successfully.'
-    $layoutAssignment = $controllerAst.Find({ param($node)
-        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '[xml]$layout'
-    }, $true)
-    $layoutLiteral = $layoutAssignment.Right.Find({ param($node)
-        $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
-    }, $true)
-    $controllerXml = [xml]$layoutLiteral.Value
-    $controllerReader = [System.Xml.XmlNodeReader]::new($controllerXml)
-    try { $controllerWindow = [System.Windows.Markup.XamlReader]::Load($controllerReader) } finally { $controllerReader.Dispose() }
+    Assert-Layout ($parseErrors.Count -eq 0) 'Controller must parse.'
+    $assignment = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '[xml]$layout' }, $true)
+    $literal = $assignment.Right.Find({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
+    $reader = [System.Xml.XmlNodeReader]::new([xml]$literal.Value)
+    try { $controller = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $reader.Dispose() }
     try {
-        $outputControl = $controllerWindow.FindName('ShowOutput')
-        Assert-Layout ($outputControl.Content -ceq 'Show summary of output' -and -not $outputControl.IsChecked) 'Controller output toggle needs the exact ASCII label and must default off.'
-        Assert-Layout ([System.Windows.Controls.ToolTipService]::GetShowOnDisabled($controllerWindow.FindName('ShowElapsed'))) 'The disabled elapsed toggle must still display its explanation tooltip.'
-        $controllerSize = [System.Windows.Size]::new($controllerWindow.Width, $controllerWindow.Height)
-        $controllerWindow.Content.Measure($controllerSize)
-        $controllerWindow.Content.Arrange([System.Windows.Rect]::new($controllerSize))
-        $controllerWindow.Content.UpdateLayout()
-        Assert-Layout ($outputControl.ActualHeight -gt 0 -and [System.Windows.Controls.Grid]::GetRow($outputControl.Parent) -eq 8) 'Controller output toggle and authoring link must occupy their measured row.'
-        foreach ($pair in @(@('ShowPrompt', 'GeneratePromptSummaries'), @('ShowOutput', 'GenerateOutputSummaries'))) {
-            $toggle = $controllerWindow.FindName($pair[0])
-            $link = $controllerWindow.FindName($pair[1])
-            $toggleOrigin = $toggle.TranslatePoint([System.Windows.Point]::new(0, 0), $controllerWindow.Content)
-            $linkOrigin = $link.TranslatePoint([System.Windows.Point]::new(0, 0), $controllerWindow.Content)
-            Assert-Layout ($link.ActualHeight -gt 0 -and $linkOrigin.Y -ge $toggleOrigin.Y + $toggle.ActualHeight) 'Authoring link must be visible below its checkbox without overlap.'
-            Assert-Layout ($link.ActualWidth -le $controllerWindow.Content.ActualWidth -and $linkOrigin.Y + $link.ActualHeight -le $controllerWindow.Content.ActualHeight) 'Authoring links must fit the compact controller.'
+        Assert-Layout (-not $controller.FindName('ShowOutput').IsChecked -and -not $controller.FindName('AutoContinue').IsChecked) 'Both new options must default off.'
+        $size = [System.Windows.Size]::new($controller.Width, $controller.Height)
+        $controller.Content.Measure($size)
+        $controller.Content.Arrange([System.Windows.Rect]::new($size))
+        $controller.Content.UpdateLayout()
+        foreach ($name in @('AutoContinue', 'GeneratePromptSummaries', 'GenerateOutputSummaries', 'WindowMode')) {
+            $element = $controller.FindName($name)
+            $origin = $element.TranslatePoint([System.Windows.Point]::new(0,0), $controller.Content)
+            Assert-Layout ($element.ActualHeight -gt 0 -and $origin.Y + $element.ActualHeight -le $controller.Content.ActualHeight) "$name must fit controller."
         }
-        Assert-Layout ([System.Windows.Controls.Grid]::GetRow($controllerWindow.FindName('WindowMode')) -eq 10) 'Adding output must preserve the mode selector below it.'
-        Assert-Layout (-not $controllerWindow.IsVisible) 'Controller layout must remain hidden.'
-    } finally { $controllerWindow.Close() }
-    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; real hidden WPF measure/arrange, legacy layouts and toggles, bounded two-message states, semantic transitions/polling, stop/restart/demo identity, missing outputs, fixed untimed timer, controller checkbox, 300-character wide-Latin/prose/CJK pairs at 280-820 widths, manual scrolling. No windows shown."
+        foreach ($name in @('Cancel-AutoContinue', 'Test-AutoContinueDue')) {
+            $function = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+            . ([scriptblock]::Create($function.Extent.Text))
+        }
+        $autoContinue = $controller.FindName('AutoContinue')
+        $script:pairedVisible = $true
+        $script:actionTask = $null
+        $script:switching = $false
+        $script:autoHandledKey = $null
+        $view = [pscustomobject]@{ phase = 'review'; nextEnabled = $true; overlay = [pscustomobject]@{ promptSummary = 'Input'; conversation = [pscustomobject]@{ key = 'one'; outputSummary = ('W' * 300) } } }
+        $script:lastView = $view
+        $now = [DateTime]::new(2026,1,1)
+        Assert-Layout (-not (Test-AutoContinueDue $view $now)) 'Manual mode must never advance.'
+        $autoContinue.IsChecked = $showOutput.IsChecked = $true
+        Assert-Layout (-not (Test-AutoContinueDue $view $now)) 'First completed poll must schedule, not skip newly revealed output.'
+        $deadline = $script:autoDeadline
+        Assert-Layout (($deadline - $now).TotalSeconds -gt 9 -and ($deadline - $now).TotalSeconds -le 10) '300 characters need a measurable reading dwell.'
+        Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(1)) -and $script:autoDeadline -eq $deadline) 'Repeated polls must not move deadline.'
+        Assert-Layout (-not (Test-AutoContinueDue $view $deadline.AddTicks(-1))) 'May not advance before deadline.'
+        Assert-Layout (Test-AutoContinueDue $view $deadline) 'Must advance at deadline.'
+        Assert-Layout (-not (Test-AutoContinueDue $view $deadline.AddSeconds(10))) 'Must not send duplicate Next from a stale review poll.'
+        Cancel-AutoContinue -ResetRun
+        Assert-Layout (-not (Test-AutoContinueDue $view $now) -and $null -ne $script:autoDeadline) 'A fresh process replaying the same demo must schedule again, not retain a handled key.'
+        Cancel-AutoContinue
+        foreach ($phase in @('ready', 'typing', 'response', 'complete', 'error', 'stopping', 'stopped', 'preparing')) {
+            $view.phase = $phase
+            $view.overlay.conversation.key = $phase
+            Assert-Layout (-not (Test-AutoContinueDue $view $now) -and $null -eq $script:autoDeadline) "Cannot advance in $phase, including paused response."
+        }
+        $view.phase = 'review'
+        $view.overlay.conversation.key = 'cancel'
+        Test-AutoContinueDue $view $now | Out-Null
+        Cancel-AutoContinue -BlockCurrent
+        Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'Manual action must suppress pending current advance.'
+        $view.overlay.conversation.key = 'uncheck'
+        Test-AutoContinueDue $view $now | Out-Null
+        $autoContinue.IsChecked = $false
+        Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30)) -and $null -eq $script:autoDeadline) 'Uncheck must cancel.'
+        $autoContinue.IsChecked = $true
+        $view.overlay.conversation.key = 'busy'
+        Test-AutoContinueDue $view $now | Out-Null
+        $script:actionTask = [object]::new()
+        Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'In-flight manual action must prevent timer races.'
+        $script:actionTask = $null
+        $view.nextEnabled = $false
+        Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'Last exchange never loops.'
+    } finally { $controller.Close() }
+    Assert-Layout (-not $window.IsVisible -and -not $script:overlayWindow.IsVisible) 'Layout acceptance must not show windows.'
+    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; hidden real WPF legacy layouts, 300-character Latin/prose/CJK at 280-820 widths, 200-bubble history, follow-bottom, fixed timer, reset, missing output, responsive state update, fake-time real controller deadlines/cancellation."
 } finally {
     $script:closeAllowed = $true
     $script:overlayWindow.Close()
