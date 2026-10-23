@@ -376,8 +376,11 @@ try {
         $tasks.Add([DemoUITest]::Invoke($header))
         $sortedTitle = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $sort.Title)
         Wait-Until {
-            $cell = ([System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)).GetItem(0,0)
-            $cell.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sortedTitle)
+            $grid = [System.Windows.Automation.GridPattern]$sessionList.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
+            if ($grid.Current.RowCount -eq 2) {
+                $cell = $grid.GetItem(0,0)
+                if ($cell) { $cell.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $sortedTitle) }
+            }
         } ('conversation column sorts ' + $sort.Direction) | Out-Null
     }
     Invoke-Button $capture 'CaptureRefresh'
