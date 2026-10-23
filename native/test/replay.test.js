@@ -10,6 +10,69 @@ const { controlView, createControlServer } = require('../control-server');
 const { RecordingAgentHost } = require('../recording-agent-host');
 const { WebSocket } = require('ws');
 const { completedQuestions, archivedEdit, INTERNAL_PARTS, validateSavedEditGroup, savedEditText, savedEditMarkdown } = require('../saved-parts');
+const { playbackTiming, setPlaybackSpeed } = require('../replay');
+
+test('speed slider has exact normal, intermediate and fast timing endpoints in both phases', () => {
+    assert.deepEqual(playbackTiming(), { speed: 0, promptMilliseconds: 2000, responseMilliseconds: 5000 });
+    assert.deepEqual(playbackTiming(50), { speed: 50, promptMilliseconds: 1250, responseMilliseconds: 3500 });
+    assert.deepEqual(playbackTiming(100), { speed: 100, promptMilliseconds: 500, responseMilliseconds: 2000 });
+    for (const speed of [-1, 101, NaN, '100', 1.5]) assert.throws(() => playbackTiming(speed), /Playback speed/);
+    const state = { phase: 'typing', clock: new PlaybackClock(1) };
+    state.clock.setPaused(true);
+    setPlaybackSpeed(state, 100);
+    assert.equal(state.clock.speed, 4);
+    assert.equal(state.clock.paused, true);
+    state.phase = 'response';
+    setPlaybackSpeed(state, 100);
+    assert.equal(state.clock.speed, 2.5);
+    assert.equal(controlView(state).timing.responseMilliseconds, 2000);
+    state.clock.stop();
+});
+
+test('changing speed while waiting preserves elapsed progress and pause time', { timeout: 2000 }, async () => {
+    const clock = new PlaybackClock(1);
+    const start = performance.now();
+    const waiting = clock.waitUntil(400);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    clock.setPaused(true);
+    const pausedAt = clock.now();
+    clock.setSpeed(4);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(clock.now(), pausedAt);
+    clock.setPaused(false);
+    await waiting;
+    assert.ok(clock.now() >= 395, 'Wait must consume the complete virtual duration');
+    assert.ok(performance.now() - start < 550, 'Speed change must accelerate the remaining wait');
+});
+
+test('native composer consumes the live clock at 500ms and accelerated replies take two seconds', { timeout: 6000 }, async context => {
+    const { NativeComposer } = require('../native-composer');
+    const typed = [];
+    const browser = vm.createContext({
+        performance,
+        requestAnimationFrame: callback => setTimeout(callback, 8),
+        TextUpdateEvent: class { constructor(_type, values) { Object.assign(this, values); } },
+        document: { activeElement: { editContext: {
+            selectionStart: 0, selectionEnd: 0,
+            dispatchEvent(event) { typed.push(event.text); this.selectionStart = this.selectionEnd = event.selectionEnd; }
+        } } }
+    });
+    const composer = new NativeComposer();
+    composer.page = { evaluate: async (callback, args) => vm.runInContext('(' + callback.toString() + ')', browser)(args) };
+    const clock = new PlaybackClock(4);
+    const prompt = 'A complete synthetic prompt.';
+    const typing = await composer.typePrompt(prompt, PROMPT_DURATION, clock);
+    assert.equal(typed.join(''), prompt);
+    assert.ok(typing.duration >= 450 && typing.duration < 950, 'Actual fast typing duration: ' + typing.duration);
+    const state = { phase: 'response', clock };
+    setPlaybackSpeed(state, 100);
+    const start = performance.now();
+    await clock.waitUntil(clock.now() + RESPONSE_DURATION);
+    const responseMs = performance.now() - start;
+    assert.ok(responseMs >= 1900 && responseMs < 2600, 'Actual fast response duration: ' + responseMs);
+    context.diagnostic('Fast playback measured with synthetic DOM: typing=' + Math.round(typing.duration) + 'ms; response=' + Math.round(responseMs) + 'ms.');
+    clock.stop();
+});
 
 async function fixture(context, request) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-unit-'));
@@ -97,7 +160,7 @@ test('controller maps ready, playing, paused, and finished without auto-closing'
     assert.equal(controlView({ phase: 'typing', clock: { paused: false } }).action, 'pause');
     assert.equal(controlView({ phase: 'response', clock: { paused: true } }).action, 'resume');
     const finished = controlView({ phase: 'complete', turnIndex: 2, recordings: [{}, {}] });
-    assert.equal(finished.button, 'Start Over');
+    assert.equal(finished.button, 'Replay');
     assert.equal(finished.restartEnabled, true);
     assert.equal(finished.nextEnabled, false);
     const review = controlView({ phase: 'review', turnIndex: 1, recordings: [{}, {}] });
@@ -262,6 +325,7 @@ test('private controller accepts only authorized state-appropriate controls', { 
         play: () => { state.phase = 'typing'; invoked.push('play'); },
         next: () => { state.phase = 'typing'; invoked.push('next'); },
         restart: () => { state.turnIndex = 0; state.phase = 'typing'; invoked.push('restart'); },
+        setSpeed: value => { state.playbackSpeed = value; },
         pause: () => { state.clock.paused = true; invoked.push('pause'); },
         resume: () => { state.clock.paused = false; invoked.push('resume'); },
         stop: () => { state.phase = 'stopping'; invoked.push('stop'); },
@@ -276,10 +340,16 @@ test('private controller accepts only authorized state-appropriate controls', { 
     assert.equal((await call('/pause', { method: 'POST' })).status, 409);
     assert.equal((await call('/next', { method: 'POST' })).status, 409);
     assert.equal((await call('/restart', { method: 'POST' })).status, 409);
+    for (const value of ['-1', '101', '1.5', 'NaN', '']) {
+        assert.equal((await call('/speed?value=' + value, { method: 'POST' })).status, 400);
+    }
+    assert.equal((await call('/speed?value=100', { method: 'POST' })).status, 200);
+    assert.equal((await (await call('/state')).json()).timing.promptMilliseconds, 500);
     assert.equal((await call('/play', { method: 'POST' })).status, 202);
     assert.equal((await (await call('/state')).json()).button, 'Pause');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);
     assert.equal((await call('/pause', { method: 'POST' })).status, 202);
+    assert.equal((await call('/speed?value=50', { method: 'POST' })).status, 200);
     assert.equal((await (await call('/state')).json()).button, 'Resume');
     assert.equal((await call('/resume', { method: 'POST' })).status, 202);
     state.phase = 'review';
@@ -287,7 +357,7 @@ test('private controller accepts only authorized state-appropriate controls', { 
     assert.equal((await call('/next', { method: 'POST' })).status, 202);
     state.phase = 'complete';
     state.turnIndex = 2;
-    assert.equal((await (await call('/state')).json()).label, 'Finished');
+    assert.equal((await (await call('/state')).json()).label, 'Finished - replay or exit');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);
     assert.equal((await call('/next', { method: 'POST' })).status, 409);
     assert.equal((await call('/restart', { method: 'POST' })).status, 202);

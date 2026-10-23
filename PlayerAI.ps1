@@ -122,6 +122,7 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
                 command = 'generateSummary'; apiKey = $ApiKey; model = $Model
                 source = ($parts[$index] + $(if ($combine) { $closingContext } else { '' })); kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
                 question = $(if ($Candidate.kind -eq 'output') { [string]$Candidate.question } else { '' })
+                previous = [string]$Candidate.previous
             } $Progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
             $notes.Add($summary)
         }
@@ -156,9 +157,10 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
  </DockPanel>
 </Window>
 '@ $Owner
-        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Output summaries also send the shown paired user question context (up to 4000 characters; any omitted middle is marked) so the recorded answer can be preserved. Long summary sources are split into bounded parts, then combined with additional requests; no summary source text is dropped. Review for secrets before consenting. Only shown source text/question context, intermediate summaries and summarization instructions are sent, with API response storage disabled (OpenAI retention policies still apply). Raw tool arguments/results, reasoning and metadata are excluded. New AI summaries use the speaker''s voice and complete statements up to 240 characters; existing saved summaries are kept. Nothing is saved until you review and save the drafts. Canceling cannot undo requests or their charges.'
+        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Each summary also sends the shown previous input/output context; output summaries include the paired user question (each context up to 4000 characters; omitted middles are marked). Long sources are split, then combined with additional requests; no source text is dropped. Review for secrets before consenting. Only shown source/context, intermediate summaries and summarization instructions are sent, with API response storage disabled (OpenAI retention policies still apply). Raw tool arguments/results, reasoning and metadata are excluded. New summaries use the speaker''s voice and complete statements up to 240 characters; saved summaries are kept. Nothing is saved until you review and save drafts. Canceling cannot undo requests or charges.'
         $consent.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
             'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" +
+            $(if ($_.previous) { "Previous exchange (context only):`r`n" + $_.previous + "`r`n`r`n" } else { '' }) +
             $(if ($_.question) { "Paired user question/request (context only):`r`n" + $_.question + "`r`n`r`nRecorded assistant reply:`r`n" } else { '' }) + $_.source
         }) -join "`r`n`r`n---`r`n`r`n")
         $consent.FindName('Generate').Add_Click({ $consent.DialogResult = $true })

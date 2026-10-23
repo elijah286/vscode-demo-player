@@ -203,7 +203,7 @@ async function run() {
         await activity.waitFor({ state: 'visible', timeout: 5000 });
         assert.equal(await activity.locator('.chat-confirmation-widget-title').getAttribute('aria-expanded'), 'false', 'Retained history keeps saved payloads collapsed');
     }
-    assert.equal(controlView(api.state).button, 'Start Over');
+    assert.equal(controlView(api.state).button, 'Replay');
     assert.equal(controlView(api.state).nextEnabled, false);
     const secondTyping = api.state.metrics.typingUpdates.at(-1) - api.state.metrics.typingUpdates[0];
     const secondResponse = api.state.metrics.responseFinished - api.state.metrics.promptFinished;

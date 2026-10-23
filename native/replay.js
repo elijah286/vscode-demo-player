@@ -16,6 +16,22 @@ function kindOf(part) {
 const PROMPT_DURATION = 2000;
 const RESPONSE_DURATION = 5000;
 
+function playbackTiming(speed = 0) {
+    if (!Number.isInteger(speed) || speed < 0 || speed > 100) throw new Error('Playback speed must be an integer from 0 to 100.');
+    return { speed, promptMilliseconds: PROMPT_DURATION - 15 * speed, responseMilliseconds: RESPONSE_DURATION - 30 * speed };
+}
+
+function setPlaybackSpeed(state, speed) {
+    const timing = playbackTiming(speed);
+    state.playbackSpeed = speed;
+    if (state.clock) {
+        state.clock.setSpeed(state.phase === 'typing'
+            ? PROMPT_DURATION / timing.promptMilliseconds
+            : RESPONSE_DURATION / timing.responseMilliseconds);
+    }
+    return timing;
+}
+
 function recordedModel(request, snapshot) {
     const id = request.modelId;
     if (typeof id !== 'string' || !id.trim()) return undefined;
@@ -261,7 +277,7 @@ class PlaybackClock {
             if (this.stopped) throw new Error('Replay stopped.');
             if (this.steps > 0) { this.steps--; return; }
             const duration = this.paused ? 100 : Math.min(50, remaining / this.speed);
-            const start = Date.now();
+            const start = this.now();
             await new Promise(resolve => {
                 let timer;
                 const finish = () => {
@@ -272,10 +288,10 @@ class PlaybackClock {
                 this.listeners.add(finish);
                 timer = setTimeout(finish, duration);
             });
-            if (!this.paused) remaining -= (Date.now() - start) * this.speed;
+            remaining -= this.now() - start;
         }
         if (this.stopped) throw new Error('Replay stopped.');
     }
 }
 
-module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, extractRecording, validateEditorRecording, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION, MAX_PROMPT_SUMMARY_LENGTH };
+module.exports = { readRecording, readRecordings, readPlaylist, readSnapshot, applyTranscriptRecord, extractRecording, validateEditorRecording, recordedModel, kindOf, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION, MAX_PROMPT_SUMMARY_LENGTH, playbackTiming, setPlaybackSpeed };

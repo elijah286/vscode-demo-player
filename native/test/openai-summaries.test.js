@@ -6,7 +6,32 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const library = require('../demo-library');
 const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
-const { summaryQuestionContext, QUESTION_CONTEXT_LENGTH } = require('../prompt-summary-authoring');
+const { summaryQuestionContext, QUESTION_CONTEXT_LENGTH, previousExchangeContext, summaryPrompt } = require('../prompt-summary-authoring');
+
+test('both providers ground short replies in the preceding included exchange without leaking excluded turns', async () => {
+    const turn = (input, output) => ({ snapshot: { requests: [{ message: { text: input }, response: [{ value: output }] }] } });
+    const recording = { turns: [
+        turn('How should I proceed?', 'Do you want a blue or green frame?'),
+        turn('Excluded private input', 'Excluded private output'),
+        turn('Blue please.', 'I selected blue.')
+    ], playbackIncluded: [true, false, true] };
+    assert.equal(previousExchangeContext(recording, 0), '');
+    const previous = previousExchangeContext(recording, 2);
+    assert.match(previous, /blue or green frame/);
+    assert.doesNotMatch(previous, /Excluded private/);
+    for (const kind of ['input', 'output']) {
+        assert.match(summaryPrompt('Blue please.', kind, { previous }), /Previous exchange \(JSON string/);
+        await generateOpenAISummary({ ...request, kind, previous }, { fetchImpl: async (_url, options) => {
+            const body = JSON.parse(options.body);
+            assert.match(body.input, /blue or green frame/);
+            assert.match(body.input, /Never attribute prior results/);
+            return Response.json(completed('I chose blue.'));
+        } });
+    }
+    await assert.rejects(generateOpenAISummary({ ...request, previous: 'x'.repeat(4001) }, {
+        fetchImpl: () => assert.fail('Oversized context must not be sent')
+    }), /invalid/);
+});
 
 const key = 'synthetic-key-not-a-real-openai-key';
 const request = { apiKey: key, model: DEFAULT_MODEL, source: 'Synthetic user request: name three colors.', kind: 'input' };
@@ -216,6 +241,10 @@ test('preparation includes short prompts, isolates scopes, filters output and pr
     assert.deepEqual(both.candidates.map(({ index, kind }) => [index, kind]), [[0, 'input'], [0, 'output'], [1, 'output'], [2, 'input']]);
     assert.deepEqual(both.manualOutputs, [3]);
     assert.ok(!both.candidates.some(candidate => candidate.source.includes('RAW_PRIVATE_TOOL_RESULT')));
+    assert.ok(both.candidates.every(candidate => candidate.previous.length <= QUESTION_CONTEXT_LENGTH && !candidate.previous.includes('RAW_PRIVATE_TOOL_RESULT')));
+    assert.equal(both.candidates[0].previous, '');
+    assert.match(both.candidates.find(candidate => candidate.index === 1).previous, /Short synthetic prompt/);
+    assert.match(both.candidates.find(candidate => candidate.index === 1).previous, /Saved assistant reply/);
     assert.ok((await prepareSummaries(root, entry.id, 'input')).candidates.every(candidate => candidate.kind === 'input'));
     assert.ok((await prepareSummaries(root, entry.id, 'output')).candidates.every(candidate => candidate.kind === 'output'));
     assert.deepEqual(both.candidates.filter(candidate => candidate.kind === 'output').map(candidate => candidate.question),

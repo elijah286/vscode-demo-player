@@ -181,6 +181,18 @@ try {
             Assert-Layout ($ending.Y -ge $last.Height -and $ending.Y -le $conversationPanel.ActualHeight + 1) 'Scrolling a short window must expose the complete final line.'
         }
     }
+    $script:overlayResized = $true
+    Set-History @((Message '0:input' $true 'A short prompt.')) 'late-layout'
+    Arrange-Overlay 280 260 $false $true
+    Set-History @((Message '0:input' $true 'A short prompt.'), (Message '0:output' $false ('W' * 300))) 'late-layout'
+    Arrange-Overlay 280 260 $false $true
+    Arrange-Overlay 280 260 $false $true
+    Assert-Layout ($conversationPanel.ScrollableHeight -gt 0) 'Late-layout regression must actually overflow.'
+    Assert-Layout ($conversationPanel.ScrollableHeight - $conversationPanel.VerticalOffset -lt 1) 'New output must follow its final line after layout changes the scroll extent.'
+    Arrange-Overlay 320 300 $false $true
+    Arrange-Overlay 320 300 $false $true
+    Assert-Layout ($script:conversationFollow -and $conversationPanel.ScrollableHeight - $conversationPanel.VerticalOffset -lt 1) 'Resizing the viewport must keep the latest reply ending visible without being mistaken for scrolling up.'
+    $script:overlayResized = $false
     $many = @(for ($index = 0; $index -lt 100; $index++) {
         Message ($index.ToString() + ':input') $true ("Input $index " + ('W' * 280))
         Message ($index.ToString() + ':output') $false ("Output $index " + ('W' * 280))
@@ -257,10 +269,21 @@ try {
         $controller.Content.Measure($size)
         $controller.Content.Arrange([System.Windows.Rect]::new($size))
         $controller.Content.UpdateLayout()
-        foreach ($name in @('AutoContinue', 'GeneratePromptSummaries', 'GenerateOutputSummaries', 'WindowMode')) {
+        foreach ($name in @('AutoContinue', 'GeneratePromptSummaries', 'GenerateOutputSummaries', 'WindowMode', 'SelectExchanges', 'PlaybackSpeed', 'SpeedLabel')) {
             $element = $controller.FindName($name)
             $origin = $element.TranslatePoint([System.Windows.Point]::new(0,0), $controller.Content)
             Assert-Layout ($element.ActualHeight -gt 0 -and $origin.Y + $element.ActualHeight -le $controller.Content.ActualHeight) "$name must fit controller."
+        }
+        Assert-Layout ($controller.FindName('PlaybackSpeed').Minimum -eq 0 -and $controller.FindName('PlaybackSpeed').Maximum -eq 100 -and $controller.FindName('PlaybackSpeed').Value -eq 0) 'Speed slider must default to normal across the complete 0-100 range.'
+        $stopHandler = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Expression.Extent.Text -eq '$stop' -and $node.Member.Value -eq 'Add_Click' }, $true)
+        $stopAction = $stopHandler.Arguments[0].ScriptBlock.GetScriptBlock()
+        function Request-Stop { $script:testStopRequested = $true }
+        foreach ($phase in @('response', 'complete')) {
+            $script:lastView = [pscustomobject]@{ phase = $phase }
+            $script:exitRequested = $false
+            $script:testStopRequested = $false
+            & $stopAction
+            Assert-Layout ($script:testStopRequested -and $script:exitRequested -eq ($phase -eq 'complete')) 'Exit must close the controller after the final exchange; mid-run Stop must retain it.'
         }
         foreach ($name in @('Cancel-AutoContinue', 'Test-AutoContinueDue')) {
             $function = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)

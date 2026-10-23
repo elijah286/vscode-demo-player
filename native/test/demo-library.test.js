@@ -142,6 +142,19 @@ test('retained VS Code authoring omits excluded sources without losing original 
     assert.deepEqual(after.playbackIncluded, [false, true]);
 });
 
+test('VS Code input authoring previews and sends the prior included input/output for short answers', async context => {
+    const { source, root, inspection } = await authoringFixture(context, ['Prior user request', 'Yes.']);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Contextual short answer', inspection.sha256));
+    const { api, calls } = authoringAPI();
+    await require('../prompt-summary-authoring').activateSummaryAuthoring({ subscriptions: [] }, api, path.join(root, added.id + '.demo.json')).run(undefined, 'input');
+    assert.deepEqual(calls.errors, []);
+    assert.equal(calls.requests, 2);
+    assert.match(calls.documents[0].content, /Previous exchange \(context only\)/);
+    assert.match(calls.messages[1][0].content, /Previous user input:\\nPrior user request/);
+    assert.match(calls.messages[1][0].content, /Previous assistant output:\\nOriginal unchanged answer/);
+    assert.match(calls.consentMessages[0], /including prior assistant replies/);
+});
+
 test('library CLI accepts optional UTF-8 BOM and split Unicode without masking malformed requests', async context => {
     const { directory, source, inspection } = await fixture(context);
     const root = path.join(directory, 'library-\u03bb\u6f22\u5b57');
@@ -644,7 +657,7 @@ test('controller prompt-only action includes short prompts, preserves outputs an
     assert.deepEqual(calls.errors, []);
     assert.equal(calls.requests, 1);
     assert.ok(calls.reviewDrafts.every(draft => draft.kind === 'input'));
-    assert.match(calls.consentMessages[0], /Assistant replies are not sent/);
+    assert.match(calls.consentMessages[0], /including prior assistant replies/);
     assert.equal(calls.statuses[0].command, 'historyReplay.summarizeInput');
     const after = await library.readEntry(root, added.id);
     assert.deepEqual(after.recording.promptSummaries, ['Manual prompt', 'Reviewed shorter query']);
@@ -810,14 +823,14 @@ test('persistent inbox retains response-only scope across reload and resets it f
     assert.match(second.calls.documents[1].content, /Long original query/);
     await fs.writeFile(path.join(inbox, '102-aab.json'), JSON.stringify({ file, scope: 'input' }));
     await reload.scan();
-    assert.match(second.calls.consentMessages[2], /Assistant replies are not sent/);
+    assert.match(second.calls.consentMessages[2], /including prior assistant replies/);
     assert.equal(second.calls.statuses[0].command, 'historyReplay.summarizeInput');
     const restoredSubscriptions = [];
     const restored = authoringAPI({ decline: true });
     const restoredInbox = activateSummaryInbox({ subscriptions: restoredSubscriptions }, restored.api, inbox);
     context.after(() => restoredSubscriptions.forEach(item => item.dispose()));
     await restoredInbox.ready;
-    assert.match(restored.calls.consentMessages[0], /Assistant replies are not sent/);
+    assert.match(restored.calls.consentMessages[0], /including prior assistant replies/);
     restoredSubscriptions.forEach(item => item.dispose());
     const before = await fs.readFile(file);
     await fs.writeFile(path.join(inbox, '102-aaa.json'), JSON.stringify({ file, scope: 'unrecognized' }));
