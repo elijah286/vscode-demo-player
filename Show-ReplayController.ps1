@@ -43,17 +43,17 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="474" Topmost="True"
+        Title="Demo Player" Width="360" Height="578" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="68"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
     <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="64"/></Grid.ColumnDefinitions>
       <Button x:Name="PlayPause" IsEnabled="False" ToolTip="Play"
               AutomationProperties.AutomationId="PlayPause" AutomationProperties.Name="Play">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -69,12 +69,24 @@ if (-not $script:standalone) {
             </Button>
             <Button x:Name="Stop" Grid.Column="4" ToolTip="Stop playback"
               AutomationProperties.AutomationId="Stop" AutomationProperties.Name="Stop">
-        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE71A;"/>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE71A;" VerticalAlignment="Center"/>
+          <TextBlock x:Name="ExitLabel" Text="Exit" Visibility="Collapsed" Margin="4,0,0,0" VerticalAlignment="Center"/>
+        </StackPanel>
       </Button>
     </Grid>
     <CheckBox x:Name="AutoContinue" Grid.Row="4" Content="Auto continue" IsChecked="False"
               VerticalAlignment="Center" AutomationProperties.AutomationId="AutoContinue"
               ToolTip="Advance after completion and 2-10 seconds to read the visible summary. Uncheck to stay on this exchange."/>
+    <Button x:Name="SelectExchanges" Grid.Row="12" Content="Select exchanges..." IsEnabled="False"
+            AutomationProperties.AutomationId="SelectExchanges" ToolTip="Choose exchanges for the next replay. Stop playback first."/>
+    <StackPanel Grid.Row="13" Margin="0,8,0,0">
+      <TextBlock x:Name="SpeedLabel" Text="Speed: user 2.0s / reply 5.0s" FontSize="12"/>
+      <Slider x:Name="PlaybackSpeed" Minimum="0" Maximum="100" Value="0" TickFrequency="1" IsSnapToTickEnabled="True"
+              AutomationProperties.AutomationId="PlaybackSpeed" AutomationProperties.Name="Playback speed"
+              ToolTip="Left: user 2s / reply 5s. Right: user 0.5s / reply 2s. Changes apply during playback."/>
+      <TextBlock Text="Normal                                      Fast" FontSize="11" Foreground="#555555"/>
+    </StackPanel>
         <StackPanel Grid.Row="6">
         <CheckBox x:Name="ShowPrompt" Content="Show prompt summary" IsEnabled="False"
                             VerticalContentAlignment="Center" AutomationProperties.AutomationId="ShowPrompt"/>
@@ -143,6 +155,12 @@ $showPrompt = $window.FindName('ShowPrompt')
 $showElapsed = $window.FindName('ShowElapsed')
 $showOutput = $window.FindName('ShowOutput')
 $autoContinue = $window.FindName('AutoContinue')
+$selectExchanges = $window.FindName('SelectExchanges')
+$playbackSpeed = $window.FindName('PlaybackSpeed')
+$speedLabel = $window.FindName('SpeedLabel')
+$playbackSpeed.Add_ValueChanged({
+    $speedLabel.Text = 'Speed: user {0:0.0}s / reply {1:0.0}s' -f (2 - 0.015 * $playbackSpeed.Value), (5 - 0.03 * $playbackSpeed.Value)
+})
 $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
 $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
 $frameColor = $window.FindName('FrameColor')
@@ -192,6 +210,7 @@ function Update-ControllerSummaryLinks {
     $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen -and -not $script:launching -and -not $window.Resources.Contains('DemoPlayerOperation')
     $generatePromptSummaries.IsEnabled = $enabled
     $generateOutputSummaries.IsEnabled = $enabled
+    $selectExchanges.IsEnabled = $enabled
 }
 
 function Refresh-ControllerSummaries {
@@ -228,6 +247,14 @@ function Invoke-ControllerSummaryAuthoring([ValidateSet('input', 'output')][stri
 }
 $generatePromptSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'input' })
 $generateOutputSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'output' })
+$selectExchanges.Add_Click({
+    try {
+        if (-not $selectExchanges.IsEnabled) { return }
+        Show-DemoExchangeSelection $window $script:selectedDemo.id | Out-Null
+        $script:summaryStamp = $null
+        Refresh-ControllerSummaries
+    } catch { Show-DemoError $window $_ }
+})
 
 function Set-IdleView {
     Cancel-AutoContinue -ResetRun
@@ -243,6 +270,7 @@ function Set-IdleView {
     $playIcon.Text = [char]0xE8A7
     $nextStep.IsEnabled = $false
     $stop.IsEnabled = $false
+    $window.FindName('ExitLabel').Visibility = 'Collapsed'
     $chooseDemo.IsEnabled = -not $script:pickerOpen
     $windowMode.IsEnabled = $true
     Update-ControllerSummaryLinks
@@ -392,7 +420,7 @@ function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
 $autoContinue.Add_Unchecked({ Cancel-AutoContinue })
 
 function Send-Control([string]$Action) {
-    Cancel-AutoContinue -BlockCurrent
+    if (-not $Action.StartsWith('speed?')) { Cancel-AutoContinue -BlockCurrent }
     if (-not $script:client -or $script:actionTask) { return }
     $script:actionTask = $script:client.PostAsync($Action, [System.Net.Http.StringContent]::new(''))
     if ($Action -eq 'stop') { $script:stopSent = $true }
@@ -489,7 +517,10 @@ $nextStep.Add_Click({
         Send-Control 'next'
     }
 })
-$stop.Add_Click({ Request-Stop })
+$stop.Add_Click({
+    if ($script:lastView.phase -eq 'complete') { $script:exitRequested = $true }
+    Request-Stop
+})
 $window.Add_Closing({
     param($sender, $eventArgs)
     if ($script:launching) {
@@ -604,6 +635,9 @@ $timer.Add_Tick({
                 $status.ToolTip = $status.Text
             }
             $script:action = $view.action
+            $stop.ToolTip = if ($view.phase -eq 'complete') { 'Exit and close playback windows' } else { 'Stop playback' }
+            $window.FindName('ExitLabel').Visibility = if ($view.phase -eq 'complete') { 'Visible' } else { 'Collapsed' }
+            [System.Windows.Automation.AutomationProperties]::SetName($stop, $(if ($view.phase -eq 'complete') { 'Exit' } else { 'Stop' }))
             $playPause.IsEnabled = [bool]$view.enabled -and -not $script:actionTask
             $nextStep.IsEnabled = [bool]$view.nextEnabled -and -not $script:actionTask
             $playPause.ToolTip = $view.button
@@ -612,6 +646,7 @@ $timer.Add_Tick({
             $playIcon.Text = switch ($view.button) {
                 'Pause' { [char]0xE769 }
                 'Start Over' { [char]0xE72C }
+                'Replay' { [char]0xE72C }
                 default { [char]0xE768 }
             }
             $script:lastView = $view
@@ -620,6 +655,9 @@ $timer.Add_Tick({
             try { $windowMode.SelectedIndex = if ($view.windowMode -eq 'Agents') { 1 } else { 0 } } finally { $script:modeUpdating = $false }
             $windowMode.IsEnabled = [bool]$view.modeSwitchEnabled -and -not $script:actionTask
             Update-ReplayOverlays
+            if (-not $script:actionTask -and $null -ne $view.timing -and [int]$view.timing.speed -ne [int]$playbackSpeed.Value) {
+                Send-Control ('speed?value=' + [int]$playbackSpeed.Value)
+            }
             if (Test-AutoContinueDue $view) {
                 $playPause.IsEnabled = $false
                 $nextStep.IsEnabled = $false

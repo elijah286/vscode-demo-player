@@ -1,5 +1,5 @@
 const { readEntry, includedTurnIndices } = require('./demo-library');
-const { recordedOutput, summaryPrompt, GENERATED_SUMMARY_LENGTH, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, validateGeneratedSummary } = require('./prompt-summary-authoring');
+const { recordedOutput, summaryPrompt, GENERATED_SUMMARY_LENGTH, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary } = require('./prompt-summary-authoring');
 
 const ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_MODEL = 'gpt-4.1-mini';
@@ -20,10 +20,10 @@ async function prepareSummaries(root, id, scope) {
         const output = recordedOutput(request);
         const source = output.text + '\n\n' + output.notice;
         if (included.has(index) && scope !== 'output' && !entry.recording.promptSummaries?.[index]) {
-            candidates.push({ index, kind: 'input', source: request.message.text });
+            candidates.push({ index, kind: 'input', source: request.message.text, previous: previousExchangeContext(entry.recording, index) });
         }
         if (included.has(index) && scope !== 'input' && !entry.recording.outputSummaries?.[index]) {
-            if (output.text) candidates.push({ index, kind: 'output', source, question: summaryQuestionContext(request.message.text) });
+            if (output.text) candidates.push({ index, kind: 'output', source, question: summaryQuestionContext(request.message.text), previous: previousExchangeContext(entry.recording, index) });
             else manualOutputs.push(index + 1);
         }
         return source;
@@ -43,14 +43,15 @@ async function readResponse(response) {
     catch { throw new SummaryError('OpenAI returned invalid JSON. No summaries were saved.'); }
 }
 
-async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '' }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
+async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '', previous = '' }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
     if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(apiKey)) {
         throw new SummaryError('Enter a valid OpenAI API key in Settings.', 'OPENAI_AUTH');
     }
     if (typeof model !== 'string' || !MODEL_PATTERN.test(model)) throw new SummaryError('Enter a valid OpenAI model ID in Settings.');
     if (typeof source !== 'string' || !source.length || (!source.trim() && !partial) || source.length > 64000 || !['input', 'output'].includes(kind) ||
         typeof partial !== 'boolean' || typeof combine !== 'boolean' || typeof question !== 'string' ||
-        question.length > QUESTION_CONTEXT_LENGTH || (kind !== 'output' && question)) {
+        question.length > QUESTION_CONTEXT_LENGTH || (kind !== 'output' && question) ||
+        typeof previous !== 'string' || previous.length > QUESTION_CONTEXT_LENGTH) {
         throw new SummaryError('The recorded summary source or kind is invalid. No request was sent.');
     }
     let response;
@@ -60,7 +61,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
             method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
             headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model, input: summaryPrompt(source, kind, { partial, combine, question }), max_output_tokens: 1024, store: false,
+                model, input: summaryPrompt(source, kind, { partial, combine, question, previous }), max_output_tokens: 1024, store: false,
                 text: { format: {
                     type: 'json_schema', name: 'demo_player_summary', strict: true,
                     schema: {

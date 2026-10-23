@@ -974,6 +974,80 @@ function Start-DemoSummaryAuthoring([string]$Id, $Owner, [ValidateSet('both', 'i
     }
 }
 
+function Show-DemoExchangeSelection($Owner, [string]$Id) {
+    $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
+    $outputs = @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner)
+    $dialog = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Select exchanges"
+ Width="820" Height="620" MinWidth="520" MinHeight="360" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ <DockPanel Margin="16">
+  <StackPanel DockPanel.Dock="Top">
+   <TextBlock Text="Choose exchanges for the next replay. Originals and summaries are retained." TextWrapping="Wrap"/>
+   <WrapPanel Margin="0,10">
+    <Button x:Name="All" Content="Select all" Padding="12,4"/>
+    <Button x:Name="None" Content="Deselect all" Padding="12,4" Margin="8,0"/>
+    <TextBlock x:Name="Count" VerticalAlignment="Center" AutomationProperties.AutomationId="ExchangeSelectionCount"/>
+   </WrapPanel>
+  </StackPanel>
+  <StackPanel DockPanel.Dock="Bottom">
+   <TextBlock x:Name="Error" Foreground="#B00020" TextWrapping="Wrap"/>
+   <WrapPanel HorizontalAlignment="Right" Margin="0,12,0,0">
+    <Button Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
+    <Button x:Name="Save" Content="Use selected exchanges" Padding="16,6" AutomationProperties.AutomationId="SaveExchangeSelection"/>
+   </WrapPanel>
+  </StackPanel>
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <StackPanel x:Name="Exchanges" AutomationProperties.AutomationId="ExchangeSelectionList"/>
+  </ScrollViewer>
+ </DockPanel>
+</Window>
+'@ $Owner
+    $checks = [Collections.Generic.List[Windows.Controls.CheckBox]]::new()
+    $updateCount = {
+        $count = @($checks | Where-Object { $_.IsChecked }).Count
+        $dialog.FindName('Count').Text = "$count/$($checks.Count) included"
+        $dialog.FindName('Save').IsEnabled = $count -gt 0
+    }
+    for ($index = 0; $index -lt $entry.recording.turns.Count; $index++) {
+        $check = [Windows.Controls.CheckBox]::new()
+        $check.Margin = '0,6,0,6'
+        $check.HorizontalContentAlignment = 'Stretch'
+        $check.IsChecked = $null -eq $entry.recording.playbackIncluded -or $entry.recording.playbackIncluded[$index]
+        [Windows.Automation.AutomationProperties]::SetAutomationId($check, "ExchangeSelection$index")
+        $text = [Windows.Controls.TextBlock]::new()
+        $text.TextWrapping = 'Wrap'
+        $inputText = if ($null -ne $entry.recording.promptSummaries) { [string]$entry.recording.promptSummaries[$index] } else { '' }
+        if (-not $inputText) { $inputText = [string]$entry.recording.turns[$index].snapshot.requests[0].message.text }
+        $outputText = if ($null -ne $entry.recording.outputSummaries) { [string]$entry.recording.outputSummaries[$index] } else { '' }
+        if (-not $outputText) { $outputText = [string]$outputs[$index] }
+        $inputText = ($inputText -replace '\s+', ' ').Trim()
+        $outputText = ($outputText -replace '\s+', ' ').Trim()
+        $text.Text = 'Exchange ' + ($index + 1) + "`nYou: " + $inputText.Substring(0, [Math]::Min(300, $inputText.Length)) +
+            "`nAI: " + $outputText.Substring(0, [Math]::Min(300, $outputText.Length))
+        $check.Content = $text
+        $checks.Add($check)
+        $dialog.FindName('Exchanges').Children.Add($check) | Out-Null
+        $check.Add_Checked($updateCount)
+        $check.Add_Unchecked($updateCount)
+    }
+    $dialog.FindName('All').Add_Click({ foreach ($check in $checks) { $check.IsChecked = $true } })
+    $dialog.FindName('None').Add_Click({ foreach ($check in $checks) { $check.IsChecked = $false } })
+    $dialog.FindName('Save').Add_Click({
+        try {
+            $inputs = if ($null -ne $entry.recording.promptSummaries) { @($entry.recording.promptSummaries) } else { [object[]]::new($checks.Count) }
+            $replies = if ($null -ne $entry.recording.outputSummaries) { @($entry.recording.outputSummaries) } else { [object[]]::new($checks.Count) }
+            Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
+                summaries = @{ promptSummaries = @($inputs); outputSummaries = @($replies); playbackIncluded = @($checks | ForEach-Object { [bool]$_.IsChecked }) }
+                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
+            } $dialog | Out-Null
+            $dialog.DialogResult = $true
+        } catch { $dialog.FindName('Error').Text = $_.Exception.Message }
+    })
+    & $updateCount
+    return $dialog.ShowDialog()
+}
+
 function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     $entry = if ($Generated) { $Generated.Entry } else { Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner }
     $outputs = if ($Generated) { @($Generated.Outputs) } else { @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner) }

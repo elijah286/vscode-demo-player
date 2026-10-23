@@ -742,6 +742,11 @@ try {
         [Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Final output changed fixed cumulative timer semantics.' }
     Save-WindowImage $overlay 'conversation-input2-missing-output2.png'
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable after the final exchange.' }
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Replay' -or
+        (Find-Element $window 'Id' 'Stop').Current.Name -ne 'Exit') { throw 'Finished playback must offer Replay and Exit.' }
+    Start-Sleep -Milliseconds 800
+    if (-not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -or
+        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -notlike '*summary missing*') { throw 'Finished playback must retain its window and last reply.' }
     Save-WindowImage $window 'controller-finished.png'
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Start Over restarts the selected demo' | Out-Null

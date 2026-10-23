@@ -22,12 +22,15 @@ class NativeComposer {
 
     async typePrompt(prompt, duration, clock) {
         const control = 'nativeReplayTypingControl';
-        await this.page.evaluate(key => { globalThis[key] = { paused: false, stopped: false }; }, control);
+        const origin = clock.now();
+        await this.page.evaluate(({ key, elapsed, paused, stopped }) => { globalThis[key] = { elapsed, paused, stopped }; },
+            { key: control, elapsed: 0, paused: clock.paused, stopped: clock.stopped });
         let syncing = false;
         const timer = setInterval(async () => {
             if (syncing) return;
             syncing = true;
-            try { await this.page.evaluate(({ key, paused, stopped }) => { globalThis[key] = { paused, stopped }; }, { key: control, paused: clock.paused, stopped: clock.stopped }); }
+            try { await this.page.evaluate(({ key, elapsed, paused, stopped }) => { globalThis[key] = { elapsed, paused, stopped }; },
+                { key: control, elapsed: clock.now() - origin, paused: clock.paused, stopped: clock.stopped }); }
             catch { clock.stop(); }
             finally { syncing = false; }
         }, 40);
@@ -38,17 +41,14 @@ class NativeComposer {
                 if (!context || typeof TextUpdateEvent !== 'function') throw new Error('Native Agents input context unavailable.');
                 const characters = Array.from(prompt.replace(/\r\n/g, '\n'));
                 const started = performance.now();
-                let previous = started;
                 let elapsed = 0;
                 let count = 0;
                 const frames = [];
                 while (count < characters.length) {
                     await new Promise(resolve => requestAnimationFrame(resolve));
-                    const now = performance.now();
                     const state = globalThis[key];
                     if (state.stopped) throw new Error('Replay stopped.');
-                    if (!state.paused) elapsed += now - previous;
-                    previous = now;
+                    elapsed = state.elapsed;
                     if (state.paused) continue;
                     const target = Math.min(characters.length, 1 + Math.floor(elapsed * Math.max(1, characters.length - 1) / duration));
                     while (count < target) {
