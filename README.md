@@ -437,12 +437,20 @@ UI merely to update summary counters.
 
 Use the **Playback speed** slider at any time, including while paused. Its normal
 end is **2 seconds per user prompt / 5 seconds per reply**; its fastest end is
-**500 ms per user prompt / 2 seconds per reply**, with linear values between.
+**100 ms per user prompt / 1 second per reply**, with linear values between.
 The label shows both durations. A change preserves progress within the current
 phase and applies to the remaining typing/output in both Editor and Agents modes.
 The speed choice lasts for this controller session, including replay and mode switches.
 Recorded working-time totals do not change with presentation speed. Auto-continue's
-separate reading dwell is unchanged.
+separate reading dwell is unchanged. **Estimated total** updates immediately as
+the slider moves and covers the full included selection, not just the remaining
+exchanges. With Auto continue on it includes the 2-10 second reading delay for
+the visible summary between exchanges (never after the final reply). Without
+Auto continue it shows playback time **+ manual waits**, not an invented duration
+for those waits. Startup, rendering/transport overhead and pauses are excluded,
+so this is an estimate, distinct from the original cumulative working-time timer.
+Moving the slider only uses cached counts/reading totals; it does not rescan
+recordings or call a helper on the UI dispatcher.
 
 Once a saved interaction is loaded, **Select exchanges...** opens a scrollable
 checklist with input/output summaries (source excerpts when no summary is saved),
@@ -527,7 +535,7 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-sel
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
 original prompt. In the interaction picker, use **Review / edit summaries...**, select an
 exchange's **Input (You)** or **Output (AI)** and write or edit its overlay text
-(one line, up to 300 characters). Output source previews contain only recorded
+(one line, up to 1200 characters). Output source previews contain only recorded
 assistant text and tool status, not raw tool payloads. Leave an input blank to
 use its original excerpt; blank output remains explicitly missing. Then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
@@ -567,15 +575,23 @@ For long OpenAI output sources, every combination request also retains up to
 so its closing question/choices do not depend solely on a partial model summary.
 This is part of the already displayed/consented source, not another exchange.
 
-New AI drafts have a separate **240-character** limit (target 180-220 or fewer),
-with complete sentences/questions rather than clipped words or ellipses.
+New AI drafts target **180-220 characters or fewer**, with a **600-character
+safety limit** to accommodate complete sentences and explicit questions/choices,
+not a fixed display box. Incidental details should be omitted before questions
+or qualifications; the additional room is not a request for longer replies.
+The safety limit bounds model output for review, rather than truncating text.
 Speak directly in the original speaker's voice: "I want...", "Can you...?" or
 "Yes.", not "User wants to..." or "The assistant...". For a user question,
 the output summary must lead with the actual recorded answer and qualifications;
 if the reply did not answer, it must say so, never invent an answer.
-Generation rejects over-budget, unfinished or role-narrated drafts explicitly,
+Generation rejects over-budget, visibly unfinished or role-narrated drafts explicitly,
 without slicing text or automatically retrying paid requests.
-Manual and existing summaries retain their **300-character** storage limit.
+This includes obvious dangling endings such as "I set a !"; punctuation alone
+does not prove grammatical completeness. Local checks are not a semantic
+guarantee, so review the draft against its recorded source.
+Manual summaries allow **1200 characters** (a bounded four-times-legacy review
+budget for complete saved text); existing summaries are unchanged.
+Editors report invalid lengths instead of silently clipping pasted text.
 The overlay wraps the full saved text and scrolls when resized too short.
 Manual dimensions are retained for both the resize thumb and native window-edge
 resizing, including through playback updates, output-mode changes and Stop.
@@ -660,9 +676,11 @@ are left untouched and are no longer used by application AI actions.
 missing prompts and supported outputs in the current selection. Each short source
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
-The response uses a strict JSON schema with a required one-line summary field
-bounded to 240 characters with terminal punctuation, then local validation before review. Plain prose
-that merely ignores a length instruction is no longer the response contract.
+The response uses a strict JSON schema with a required string summary field,
+then local one-line, length and completeness validation before review. The
+schema deliberately does not force a character count plus terminal punctuation:
+constrained decoding can otherwise append punctuation to a clipped fragment.
+Incomplete model responses are rejected, not repaired with fake punctuation.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
 sent and selected model before any request. Review it for secrets: displayed
 answer text may contain private content even after filtering. Raw tool
@@ -691,7 +709,7 @@ the former 64,000-character source / 1 MiB whole-selection rejection is removed.
 After successful generation, **Review AI Summaries** opens the existing
 input/output editor with generated drafts, original source previews and a live
 character count. Select each **Input (You)** or **Output (AI)** to review/edit it.
-Summaries must be one line and at most 300 characters. **Delete this summary**
+Summaries must be one line and at most 1200 characters. **Delete this summary**
 or **Clear all summaries** changes only drafts until **Save summaries** is clicked.
 **Cancel** or closing the editor saves nothing. Existing summaries are preserved
 unless you edit them. To regenerate a saved summary, clear and save it first.

@@ -43,11 +43,11 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="578" Topmost="True"
+        Title="Demo Player" Width="360" Height="602" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="68"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="92"/></Grid.RowDefinitions>
     <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -84,8 +84,11 @@ if (-not $script:standalone) {
       <TextBlock x:Name="SpeedLabel" Text="Speed: user 2.0s / reply 5.0s" FontSize="12"/>
       <Slider x:Name="PlaybackSpeed" Minimum="0" Maximum="100" Value="0" TickFrequency="1" IsSnapToTickEnabled="True"
               AutomationProperties.AutomationId="PlaybackSpeed" AutomationProperties.Name="Playback speed"
-              ToolTip="Left: user 2s / reply 5s. Right: user 0.5s / reply 2s. Changes apply during playback."/>
+              ToolTip="Left: user 2s / reply 5s. Right: user 0.1s / reply 1s. Changes apply immediately to the current phase."/>
       <TextBlock Text="Normal                                      Fast" FontSize="11" Foreground="#555555"/>
+      <TextBlock x:Name="RunEstimate" Text="Estimated total: select an interaction" FontSize="11"
+                 AutomationProperties.AutomationId="RunEstimate"
+                 ToolTip="Full selected run at this speed, including auto-continue reading delays when enabled. Excludes startup, rendering/transport overhead, manual waits and pauses; not the original working-time timer."/>
     </StackPanel>
         <StackPanel Grid.Row="6">
         <CheckBox x:Name="ShowPrompt" Content="Show prompt summary" IsEnabled="False"
@@ -158,9 +161,8 @@ $autoContinue = $window.FindName('AutoContinue')
 $selectExchanges = $window.FindName('SelectExchanges')
 $playbackSpeed = $window.FindName('PlaybackSpeed')
 $speedLabel = $window.FindName('SpeedLabel')
-$playbackSpeed.Add_ValueChanged({
-    $speedLabel.Text = 'Speed: user {0:0.0}s / reply {1:0.0}s' -f (2 - 0.015 * $playbackSpeed.Value), (5 - 0.03 * $playbackSpeed.Value)
-})
+$runEstimate = $window.FindName('RunEstimate')
+$playbackSpeed.Add_ValueChanged({ Update-PlaybackEstimate })
 $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
 $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
 $frameColor = $window.FindName('FrameColor')
@@ -396,6 +398,29 @@ function Cancel-AutoContinue([switch]$BlockCurrent, [switch]$ResetRun) {
     $script:autoKey = $null
 }
 
+function Get-ReadingDwellSeconds([string]$Text) {
+    return [Math]::Min(10, [Math]::Max(2, 1 + $Text.Length / 35.0))
+}
+
+function Get-EstimatedRunMilliseconds($Profile, [int]$Speed, [bool]$Auto, [bool]$Output, [bool]$Prompt) {
+    $milliseconds = $Profile.count * (7000 - 59 * $Speed)
+    if ($Auto) {
+        $milliseconds += if ($Output) { $Profile.outputDwellMilliseconds } elseif ($Prompt) { $Profile.promptDwellMilliseconds } else { $Profile.noSummaryDwellMilliseconds }
+    }
+    return $milliseconds
+}
+
+function Update-PlaybackEstimate {
+    $speed = [int]$playbackSpeed.Value
+    $speedLabel.Text = 'Speed: user {0:0.##}s / reply {1:0.##}s' -f (2 - 0.019 * $speed), (5 - 0.04 * $speed)
+    $profile = $script:lastView.estimateProfile
+    if ($null -eq $profile) { $runEstimate.Text = 'Estimated total: select an interaction'; return }
+    $milliseconds = Get-EstimatedRunMilliseconds $profile $speed ([bool]$autoContinue.IsChecked) ([bool]$showOutput.IsChecked) ([bool]$showPrompt.IsChecked)
+    $duration = [TimeSpan]::FromSeconds([Math]::Ceiling($milliseconds / 1000))
+    $formatted = '{0:00}:{1:00}:{2:00}' -f [Math]::Floor($duration.TotalHours), $duration.Minutes, $duration.Seconds
+    $runEstimate.Text = 'Estimated total: ' + $formatted + $(if ($autoContinue.IsChecked) { ' (auto)' } else { ' + manual waits' })
+}
+
 function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
     if (-not $autoContinue.IsChecked -or $script:stopping -or $script:switching -or
         -not $script:pairedVisible -or $View.phase -ne 'review' -or -not $View.nextEnabled) {
@@ -408,7 +433,7 @@ function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
         $script:autoKey = $key
         $text = if ($showOutput.IsChecked) { [string]$View.overlay.conversation.outputSummary } elseif ($showPrompt.IsChecked) { [string]$View.overlay.promptSummary } else { '' }
         if ($showOutput.IsChecked -and [string]::IsNullOrWhiteSpace($text)) { $text = $script:missingOutputSummary }
-        $seconds = [Math]::Min(10, [Math]::Max(2, 1 + $text.Length / 35.0))
+        $seconds = Get-ReadingDwellSeconds $text
         $script:autoDeadline = $Now.AddSeconds($seconds)
     }
     if ($script:actionTask -or $Now -lt $script:autoDeadline) { return $false }
@@ -418,6 +443,12 @@ function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
 }
 
 $autoContinue.Add_Unchecked({ Cancel-AutoContinue })
+$autoContinue.Add_Checked({ Update-PlaybackEstimate })
+$autoContinue.Add_Unchecked({ Update-PlaybackEstimate })
+$showPrompt.Add_Checked({ Update-PlaybackEstimate })
+$showPrompt.Add_Unchecked({ Update-PlaybackEstimate })
+$showOutput.Add_Checked({ Update-PlaybackEstimate })
+$showOutput.Add_Unchecked({ Update-PlaybackEstimate })
 
 function Send-Control([string]$Action) {
     if (-not $Action.StartsWith('speed?')) { Cancel-AutoContinue -BlockCurrent }

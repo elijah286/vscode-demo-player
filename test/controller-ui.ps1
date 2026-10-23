@@ -597,6 +597,15 @@ try {
         return $controls
     } 'selected demo and both presentation controls ready'
     if ($selectedControls.PlayPause.Current.Name -ne 'Open') { throw 'A selected demo without a target must offer Open.' }
+    $speed = [System.Windows.Automation.RangeValuePattern](Find-Element $window 'Id' 'PlaybackSpeed').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+    foreach ($setting in @(@{ Value = 100; Total = '00:00:03'; Label = 'user 0.1s / reply 1s' }, @{ Value = 50; Total = '00:00:09'; Label = 'user 1.05s / reply 3s' }, @{ Value = 0; Total = '00:00:14'; Label = 'user 2s / reply 5s' })) {
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $speed.SetValue($setting.Value)
+        $watch.Stop()
+        if ($watch.ElapsedMilliseconds -ge 250) { throw "Live speed change blocked UI: $($watch.ElapsedMilliseconds)ms" }
+        Wait-Until { (Find-Element $window 'Id' 'RunEstimate').Current.Name -eq ('Estimated total: ' + $setting.Total + ' + manual waits') } 'full selected run estimate follows slider without opening native playback' | Out-Null
+        if ((Find-Element $window 'Id' 'SpeedLabel').Current.Name -notlike ('*' + $setting.Label)) { throw 'Speed label does not match phase timing.' }
+    }
     foreach ($action in @(
         @{ Id = 'GeneratePromptSummaries' },
         @{ Id = 'GenerateOutputSummaries' }
