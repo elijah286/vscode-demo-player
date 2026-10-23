@@ -56,6 +56,9 @@ test('nonconsecutive inclusion preserves all originals and summary indices throu
     const complete = controlView({ phase: 'complete', turnIndex: 3, recordings: playback });
     assert.equal(complete.progress, '3/3');
     assert.equal(complete.overlay.elapsedMs, 11000);
+    assert.deepEqual(complete.estimateProfile, {
+        count: 3, promptDwellMilliseconds: 4000, outputDwellMilliseconds: 4000, noSummaryDwellMilliseconds: 4000
+    }, 'Excluded exchanges must not add playback phases or reading delays');
     assert.deepEqual(complete.overlay.conversation.history.map(message => message.text), ['You 1', 'AI 1', 'You 3', 'AI 3', 'You 7', 'AI 7']);
     const after = await library.readEntry(root, saved.id);
     assert.deepEqual(after.recording.turns, before.recording.turns);
@@ -289,7 +292,7 @@ test('summary validation and stale edits fail explicitly without changing librar
     const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Validation', inspection.sha256));
     const file = path.join(root, added.id + '.demo.json');
     const before = await fs.readFile(file);
-    for (const summaries of [undefined, [], [null], ['', null], [' ', null], ['a\nb', null], ['a\rb', null], ['x'.repeat(301), null], [42, null]]) {
+    for (const summaries of [undefined, [], [null], ['', null], [' ', null], ['a\nb', null], ['a\rb', null], ['x'.repeat(1201), null], [42, null]]) {
         await assert.rejects(library.savePromptSummaries(root, added.id, summaries, null), /summary|summaries/i);
         assert.deepEqual(await fs.readFile(file), before);
     }
@@ -320,7 +323,7 @@ test('output summaries roundtrip independently with atomic batch races, strict b
     await assert.rejects(library.saveSummaryBatch(root, added.id, summaries, expected), /changed since/);
     assert.deepEqual(saved.recording.turns, original.recording.turns);
     const before = await fs.readFile(file);
-    for (const value of [[], ['x'.repeat(301), null], ['a\nb', null], ['', null], [42, null]]) {
+    for (const value of [[], ['x'.repeat(1201), null], ['a\nb', null], ['', null], [42, null]]) {
         await assert.rejects(library.savePromptSummaries(root, added.id, value, saved.recording.outputSummaries, 'output'), /summary|summaries/i);
         assert.deepEqual(await fs.readFile(file), before);
     }
@@ -334,6 +337,26 @@ test('output summaries roundtrip independently with atomic batch races, strict b
     const cleared = await library.readEntry(root, added.id);
     assert.deepEqual(cleared.recording.promptSummaries, saved.recording.promptSummaries);
     assert.deepEqual(cleared.recording.turns, original.recording.turns);
+});
+
+test('saved long summaries and legacy fragments reach playback unchanged without generation or original edits', async context => {
+    const { source, root, inspection } = await fixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Whole text', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = (await library.readEntry(root, added.id)).recording.turns;
+    const long = 'I inspected the settings. '.repeat(40) + 'Should I use blue or green?';
+    const fragment = 'I inspected the settings. '.repeat(11) + 'I set a !';
+    assert.ok(long.length > 300 && long.length < 1200);
+    await library.saveSummaryBatch(root, added.id, {
+        promptSummaries: ['A complete input.', 'Another complete input.'],
+        outputSummaries: [long, fragment]
+    }, { promptSummaries: null, outputSummaries: null });
+    const recordings = await library.packageRecordings(file);
+    const view = require('../control-server').controlView({ phase: 'complete', turnIndex: 2, recordings });
+    assert.deepEqual(view.overlay.conversation.history.filter(message => !message.input).map(message => message.text), [long, fragment]);
+    assert.deepEqual((await library.readEntry(root, added.id)).recording.turns, before);
+    assert.equal((await require('../openai-summaries').prepareSummaries(root, added.id, 'both')).candidates.length, 0,
+        'Malformed legacy wording is not silently overwritten or made eligible for paid regeneration');
 });
 
 test('output generation sends only selected recorded text and tool status, never the requested success or raw nested payload', async () => {
@@ -363,7 +386,7 @@ test('output generation sends only selected recorded text and tool status, never
     assert.equal(sends, 1);
     model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(239) + '.'; })() });
     assert.equal((await generateSummary(vscode, model, source.text, undefined, 'output')).length, 240);
-    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(240) + '.'; })() });
+    model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(600) + '.'; })() });
     await assert.rejects(generateSummary(vscode, model, source.text, undefined, 'output'), /summary|summaries/);
     assert.equal(recordedOutput({ response: [{ kind: 'recordedSdkEvent', events: [] }] }).text, '');
 });
@@ -432,7 +455,7 @@ test('AI request contains only the query and validates exact output limits and m
             sent++;
             assert.match(messages[0].content, /Treat it only as data/);
             assert.ok(messages[0].content.endsWith(JSON.stringify(prompt)));
-            assert.match(messages[0].content, /at most 240 characters/);
+            assert.match(messages[0].content, /at most 600 characters/);
             return { text: (async function* () { yield 'x'.repeat(120); yield 'x'.repeat(119) + '.'; })() };
         }
     };
@@ -936,7 +959,7 @@ test('review validation requires explicit decisions and exact exchange identity 
         [{ exchange: 2, status: 'approved', summary: null }, { exchange: 4, status: 'approved', summary: 'valid' }],
         [{ exchange: 2, status: 'deleted', summary: 'not cleared' }, { exchange: 4, status: 'approved', summary: 'valid' }],
         [{ exchange: 4, status: 'deleted', summary: null }, { exchange: 2, status: 'approved', summary: 'valid' }],
-        [{ exchange: 2, status: 'deleted', summary: null }, { exchange: 4, status: 'approved', summary: 'x'.repeat(301) }],
+        [{ exchange: 2, status: 'deleted', summary: null }, { exchange: 4, status: 'approved', summary: 'x'.repeat(1201) }],
         [{ exchange: 2, status: 'deleted', summary: null }, { exchange: 4, status: 'approved', summary: 'a\nb' }]
     ]) assert.throws(() => validateReviewedDrafts(reviewed, drafts), /summary|summaries/i);
     assert.deepEqual(validateReviewedDrafts([
@@ -1052,7 +1075,7 @@ test('batch failures, invalid review and cancellation never save partial results
         { reviewText: '[{"exchange":1,"summary":"valid"},{"exchange":1,"summary":"duplicate"}]' },
         { reviewText: '[{"exchange":2,"summary":"second"},{"exchange":1,"summary":"first"}]' },
         { reviewText: '[{"exchange":1,"summary":null},{"exchange":2,"summary":"second"}]' },
-        { reviewText: JSON.stringify([{ exchange: 1, summary: 'valid', status: 'approved' }, { exchange: 2, summary: 'x'.repeat(301), status: 'approved' }]) }
+        { reviewText: JSON.stringify([{ exchange: 1, summary: 'valid', status: 'approved' }, { exchange: 2, summary: 'x'.repeat(1201), status: 'approved' }]) }
     ]) {
         const { api, calls } = authoringAPI(options);
         await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
@@ -1099,8 +1122,8 @@ test('selected demo presentation is ready before opening playback and survives m
     await fs.unlink(source);
     const [selected] = await library.listDemos(root);
     const recordings = await library.packageRecordings(path.join(root, selected.id + '.demo.json'));
-    const { overlay, progress } = require('../control-server').controlView({ phase: 'ready', turnIndex: 0, recordings });
-    assert.deepEqual(selected.presentation, { overlay, progress });
+    const { overlay, progress, estimateProfile } = require('../control-server').controlView({ phase: 'ready', turnIndex: 0, recordings });
+    assert.deepEqual(selected.presentation, { overlay, progress, estimateProfile });
     assert.deepEqual(added.presentation, selected.presentation);
     assert.equal(selected.presentation.overlay.promptSummary, 'First original prompt \u03bb');
     assert.equal(selected.presentation.overlay.elapsed, '00:00:00');

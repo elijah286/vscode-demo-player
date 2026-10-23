@@ -40,6 +40,7 @@ public static class ReplayMessageFactory {
         }
         return new Border { Child = stack, Padding = new Thickness(12,8,12,8), CornerRadius = new CornerRadius(10),
             Margin = new Thickness(0,4,0,4), HorizontalAlignment = input ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            ToolTip = "Saved summary shown in full. If its wording is clipped, edit it against the original in Select exchanges, or delete that summary and explicitly generate it again. Playback never regenerates summaries.",
             Background = input ? Blue : Neutral };
     }
 }
@@ -239,6 +240,7 @@ function Update-Conversation($Overlay, [switch]$Immediate) {
 }
 
 function Update-ReplayOverlays([switch]$MeasureOnly) {
+    if (Get-Command Update-PlaybackEstimate -ErrorAction SilentlyContinue) { Update-PlaybackEstimate }
     $overlay = $script:lastView.overlay
     $script:outputMode = [bool]$showOutput.IsChecked
     $conversationActive = $script:outputMode -and -not $script:stopping -and $overlay.conversation.active

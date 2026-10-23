@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { INTERNAL_PARTS, completedQuestions, recordedReference, validateSavedEditGroup } = require('./saved-parts');
 const { sdkSnapshot } = require('./sdk-transcript');
-const MAX_PROMPT_SUMMARY_LENGTH = 300;
+const MAX_PROMPT_SUMMARY_LENGTH = 1200;
 
 function kindOf(part) {
     if (typeof part === 'string') return 'markdown';
@@ -18,7 +18,7 @@ const RESPONSE_DURATION = 5000;
 
 function playbackTiming(speed = 0) {
     if (!Number.isInteger(speed) || speed < 0 || speed > 100) throw new Error('Playback speed must be an integer from 0 to 100.');
-    return { speed, promptMilliseconds: PROMPT_DURATION - 15 * speed, responseMilliseconds: RESPONSE_DURATION - 30 * speed };
+    return { speed, promptMilliseconds: PROMPT_DURATION - 19 * speed, responseMilliseconds: RESPONSE_DURATION - 40 * speed };
 }
 
 function setPlaybackSpeed(state, speed) {
@@ -171,8 +171,8 @@ function extractRecording(file, snapshot, requestIndex) {
     return {
         file,
         requestIndex,
-        promptSummary: promptExcerpt.length > MAX_PROMPT_SUMMARY_LENGTH ?
-            promptExcerpt.slice(0, MAX_PROMPT_SUMMARY_LENGTH - 3) + '...' : promptExcerpt,
+        promptSummary: promptExcerpt.length > 300 ?
+            promptExcerpt.slice(0, 297) + '...' : promptExcerpt,
         sessionId: snapshot.sessionId,
         title: snapshot.customTitle,
         responderName: request.agent?.fullName || snapshot.responderUsername,

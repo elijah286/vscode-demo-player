@@ -1057,15 +1057,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. New AI drafts use complete statements up to 240 characters, in the speaker's voice: I want..., Can you...?, Yes. AI replies must preserve the recorded answer to the user's question and any questions/choices the assistant asks. Say when the reply did not answer; never invent an answer or success. Manual/existing summaries still allow 300 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. AI drafts target 180-220 characters, with room up to 600 for complete thoughts and questions/choices, in the speaker's voice. Preserve recorded answers; never invent success. Saved summaries allow 1200 characters. Existing clipped summaries are not repaired automatically: edit them here, or delete the affected summary and explicitly generate it again. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
    <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>
    <TextBlock x:Name="IncludedCount" AutomationProperties.AutomationId="IncludedExchangeCount"/>
   </StackPanel>
   <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
-  <TextBlock Grid.Row="3" Text="Overlay summary (up to 300 characters, one line)" Margin="0,12,0,6"/>
-  <TextBox x:Name="Summary" Grid.Row="4" MaxLength="300" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
+  <TextBlock Grid.Row="3" Text="Overlay summary (up to 1200 characters, one line)" Margin="0,12,0,6"/>
+  <TextBox x:Name="Summary" Grid.Row="4" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
   <WrapPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
    <Button x:Name="Clear" Content="Clear all summaries" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="ClearSummaryDrafts"/>
    <Button x:Name="DeleteSummary" Content="Delete this summary" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="DeletePromptSummary"/>

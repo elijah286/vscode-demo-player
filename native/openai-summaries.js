@@ -1,5 +1,5 @@
 const { readEntry, includedTurnIndices } = require('./demo-library');
-const { recordedOutput, summaryPrompt, GENERATED_SUMMARY_LENGTH, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary } = require('./prompt-summary-authoring');
+const { recordedOutput, summaryPrompt, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary } = require('./prompt-summary-authoring');
 
 const ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_MODEL = 'gpt-4.1-mini';
@@ -65,7 +65,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
                 text: { format: {
                     type: 'json_schema', name: 'demo_player_summary', strict: true,
                     schema: {
-                        type: 'object', properties: { summary: { type: 'string', pattern: '^(?:[^\\r\\n]{0,' + (GENERATED_SUMMARY_LENGTH - 1) + '}[.!?\\u3002\\uFF01\\uFF1F]|[^\\r\\n]{0,' + (GENERATED_SUMMARY_LENGTH - 2) + '}[.!?\\u3002\\uFF01\\uFF1F]["\\u0027\\u2019\\u201D])$' } },
+                        type: 'object', properties: { summary: { type: 'string' } },
                         required: ['summary'], additionalProperties: false
                     }
                 } }
@@ -99,7 +99,10 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
                     : 'OpenAI failed to generate a summary (HTTP ' + response.status + '). Retry explicitly later.';
         throw new SummaryError(message + ' No summaries were saved.');
     }
-    if (!body || body.status !== 'completed' || !Array.isArray(body.output)) throw new SummaryError('OpenAI did not complete the summary. No summaries were saved; try another model or summarize manually.');
+    if (!body || body.status !== 'completed' || body.incomplete_details != null || !Array.isArray(body.output) ||
+        body.output.some(item => item?.type === 'message' && item.status !== undefined && item.status !== 'completed')) {
+        throw new SummaryError('OpenAI did not complete the summary. No summaries were saved; try another model or summarize manually.');
+    }
     if (body.output.some(item => !item || typeof item !== 'object' ||
         (item.type === 'message' && !Array.isArray(item.content)))) {
         throw new SummaryError('OpenAI returned malformed output. No summaries were saved.');

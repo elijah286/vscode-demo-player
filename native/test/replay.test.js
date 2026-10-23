@@ -12,20 +12,38 @@ const { WebSocket } = require('ws');
 const { completedQuestions, archivedEdit, INTERNAL_PARTS, validateSavedEditGroup, savedEditText, savedEditMarkdown } = require('../saved-parts');
 const { playbackTiming, setPlaybackSpeed } = require('../replay');
 
+test('full-run estimate profile caches included phases and exact reading dwell with no final delay', () => {
+    const item = (promptSummary, outputSummary) => ({ promptSummary, outputSummary, request: {} });
+    const single = [item('x'.repeat(1200), 'y'.repeat(1200))];
+    const profileFor = recordings => controlView({ phase: 'ready', turnIndex: 0, recordings }).estimateProfile;
+    assert.deepEqual(profileFor(single), {
+        count: 1, promptDwellMilliseconds: 0, outputDwellMilliseconds: 0, noSummaryDwellMilliseconds: 0
+    });
+    const recordings = [item('short', 'y'.repeat(315)), item('x'.repeat(70), null), ...single];
+    const profile = profileFor(recordings);
+    assert.equal(profile.count, 3);
+    assert.equal(profile.promptDwellMilliseconds, 5000);
+    assert.equal(profile.outputDwellMilliseconds, 10000 + 1000 +
+        'Output summary missing. Generate or edit summaries before playback.'.length * 1000 / 35);
+    assert.equal(profile.noSummaryDwellMilliseconds, 4000);
+    assert.equal(profileFor(recordings), profile, 'Polling must not rescan summaries for the estimate');
+    assert.equal(controlView({ phase: 'idle', recordings: [] }).estimateProfile, undefined);
+});
+
 test('speed slider has exact normal, intermediate and fast timing endpoints in both phases', () => {
     assert.deepEqual(playbackTiming(), { speed: 0, promptMilliseconds: 2000, responseMilliseconds: 5000 });
-    assert.deepEqual(playbackTiming(50), { speed: 50, promptMilliseconds: 1250, responseMilliseconds: 3500 });
-    assert.deepEqual(playbackTiming(100), { speed: 100, promptMilliseconds: 500, responseMilliseconds: 2000 });
+    assert.deepEqual(playbackTiming(50), { speed: 50, promptMilliseconds: 1050, responseMilliseconds: 3000 });
+    assert.deepEqual(playbackTiming(100), { speed: 100, promptMilliseconds: 100, responseMilliseconds: 1000 });
     for (const speed of [-1, 101, NaN, '100', 1.5]) assert.throws(() => playbackTiming(speed), /Playback speed/);
     const state = { phase: 'typing', clock: new PlaybackClock(1) };
     state.clock.setPaused(true);
     setPlaybackSpeed(state, 100);
-    assert.equal(state.clock.speed, 4);
+    assert.equal(state.clock.speed, 20);
     assert.equal(state.clock.paused, true);
     state.phase = 'response';
     setPlaybackSpeed(state, 100);
-    assert.equal(state.clock.speed, 2.5);
-    assert.equal(controlView(state).timing.responseMilliseconds, 2000);
+    assert.equal(state.clock.speed, 5);
+    assert.equal(controlView(state).timing.responseMilliseconds, 1000);
     state.clock.stop();
 });
 
@@ -45,7 +63,7 @@ test('changing speed while waiting preserves elapsed progress and pause time', {
     assert.ok(performance.now() - start < 550, 'Speed change must accelerate the remaining wait');
 });
 
-test('native composer consumes the live clock at 500ms and accelerated replies take two seconds', { timeout: 6000 }, async context => {
+test('native composer consumes the live clock at 100ms and accelerated replies take one second', { timeout: 6000 }, async context => {
     const { NativeComposer } = require('../native-composer');
     const typed = [];
     const browser = vm.createContext({
@@ -59,17 +77,17 @@ test('native composer consumes the live clock at 500ms and accelerated replies t
     });
     const composer = new NativeComposer();
     composer.page = { evaluate: async (callback, args) => vm.runInContext('(' + callback.toString() + ')', browser)(args) };
-    const clock = new PlaybackClock(4);
+    const clock = new PlaybackClock(20);
     const prompt = 'A complete synthetic prompt.';
     const typing = await composer.typePrompt(prompt, PROMPT_DURATION, clock);
     assert.equal(typed.join(''), prompt);
-    assert.ok(typing.duration >= 450 && typing.duration < 950, 'Actual fast typing duration: ' + typing.duration);
+    assert.ok(typing.duration >= 90 && typing.duration < 350, 'Actual fast typing duration: ' + typing.duration);
     const state = { phase: 'response', clock };
     setPlaybackSpeed(state, 100);
     const start = performance.now();
     await clock.waitUntil(clock.now() + RESPONSE_DURATION);
     const responseMs = performance.now() - start;
-    assert.ok(responseMs >= 1900 && responseMs < 2600, 'Actual fast response duration: ' + responseMs);
+    assert.ok(responseMs >= 950 && responseMs < 1400, 'Actual fast response duration: ' + responseMs);
     context.diagnostic('Fast playback measured with synthetic DOM: typing=' + Math.round(typing.duration) + 'ms; response=' + Math.round(responseMs) + 'ms.');
     clock.stop();
 });
@@ -280,7 +298,7 @@ test('prompt preview is a bounded excerpt separate from original recording conte
     assert.deepEqual(recording.request, request);
 });
 
-test('playlist summaries accept the exact 300-character budget and reject 301 without altering full prompts', async context => {
+test('playlist summaries accept the exact 1200-character budget and reject 1201 without altering full prompts', async context => {
     const request = { result: {}, message: { text: 'Full original prompt '.repeat(40) }, response: [{ value: 'Original answer' }] };
     const file = await fixture(context, request);
     const directory = path.dirname(file);
@@ -293,24 +311,24 @@ test('playlist summaries accept the exact 300-character budget and reject 301 wi
     await fs.mkdir(sessions, { recursive: true });
     await fs.copyFile(file, path.join(sessions, sessionId + '.jsonl'));
     const playlist = path.join(directory, 'synthetic.playlist.json');
-    const manifest = { version: 1, workspaceStorageId, segments: [{ sessionId, requestIndex: 0, requestCount: 1 }], promptSummaries: ['x'.repeat(300)] };
+    const manifest = { version: 1, workspaceStorageId, segments: [{ sessionId, requestIndex: 0, requestCount: 1 }], promptSummaries: ['x'.repeat(1200)] };
     await fs.writeFile(playlist, JSON.stringify(manifest));
     const [recording] = await readPlaylist(playlist);
-    assert.equal(recording.promptSummary, 'x'.repeat(300));
+    assert.equal(recording.promptSummary, 'x'.repeat(1200));
     assert.deepEqual(recording.request, request);
-    manifest.outputSummaries = ['o'.repeat(300)];
+    manifest.outputSummaries = ['o'.repeat(1200)];
     await fs.writeFile(playlist, JSON.stringify(manifest));
-    assert.equal((await readPlaylist(playlist))[0].outputSummary.length, 300);
-    for (const invalid of [['o'.repeat(301)], ['a\nb'], [''], []]) {
+    assert.equal((await readPlaylist(playlist))[0].outputSummary.length, 1200);
+    for (const invalid of [['o'.repeat(1201)], ['a\nb'], [''], []]) {
         manifest.outputSummaries = invalid;
         await fs.writeFile(playlist, JSON.stringify(manifest));
         await assert.rejects(readPlaylist(playlist), /output summary/);
     }
     manifest.outputSummaries = [null];
-    for (const invalid of ['x'.repeat(301), 'a\nb', '']) {
+    for (const invalid of ['x'.repeat(1201), 'a\nb', '']) {
         manifest.promptSummaries = [invalid];
         await fs.writeFile(playlist, JSON.stringify(manifest));
-        await assert.rejects(readPlaylist(playlist), /1 to 300 characters/);
+        await assert.rejects(readPlaylist(playlist), /1 to 1200 characters/);
     }
 });
 
@@ -344,7 +362,7 @@ test('private controller accepts only authorized state-appropriate controls', { 
         assert.equal((await call('/speed?value=' + value, { method: 'POST' })).status, 400);
     }
     assert.equal((await call('/speed?value=100', { method: 'POST' })).status, 200);
-    assert.equal((await (await call('/state')).json()).timing.promptMilliseconds, 500);
+    assert.equal((await (await call('/state')).json()).timing.promptMilliseconds, 100);
     assert.equal((await call('/play', { method: 'POST' })).status, 202);
     assert.equal((await (await call('/state')).json()).button, 'Pause');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);

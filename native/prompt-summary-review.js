@@ -40,13 +40,13 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 <h1>Review input/output summaries</h1>
 <p>Compare each AI draft with its recorded source. Edit, approve, or delete the summary only.
 Playback keeps full originals. Deleted input summaries use excerpts; deleted outputs show an actionable missing-summary notice.</p>
-<p>New AI drafts use complete statements up to 240 characters. Speak as the user ("I want...", "Can you...?", "Yes.") or assistant ("I found...", "Yes, ..."), not "User wants" or "The assistant". For a user question, preserve the actual recorded answer; say explicitly when no answer was recorded, without inventing one. Preserve questions and choices asked by the assistant too. Existing saved summaries are never regenerated automatically; manual summaries still allow 300 characters.</p>
+<p>AI drafts target 180-220 characters, with room up to 600 for complete thoughts and questions/choices. Speak as the user ("I want...", "Can you...?", "Yes.") or assistant ("I found...", "Yes, ..."), not "User wants" or "The assistant". Preserve the recorded answer and explicit questions/choices; never invent success. Saved summaries allow 1200 characters. Existing clipped summaries are never regenerated automatically: edit them, or delete the affected summary and explicitly generate again.</p>
 <main><nav aria-label="Generated summaries"><label for="exchanges">Exchanges</label><select id="exchanges" size="10"></select></nav>
 <section aria-label="Summary comparison">
 <h2 id="heading"></h2>
 <label for="original">Recorded source for this summary kind (read-only)</label><textarea id="original" readonly></textarea>
 <label for="summary">Overlay summary (one line, up to ${MAX_PROMPT_SUMMARY_LENGTH} characters)</label>
-<textarea id="summary" maxlength="${MAX_PROMPT_SUMMARY_LENGTH}" aria-describedby="count"></textarea>
+<textarea id="summary" aria-describedby="count"></textarea>
 <p id="count"></p>
 <div><button id="previous">Previous</button><button id="next">Next</button></div>
 <div><button id="approve">Approve &amp; next</button><button id="delete">Delete summary &amp; next</button><button id="all">Approve all remaining</button></div>

@@ -42,6 +42,19 @@ function Assert-FullBubbleText($Bubble, [string]$Expected) {
     Assert-Layout ($last.Bottom -le $text.ActualHeight + 1) 'Final line must fit within the rendered text height.'
     $bottom = $text.TranslatePoint([System.Windows.Point]::new($last.Right, $last.Bottom), $Bubble)
     Assert-Layout ($bottom.Y -le $Bubble.ActualHeight - $Bubble.Padding.Bottom + 1) 'Bubble must enclose the final text line, not clip it.'
+    $lastChild = $Bubble.Child.Children[$Bubble.Child.Children.Count - 1]
+    $childBottom = $lastChild.TranslatePoint([System.Windows.Point]::new(0, $lastChild.ActualHeight), $Bubble)
+    Assert-Layout ($childBottom.Y -le $Bubble.ActualHeight - $Bubble.Padding.Bottom + 1) 'Arrow and all text must fit above bubble bottom padding.'
+    $line = $text.ContentStart.GetLineStartPosition(0)
+    $lineCount = 0
+    while ($null -ne $line) {
+        $lineCount++
+        $line = $line.GetLineStartPosition(1)
+    }
+    Assert-Layout ($lineCount -gt 0) 'Saved text must have measured WPF lines.'
+    if ($Expected.Length -gt 300 -and $Bubble.ActualWidth -lt 400) {
+        Assert-Layout ($lineCount -gt 1) 'Long saved summaries must wrap onto real measured lines.'
+    }
 }
 
 function Set-History([object[]]$Messages, [string]$Run = 'run1') {
@@ -150,6 +163,9 @@ try {
     Assert-Layout ($conversationMessages.Children.Count -eq 4 -and $conversationMessages.Children[0] -eq $first) 'Short history must retain more than two bubbles and original elements.'
     Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'Four short messages should fit naturally.'
     foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300),
+        ('I inspected the settings. ' * 10 + 'I set a !'),
+        ('I inspected the settings. ' * 16 + 'Should I use blue or green?'),
+        ('I inspected the settings. ' * 45 + 'Should I use blue or green?'),
         (('W' * 239) + '.'), (('A complete summary of my recorded answer. ' * 6).Substring(0,239) + '.'), (([string][char]0x754C * 239) + '.'))) {
         Set-History @((Message '0:input' $true $text), (Message '0:output' $false $text)) 'fit'
         foreach ($width in @(280, 320, 360, 480, 639, 640, 820)) {
@@ -162,6 +178,13 @@ try {
                 Assert-Layout ($bubble.ActualWidth -le $conversationPanel.ViewportWidth + 1) "Bubble must wrap inside viewport at $width."
             }
             Assert-Layout ($script:overlayWindow.Height -le 600) 'Automatic history height is bounded.'
+            if ($width -eq 360) {
+                Arrange-Overlay 360 560 $false $true
+                foreach ($bubble in $conversationMessages.Children) {
+                    Assert-FullBubbleText $bubble $text
+                    Assert-Layout ($bubble.ToolTip -like '*explicitly generate it again*') 'Legacy malformed summaries need explicit edit/regeneration guidance, not an automatic paid repair.'
+                }
+            }
             if ($text.Length -eq 240) {
                 foreach ($bubble in $conversationMessages.Children) {
                     Assert-Layout ($bubble.ActualHeight -le $conversationPanel.ViewportHeight + 1) "A complete 240-character summary must fit the automatic viewport at width $width."
@@ -269,7 +292,7 @@ try {
         $controller.Content.Measure($size)
         $controller.Content.Arrange([System.Windows.Rect]::new($size))
         $controller.Content.UpdateLayout()
-        foreach ($name in @('AutoContinue', 'GeneratePromptSummaries', 'GenerateOutputSummaries', 'WindowMode', 'SelectExchanges', 'PlaybackSpeed', 'SpeedLabel')) {
+        foreach ($name in @('AutoContinue', 'GeneratePromptSummaries', 'GenerateOutputSummaries', 'WindowMode', 'SelectExchanges', 'PlaybackSpeed', 'SpeedLabel', 'RunEstimate')) {
             $element = $controller.FindName($name)
             $origin = $element.TranslatePoint([System.Windows.Point]::new(0,0), $controller.Content)
             Assert-Layout ($element.ActualHeight -gt 0 -and $origin.Y + $element.ActualHeight -le $controller.Content.ActualHeight) "$name must fit controller."
@@ -285,11 +308,36 @@ try {
             & $stopAction
             Assert-Layout ($script:testStopRequested -and $script:exitRequested -eq ($phase -eq 'complete')) 'Exit must close the controller after the final exchange; mid-run Stop must retain it.'
         }
-        foreach ($name in @('Cancel-AutoContinue', 'Test-AutoContinueDue')) {
+        foreach ($name in @('Cancel-AutoContinue', 'Test-AutoContinueDue', 'Get-ReadingDwellSeconds', 'Get-EstimatedRunMilliseconds', 'Update-PlaybackEstimate')) {
             $function = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
             . ([scriptblock]::Create($function.Extent.Text))
         }
         $autoContinue = $controller.FindName('AutoContinue')
+        $playbackSpeed = $controller.FindName('PlaybackSpeed')
+        $speedLabel = $controller.FindName('SpeedLabel')
+        $runEstimate = $controller.FindName('RunEstimate')
+        $profile = [pscustomobject]@{ count = 3; outputDwellMilliseconds = 12000; promptDwellMilliseconds = 4000; noSummaryDwellMilliseconds = 4000 }
+        $script:lastView = [pscustomobject]@{ estimateProfile = $profile }
+        foreach ($case in @(@(0,21000), @(50,12150), @(100,3300))) {
+            Assert-Layout ((Get-EstimatedRunMilliseconds $profile $case[0] $false $false $false) -eq $case[1]) 'Full-run base estimate must match exact phase timing at endpoints and midpoint.'
+            Assert-Layout ((Get-EstimatedRunMilliseconds $profile $case[0] $true $true $false) -eq $case[1] + 12000) 'Auto estimate must include output reading dwell only between exchanges.'
+        }
+        Assert-Layout ((Get-EstimatedRunMilliseconds $profile 100 $true $false $true) -eq 7300) 'Prompt dwell selection must match auto continue.'
+        $single = [pscustomobject]@{ count = 1; outputDwellMilliseconds = 0; promptDwellMilliseconds = 0; noSummaryDwellMilliseconds = 0 }
+        Assert-Layout ((Get-EstimatedRunMilliseconds $single 100 $true $true $true) -eq 1100) 'One fast exchange needs exactly 100ms user plus 1000ms reply and no final reading dwell.'
+        Assert-Layout ((Get-EstimatedRunMilliseconds $single 0 $false $false $false) -eq 7000) 'One normal exchange retains the default seven-second phase total.'
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $playbackSpeed.Add_ValueChanged({ Update-PlaybackEstimate })
+        $playbackSpeed.Value = 100
+        $watch.Stop()
+        Assert-Layout ($watch.ElapsedMilliseconds -lt 250) 'Live speed estimate must update without blocking dispatcher.'
+        Assert-Layout ($runEstimate.Text -eq 'Estimated total: 00:00:04 + manual waits') 'Moving real WPF slider must immediately update full-run estimate.'
+        Assert-Layout ($speedLabel.Text -eq 'Speed: user 0.1s / reply 1s') 'Fast speed label must show actual engine endpoints.'
+        $autoContinue.IsChecked = $true
+        $showOutput.IsChecked = $true
+        Update-PlaybackEstimate
+        Assert-Layout ($runEstimate.Text -eq 'Estimated total: 00:00:16 (auto)') 'Auto estimate must include the reading interval.'
+        $autoContinue.IsChecked = $false
         $script:pairedVisible = $true
         $script:actionTask = $null
         $script:switching = $false
@@ -333,7 +381,7 @@ try {
         Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'Last exchange never loops.'
     } finally { $controller.Close() }
     Assert-Layout (-not $window.IsVisible -and -not $script:overlayWindow.IsVisible) 'Layout acceptance must not show windows.'
-    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; hidden real WPF layouts, complete 240-character and legacy 300-character Latin/prose/CJK at 280-820 widths, final-line glyph geometry, default pair fit, short-window scrolling, 200-bubble history, follow-bottom, fixed timer, reset, missing output, maximum history dispatcher gap ${maxHistoryGap}ms (<250ms), fake-time real controller deadlines/cancellation."
+    Write-Output "OVERLAY LAYOUT PASSED: $assertions assertions; hidden real WPF layouts, 240/300 and >300-character saved summaries (including reported fragment) at 280-820 widths and 360x560, measured line counts, final-line/arrow/padding bounds, short-window scrolling, 200-bubble history, follow-bottom, fixed timer, maximum history dispatcher gap ${maxHistoryGap}ms (<250ms), real slider endpoint/midpoint totals, fake-time controller deadlines/cancellation."
 } finally {
     $script:closeAllowed = $true
     $script:overlayWindow.Close()

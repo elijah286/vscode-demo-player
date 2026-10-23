@@ -538,10 +538,10 @@ try {
     $exchange.Add_SelectionChanged($selectionNode.Arguments[0].ScriptBlock.GetScriptBlock())
     $exchange.SelectedIndex = 0
     Assert-Equal $summary.Text 'First saved summary' 'Summary editor loads saved text'
-    Assert-Equal $summary.MaxLength 300 'Manual editor uses the shared 300-character budget'
-    $summary.Text = 'x' * 300
+    Assert-Equal $summary.MaxLength 0 'Manual editor must not silently clip pasted text before validation'
+    $summary.Text = 'x' * 1200
     & $storeDraft
-    Assert-Equal $dialog.Tag.Summaries[0].Length 300 'A full-budget manual summary is preserved'
+    Assert-Equal $dialog.Tag.Summaries[0].Length 1200 'A full-budget manual summary is preserved'
     $deleteNode = $summaryFunction.Find({
         param($node)
         $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
@@ -556,9 +556,9 @@ try {
     $exchange.SelectedIndex = 1
     Assert-Equal $summary.Text 'First recorded result' 'Output editor loads independently saved summary'
     Assert-Equal $dialog.FindName('Original').Text 'First original answer' 'Output editor shows recorded results, not the user query'
-    $summary.Text = 'o' * 300
+    $summary.Text = 'o' * 1200
     & $storeDraft
-    Assert-Equal $dialog.Tag.Outputs[0].Length 300 'Exact output summary budget is preserved'
+    Assert-Equal $dialog.Tag.Outputs[0].Length 1200 'Exact output summary budget is preserved'
     & ($deleteNode.Arguments[0].ScriptBlock.GetScriptBlock())
     & $storeDraft
     Assert-Equal ($null -eq $dialog.Tag.Outputs[0]) $true 'Deleting output clears only its summary'

@@ -137,7 +137,7 @@ async function run() {
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const frame = await reviewFrame(page);
         const original = frame.getByLabel('Recorded source for this summary kind (read-only)');
-        const summary = frame.getByLabel('Overlay summary (one line, up to 300 characters)');
+        const summary = frame.getByLabel('Overlay summary (one line, up to 1200 characters)');
         const save = frame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true });
         assert.equal(await original.inputValue(), prompts[0], 'Full original is visible automatically after generation');
         assert.equal(await original.getAttribute('readonly'), '', 'Original cannot be edited');
@@ -207,7 +207,7 @@ async function run() {
         assert.equal(await responseFrame.locator('#exchanges option').count(), 1, 'Only the single missing output is generated, not the deleted input summary');
         assert.match(await responseFrame.locator('#heading').textContent(), /output/);
         assert.equal(await responseFrame.getByLabel('Recorded source for this summary kind (read-only)').inputValue(), outputs[1]);
-        await responseFrame.getByLabel('Overlay summary (one line, up to 300 characters)').fill('Explicitly reviewed response summary');
+        await responseFrame.getByLabel('Overlay summary (one line, up to 1200 characters)').fill('Explicitly reviewed response summary');
         await responseFrame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
         await responseFrame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true }).click();
         await responseGenerated;
