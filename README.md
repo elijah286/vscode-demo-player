@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.21](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.21/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.22](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.22/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
