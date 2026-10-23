@@ -117,7 +117,10 @@ $script:conversationFillTimer = [System.Windows.Threading.DispatcherTimer]::new(
 $script:conversationFillTimer.Interval = [TimeSpan]::FromMilliseconds(16)
 $conversationPanel.Add_ScrollChanged({
     param($sender, $eventArgs)
-    if ($eventArgs.VerticalChange -lt 0 -and $eventArgs.ExtentHeightChange -eq 0) { $script:conversationFollow = $false }
+    if ($eventArgs.VerticalChange -lt 0 -and $eventArgs.ExtentHeightChange -eq 0 -and $eventArgs.ViewportHeightChange -eq 0) { $script:conversationFollow = $false }
+    if ($script:conversationFollow -and ($eventArgs.ExtentHeightChange -ne 0 -or $eventArgs.ViewportHeightChange -ne 0)) {
+        $conversationPanel.ScrollToEnd()
+    }
 })
 $script:outputMode = $false
 $legacyElapsedTooltip = $showElapsed.ToolTip

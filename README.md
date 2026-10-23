@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.20](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.20/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.21](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.21/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -435,6 +435,29 @@ UI merely to update summary counters.
 
 ### Replay presentation controls
 
+Use the **Playback speed** slider at any time, including while paused. Its normal
+end is **2 seconds per user prompt / 5 seconds per reply**; its fastest end is
+**500 ms per user prompt / 2 seconds per reply**, with linear values between.
+The label shows both durations. A change preserves progress within the current
+phase and applies to the remaining typing/output in both Editor and Agents modes.
+The speed choice lasts for this controller session, including replay and mode switches.
+Recorded working-time totals do not change with presentation speed. Auto-continue's
+separate reading dwell is unchanged.
+
+Once a saved interaction is loaded, **Select exchanges...** opens a scrollable
+checklist with input/output summaries (source excerpts when no summary is saved),
+individual checkboxes, **Select all**, **Deselect all**, and an included count.
+**Use selected exchanges** saves the next-run selection in original order;
+at least one exchange must be included. Cancel writes nothing. Stop active playback
+before changing the selection. Originals and reviewed summaries are preserved,
+and concurrent summary/inclusion changes are rejected rather than overwritten.
+
+After the final reply, the playback window and summary overlay stay open on the
+last exchange. **Replay** restarts the selected exchanges; the stop button becomes
+**Exit** (tooltip and accessible name) and closes the isolated playback/controller
+windows. Closing the controller also closes its paired replay window normally.
+No unrelated editor window or process is terminated.
+
 The **VS Code / Agents (experimental)** selector chooses the native playback UI.
 During playback, switching is allowed only between complete responses. It closes
 and reopens only the dedicated replay window, retaining the selected portable
@@ -476,6 +499,8 @@ finishes, a down arrow and its reviewed output summary appear below that input.
 bounded to the current recording (at most 100 included exchanges / 200 bubbles).
 The view follows new inputs. Outputs follow the bottom only if you were already
 near it (within 24 layout units), so reading older messages is not interrupted.
+Follow-bottom is reapplied after WPF updates its scroll extent, so newly wrapped
+reply endings remain accessible rather than scrolling against the previous layout.
 Automatic height grows with short history up to 600 layout units or the available
 work area; longer history scrolls below the fixed timer. Manual resizing is retained.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
@@ -496,6 +521,7 @@ Run the responsive layout regression without opening interactive windows:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layout.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
 ```
 
 The summary falls back to a bounded, whitespace-normalized excerpt of the exact
@@ -527,6 +553,15 @@ questions or successful outcomes. Existing saved summaries are not rewritten or
 sent for paid regeneration automatically. Review/edit them manually, or explicitly
 delete and save the relevant summary, then generate its missing replacement and
 review before saving.
+Both AI providers also receive the preceding included exchange's original input
+and supported assistant output as explicitly labeled, untrusted context, bounded
+to 4,000 characters with any omitted middle marked. This relates short answers
+to the question/choices they answer without treating earlier results as current
+success. Excluded exchanges are not sent as neighboring context. The consent
+preview shows all additional context before generation, including for prompt-only
+generation, which now sends prior assistant context but still generates inputs only.
+Existing summaries are not regenerated automatically; delete a saved summary
+explicitly before generating a contextual replacement.
 For long OpenAI output sources, every combination request also retains up to
 3,600 trailing characters of the original assistant source as verbatim grounding,
 so its closing question/choices do not depend solely on a partial model summary.

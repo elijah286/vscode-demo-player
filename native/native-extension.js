@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { readRecordings, readPlaylist, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION } = require('./replay');
+const { readRecordings, readPlaylist, validateEditorRecording, PlaybackClock, promptTimeline, responseTimeline, PROMPT_DURATION, RESPONSE_DURATION, setPlaybackSpeed } = require('./replay');
 const { createControlServer } = require('./control-server');
 const { RecordingAgentHost } = require('./recording-agent-host');
 const { NativeComposer } = require('./native-composer');
@@ -144,6 +144,7 @@ function activate(context) {
         state.emitted = [];
         state.metrics = { typingUpdates: [] };
         state.phase = 'typing';
+        setPlaybackSpeed(state, state.playbackSpeed ?? 0);
         status.text = '$(history) Historical replay | Typing recorded prompt';
         try {
             await openReplaySession();
@@ -165,6 +166,7 @@ function activate(context) {
             state.metrics.promptFinished = performance.now();
             if (options.afterTyping) await options.afterTyping();
             state.phase = 'response';
+            setPlaybackSpeed(state, state.playbackSpeed ?? 0);
             status.text = '$(history) Historical replay | Streaming recorded response';
             const response = new Promise((resolve, reject) => {
                 state.resolveResponse = resolve;
@@ -291,6 +293,7 @@ function activate(context) {
         state.emitted = [];
         state.metrics = { typingUpdates: [] };
         state.phase = 'typing';
+        setPlaybackSpeed(state, state.playbackSpeed ?? 0);
         const prompt = state.recording.request.message.text;
         try {
             const origin = state.clock.now();
@@ -302,6 +305,7 @@ function activate(context) {
             state.metrics.promptFinished = performance.now();
             if (options.afterTyping) await options.afterTyping();
             state.phase = 'response';
+            setPlaybackSpeed(state, state.playbackSpeed ?? 0);
             await state.clock.waitUntil(state.responseOrigin + 100);
             await nativeComposer.clear();
             recordingHost.beginTurn(state.recording.request);
@@ -328,7 +332,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('historyReplay.play', play));
     async function startSelected() {
         if (['ready', 'review'].includes(state.phase) && state.recordings.length) return playNext();
-        if (state.phase === 'complete') throw new Error('The selected script has finished. Stop closes the replay pair.');
+        if (state.phase === 'complete') return restart();
         const file = process.env.HISTORY_REPLAY_FILE;
         if (!file) throw new Error('Launch this isolated player with Start-Replay.ps1 to select the source transcript.');
         return play(file, Number(process.env.HISTORY_REPLAY_REQUEST ?? '3'), { requestCount: Number(process.env.HISTORY_REPLAY_REQUEST_COUNT ?? '1') });
@@ -364,6 +368,7 @@ function activate(context) {
                 play: startSelected,
                 next: playNext,
                 restart,
+                setSpeed: speed => setPlaybackSpeed(state, speed),
                 pause: () => state.clock?.setPaused(true),
                 resume: () => state.clock?.setPaused(false),
                 stop: closePlayer,

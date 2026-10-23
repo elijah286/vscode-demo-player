@@ -383,6 +383,7 @@ try {
         $window = $controller
         $generatePromptSummaries = $controller.FindName('GeneratePromptSummaries')
         $generateOutputSummaries = $controller.FindName('GenerateOutputSummaries')
+        $selectExchanges = $controller.FindName('SelectExchanges')
         foreach ($name in @('Update-ControllerSummaryLinks', 'Refresh-ControllerSummaries', 'Invoke-ControllerSummaryAuthoring')) {
             $definition = $controllerAst.Find({
                 param($node)
@@ -398,18 +399,22 @@ try {
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'No selected prompt count'
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'No selected output action'
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'No selected prompt action'
+        Assert-Equal $selectExchanges.IsEnabled $false 'Exchange selection requires a saved interaction'
         $script:selectedDemo = [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 3; output = 1 } }
         Update-ControllerSummaryLinks
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (3/12)' 'Manual and AI inputs share the saved count'
         Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (1/12)' 'Outputs have independent count'
         Assert-Equal $generatePromptSummaries.IsEnabled $true 'Selected interaction enables generation'
+        Assert-Equal $selectExchanges.IsEnabled $true 'Selected interaction enables exchange selection'
         $script:pickerOpen = $true
         Update-ControllerSummaryLinks
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'Modal picker disables authoring'
+        Assert-Equal $selectExchanges.IsEnabled $false 'Modal picker disables exchange selection'
         $script:pickerOpen = $false
         $script:ReplayProcessId = 123
         Update-ControllerSummaryLinks
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'Playback disables authoring'
+        Assert-Equal $selectExchanges.IsEnabled $false 'Playback disables exchange selection'
         $script:ReplayProcessId = 0
         $script:summaryRefreshing = $true
         Update-ControllerSummaryLinks

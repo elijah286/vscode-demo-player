@@ -54,6 +54,9 @@ jobs:
       - name: Check responsive overlay layout without showing windows
         shell: powershell
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layout.ps1
+      - name: Check exchange selection without showing windows
+        shell: powershell
+        run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
       - name: Check isolated agent worktree ownership and handoffs
         shell: powershell
         run: .\test\agent-worktrees.ps1

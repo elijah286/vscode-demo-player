@@ -1,7 +1,7 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
-const { RESPONSE_DURATION } = require('./replay');
+const { RESPONSE_DURATION, playbackTiming } = require('./replay');
 
 function playbackView(state) {
     if (state.phase === 'ready') return { phase: 'ready', label: 'Ready', action: 'play', button: 'Play', enabled: true };
@@ -15,7 +15,7 @@ function playbackView(state) {
             enabled: true
         };
     }
-    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished', action: 'restart', button: 'Start Over', enabled: true };
+    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished - replay or exit', action: 'restart', button: 'Replay', enabled: true };
     if (state.phase === 'error') return { phase: 'error', label: 'Replay error', button: 'Unavailable', enabled: false };
     if (state.phase === 'stopping' || state.phase === 'stopped') return { phase: state.phase, label: 'Stopping', button: 'Unavailable', enabled: false };
     return { phase: state.phase, label: 'Preparing', button: 'Play', enabled: false };
@@ -23,6 +23,7 @@ function playbackView(state) {
 
 function controlView(state) {
     const view = playbackView(state);
+    view.timing = playbackTiming(state.playbackSpeed ?? 0);
     const total = state.recordings?.length ?? 0;
     view.restartEnabled = total > 0 && ['review', 'complete'].includes(state.phase);
     view.nextEnabled = total > 0 && state.phase === 'review' && state.turnIndex < total;
@@ -78,7 +79,7 @@ function controlView(state) {
     };
 }
 
-async function createControlServer({ controlPath, getState, play, next, restart, pause, resume, stop, onError }) {
+async function createControlServer({ controlPath, getState, play, next, restart, pause, resume, stop, setSpeed, onError }) {
     const token = crypto.randomBytes(32).toString('hex');
     const expected = Buffer.from('Bearer ' + token);
     let stopping = false;
@@ -94,6 +95,14 @@ async function createControlServer({ controlPath, getState, play, next, restart,
         }
         if (request.method === 'GET' && request.url === '/state') {
             send(200, controlView(getState()));
+            return;
+        }
+        if (request.method === 'POST' && request.url?.startsWith('/speed?')) {
+            const value = new URL(request.url, 'http://localhost').searchParams.get('value');
+            if (!/^(?:0|[1-9][0-9]?|100)$/.test(value ?? '')) { send(400, { error: 'Speed must be an integer from 0 to 100' }); return; }
+            if (stopping || typeof setSpeed !== 'function') { send(409, { error: 'Speed is unavailable' }); return; }
+            try { setSpeed(Number(value)); send(200, { accepted: true }); }
+            catch (error) { send(400, { error: error.message }); }
             return;
         }
         if (request.method !== 'POST' || !['/play', '/next', '/restart', '/pause', '/resume', '/stop'].includes(request.url)) {
