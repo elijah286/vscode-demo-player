@@ -8,6 +8,35 @@ const library = require('../demo-library');
 const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
 const { summaryQuestionContext, QUESTION_CONTEXT_LENGTH, previousExchangeContext, summaryPrompt } = require('../prompt-summary-authoring');
 
+test('both providers reject the reported fragment near the old cap and preserve complete longer questions without clipping', async () => {
+    const { generateSummary, GENERATED_SUMMARY_LENGTH } = require('../prompt-summary-authoring');
+    const vscode = { LanguageModelChatMessage: { User: content => ({ content }) } };
+    const sources = [
+        { text: 'I inspected the settings. '.repeat(11) + 'I set a !', valid: false },
+        { text: 'I inspected the settings. '.repeat(15) + 'Should I use blue or green?', valid: true },
+        { text: 'I checked the result. What should I use it for?', valid: true },
+        { text: 'I completed the check. '.repeat(25) + 'Ready.', valid: true }
+    ];
+    assert.ok(sources[0].text.length < 300 && sources[0].text.length > 240);
+    assert.ok(sources[1].text.length > 300);
+    for (const { text, valid } of sources) {
+        assert.ok(text.length <= GENERATED_SUMMARY_LENGTH);
+        const model = { maxInputTokens: 10000, countTokens: async () => 10,
+            sendRequest: async () => ({ text: (async function* () { yield text.slice(0, 100); yield text.slice(100); })() }) };
+        const calls = [
+            () => generateSummary(vscode, model, 'Synthetic recorded output.', undefined, 'output'),
+            () => generateOpenAISummary({ ...request, kind: 'output' }, { fetchImpl: reply(completed(text)) })
+        ];
+        for (const generate of calls) {
+            if (valid) assert.equal(await generate(), text);
+            else await assert.rejects(generate(), /complete statement or question/);
+        }
+    }
+    const incomplete = completed('I checked the result.');
+    incomplete.output[0].status = 'incomplete';
+    await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(incomplete) }), /did not complete/);
+});
+
 test('both providers ground short replies in the preceding included exchange without leaking excluded turns', async () => {
     const turn = (input, output) => ({ snapshot: { requests: [{ message: { text: input }, response: [{ value: output }] }] } });
     const recording = { turns: [
@@ -54,13 +83,8 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
         assert.equal(body.text.format.strict, true);
         assert.deepEqual(body.text.format.schema.required, ['summary']);
         assert.equal(body.text.format.schema.additionalProperties, false);
-        const pattern = new RegExp(body.text.format.schema.properties.summary.pattern);
-        assert.ok(pattern.test('x'.repeat(239) + '.'));
-        assert.ok(!pattern.test('x'.repeat(240) + '.'));
-        assert.ok(!pattern.test('x'.repeat(240)));
-        assert.ok(pattern.test('x'.repeat(237) + '."'));
-        assert.ok(!pattern.test('x'.repeat(239) + '."'));
-        assert.ok(!pattern.test('one\ntwo'));
+        assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string' },
+            'Constrained decoding must not force punctuation onto a fragment at the character boundary');
         assert.ok(body.input.endsWith(JSON.stringify(request.source)));
         assert.ok(!options.body.includes(key));
         return Response.json(completed('Name three colors.'));
@@ -117,7 +141,9 @@ test('generation rejects incomplete, clipped and third-person drafts without tri
     for (const summary of [
         'I want to repair the framewor', 'I can proceed, however,', 'I found a mismatch...',
         'User wants to repair the project.', 'The user responded affirmatively.',
-        'The assistant repaired the project.', 'x'.repeat(240) + '.'
+        'The assistant repaired the project.', 'x'.repeat(600) + '.',
+        'I set a !', 'I inspected the settings. '.repeat(10) + 'I set a !',
+        'I confirmed the result and.', 'I updated the!'
     ]) {
         let calls = 0;
         await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => {

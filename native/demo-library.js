@@ -261,12 +261,12 @@ function summarize(entry) {
         recording.outputSummary = entry.recording.outputSummaries?.[index] ?? null;
         return recording;
     });
-    const { overlay, progress } = controlView({ phase: 'ready', turnIndex: 0, recordings });
+    const { overlay, progress, estimateProfile } = controlView({ phase: 'ready', turnIndex: 0, recordings });
     const summaryCounts = {
         input: indices.filter(index => entry.recording.promptSummaries?.[index]).length,
         output: indices.filter(index => entry.recording.outputSummaries?.[index]).length
     };
-    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: indices.length, totalCount: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: recordings[0].request.message.text, notice: entry.recording.notice, presentation: { overlay, progress } };
+    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: indices.length, totalCount: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: recordings[0].request.message.text, notice: entry.recording.notice, presentation: { overlay, progress, estimateProfile } };
 }
 
 async function listDemos(root) {

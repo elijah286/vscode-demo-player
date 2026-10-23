@@ -2,6 +2,22 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const { RESPONSE_DURATION, playbackTiming } = require('./replay');
+const estimateProfiles = new WeakMap();
+
+function playbackEstimateProfile(recordings) {
+    if (estimateProfiles.has(recordings)) return estimateProfiles.get(recordings);
+    const dwell = text => Math.min(10000, Math.max(2000, 1000 + (text?.length ?? 0) * 1000 / 35));
+    const between = recordings.slice(0, -1);
+    const profile = {
+        count: recordings.length,
+        promptDwellMilliseconds: between.reduce((sum, item) => sum + dwell(item.promptSummary), 0),
+        outputDwellMilliseconds: between.reduce((sum, item) => sum + dwell(item.outputSummary?.trim()
+            ? item.outputSummary : 'Output summary missing. Generate or edit summaries before playback.'), 0),
+        noSummaryDwellMilliseconds: between.length * 2000
+    };
+    estimateProfiles.set(recordings, profile);
+    return profile;
+}
 
 function playbackView(state) {
     if (state.phase === 'ready') return { phase: 'ready', label: 'Ready', action: 'play', button: 'Play', enabled: true };
@@ -29,6 +45,7 @@ function controlView(state) {
     view.nextEnabled = total > 0 && state.phase === 'review' && state.turnIndex < total;
     if (state.error) view.error = state.error;
     if (!total) return view;
+    view.estimateProfile = playbackEstimateProfile(state.recordings);
     const current = ['ready', 'typing', 'response'].includes(state.phase)
         ? Math.min(state.turnIndex + 1, total)
         : Math.min(Math.max(state.turnIndex, 1), total);
