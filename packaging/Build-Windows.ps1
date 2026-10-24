@@ -48,7 +48,7 @@ $payload = Join-Path $cache ('payload-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $payload 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $payload 'runtime')) | Out-Null
 
-$rootFiles = @('Start-InstalledPlayer.ps1', 'PlayerTaskbarIdentity.cs', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerAI.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
+$rootFiles = @('Start-InstalledPlayer.ps1', 'PlayerTaskbarIdentity.cs', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerAI.ps1', 'ReplayPresentation.ps1', 'SummaryPresentation.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
 $nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-response.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'control-server.js', 'demo-library.js', 'library-cli.js', 'updater.js', 'prompt-summary-authoring.js', 'prompt-summary-review.js', 'openai-summaries.js')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $payload $file) }
 foreach ($file in $nativeFiles) { Copy-Item -LiteralPath (Join-Path $root ('native\' + $file)) -Destination (Join-Path $payload ('native\' + $file)) }

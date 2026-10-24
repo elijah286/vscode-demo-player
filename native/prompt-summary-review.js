@@ -132,19 +132,25 @@ show();
 </script></body></html>`;
 }
 
-function reviewSummaries(vscode, drafts) {
+function reviewSummaries(vscode, drafts, validateFit) {
     const panel = vscode.window.createWebviewPanel('demoPlayer.summaryReview', 'Review input/output summaries',
         vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     return new Promise(resolve => {
-        const received = panel.webview.onDidReceiveMessage(message => {
+        let saving = false;
+        const received = panel.webview.onDidReceiveMessage(async message => {
             if (message?.command === 'cancel') panel.dispose();
             if (message?.command !== 'save') return;
+            if (saving) return;
+            saving = true;
             try {
                 const reviewed = validateReviewedDrafts(message.drafts, drafts);
+                if (validateFit) await validateFit(reviewed);
                 resolve(reviewed);
                 panel.dispose();
             } catch (error) {
                 void panel.webview.postMessage({ command: 'error', message: error.message });
+            } finally {
+                saving = false;
             }
         });
         const disposed = panel.onDidDispose(() => {

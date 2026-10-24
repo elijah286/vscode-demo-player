@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.22](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.22/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.23](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.23/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -505,12 +505,21 @@ The first input appears before playback. Only after the entire recorded reply
 finishes, a down arrow and its reviewed output summary appear below that input.
 **Next Step** appends the next input at the bottom. Previous messages remain,
 bounded to the current recording (at most 100 included exchanges / 200 bubbles).
-The view follows new inputs. Outputs follow the bottom only if you were already
-near it (within 24 layout units), so reading older messages is not interrupted.
-Follow-bottom is reapplied after WPF updates its scroll extent, so newly wrapped
-reply endings remain accessible rather than scrolling against the previous layout.
-Automatic height grows with short history up to 600 layout units or the available
-work area; longer history scrolls below the fixed timer. Manual resizing is retained.
+Each new input or revealed reply returns to the current exchange. Its complete
+prompt and reply must be visible together without scrolling. The overlay measures
+the real WPF bubbles, font, timer and padding, and grows within the monitor work
+area when necessary. A manual resize is retained only while the current pair still
+fits; it cannot make the pair clip. Older history remains scrollable between
+exchange transitions, below the fixed timer.
+
+Review/save and opening playback with output summaries enabled check included
+pairs using the same rendered layout, not just character counts. If a pair cannot
+fit even at the screen's available width and height, shorten it in **Review / edit
+summaries**; the full draft is retained and saving/playback is blocked with an
+explicit exchange number. Native VS Code review performs the same Windows layout
+check before saving. Enabling output summaries on an already-open, incompatible
+recording turns that option back off with an explanation. No text is truncated,
+automatically rewritten or regenerated; there are no automatic paid retries.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
 reset the conversation deterministically. A missing/deleted output summary

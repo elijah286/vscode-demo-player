@@ -761,7 +761,12 @@ try {
     } 'isolated replay process'
     $replayId = [int]$replay.ProcessId
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' -and (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'Open prepares target without starting playback' 50 | Out-Null
-    if ([Math]::Abs($overlay.Current.BoundingRectangle.Width - $resized.Width) -gt 2 -or [Math]::Abs($overlay.Current.BoundingRectangle.Height - $resized.Height) -gt 2) { throw 'Playback updates reset the resized overlay.' }
+    $fitArea = [System.Windows.SystemParameters]::WorkArea
+    $expectedFit = Get-DemoSummaryLayout $overlaySummary $outputSummary $resized.Width ($fitArea.Width - 32) ($fitArea.Height - 32)
+    $expectedHeight = [Math]::Max($resized.Height, $expectedFit.Height)
+    if (-not $expectedFit.Fits -or [Math]::Abs($overlay.Current.BoundingRectangle.Width - $expectedFit.Width) -gt 2 -or
+        [Math]::Abs($overlay.Current.BoundingRectangle.Height - $expectedHeight) -gt 2) { throw 'Playback must preserve manual dimensions except the exact growth required for the complete prompt/reply pair.' }
+    $resized = $overlay.Current.BoundingRectangle
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable before the first exchange.' }
     if (([System.Windows.Automation.TogglePattern]$showPrompt.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On -or
         ([System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) { throw 'Open must preserve presentation choices.' }
@@ -779,6 +784,11 @@ try {
         (Find-Element $overlay 'Id' 'SecondLabel').Current.Name -ne 'AI' -or
         (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:01:01') { throw 'First completion changed input, labels or cumulative recorded timer.' }
     if ([Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Completion moved the fixed timer.' }
+    $pairInput = (Find-Element $overlay 'Id' 'FirstText').Current.BoundingRectangle
+    $pairOutput = (Find-Element $overlay 'Id' 'SecondText').Current.BoundingRectangle
+    $fixedTimer = (Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle
+    if ($pairInput.Top -le $fixedTimer.Bottom -or $pairOutput.Bottom -gt $resized.Bottom - 16 -or
+        $pairInput.Height -le 0 -or $pairOutput.Height -le 0) { throw 'Both complete summaries must be visible together between the fixed timer and overlay bottom.' }
     Save-WindowImage $overlay 'conversation-input1-output1.png'
     Invoke-Button $window 'NextStep'
     Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary -and

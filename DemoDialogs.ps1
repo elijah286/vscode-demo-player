@@ -1,3 +1,4 @@
+. (Join-Path $PSScriptRoot 'SummaryPresentation.ps1')
 if (-not ('DemoLibraryJson' -as [type])) {
     Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
 using System;
@@ -91,6 +92,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
     $cancellation = [Threading.CancellationTokenSource]::new()
     $worker = [PowerShell]::Create()
     $runspace = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
     $worker.Runspace = $runspace
     $controls = [Collections.Generic.List[object]]::new()
     $state = @{ Cancellation = $cancellation; OwnerClosed = $false; Finished = $false; Job = $null; Failure = $null; Clock = [Diagnostics.Stopwatch]::StartNew() }
@@ -1118,6 +1120,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             $dialog.Tag.Included[$turn] = [bool]$include.IsChecked
         }
     }
+    $summaryFitCache = @{}
     $reviewIssues = {
         for ($item = 0; $item -lt 2 * $entry.recording.turns.Count; $item++) {
             $turn = [int][Math]::Floor($item / 2)
@@ -1126,6 +1129,22 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             if ($issue) {
                 'Exchange ' + ($turn + 1) + $(if ($item % 2 -eq 0) { ' input: ' } else { ' output: ' }) + $issue
             }
+        }
+        for ($turn = 0; $turn -lt $entry.recording.turns.Count; $turn++) {
+                if (-not $dialog.Tag.Included[$turn]) { continue }
+                $inputText = [string]$dialog.Tag.Summaries[$turn]
+                if (-not $inputText) {
+                    $inputText = Get-DemoPlaybackInput $entry.recording $turn -SourceOnly
+                }
+                $outputText = [string]$dialog.Tag.Outputs[$turn]
+                $reviewArea = Get-DemoSummaryWorkArea $dialog
+                $fitKey = $reviewArea.ToString() + [char]0 + $inputText + [char]0 + $outputText
+                if (-not $summaryFitCache.ContainsKey($fitKey)) {
+                    if ($summaryFitCache.Count -ge 256) { $summaryFitCache.Clear() }
+                    $summaryFitCache[$fitKey] = Get-DemoSummaryLayout $inputText $outputText 820 ($reviewArea.Width - 32) ($reviewArea.Height - 32)
+                }
+                $fit = $summaryFitCache[$fitKey]
+                if (-not $fit.Fits) { 'Exchange ' + ($turn + 1) + ': shorten the prompt/reply summaries; the rendered pair cannot fit together on this screen without scrolling.' }
         }
     }
     $updateReview = {
@@ -1143,6 +1162,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         & $storeDraft
         $dialog.Tag.Index = $exchange.SelectedIndex
         if ($exchange.SelectedIndex -ge 0) {
+            $dialog.Tag.Loading = $true
             $turn = [int][Math]::Floor($exchange.SelectedIndex / 2)
             $include.IsChecked = [bool]$dialog.Tag.Included[$turn]
             if ($exchange.SelectedIndex % 2 -eq 0) {
@@ -1152,12 +1172,14 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
                 $dialog.FindName('Original').Text = $outputs[$turn]
                 $summary.Text = [string]$dialog.Tag.Outputs[$turn]
             }
+            $dialog.Tag.Loading = $false
         }
         $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
         & $updateReview
+        & $updateReview
     })
     $updateInclusion = {
-        if ($dialog.Tag.Index -ge 0) {
+        if ($dialog.Tag.Index -ge 0 -and -not $dialog.Tag.Loading) {
             $dialog.Tag.Included[[int][Math]::Floor($dialog.Tag.Index / 2)] = [bool]$include.IsChecked
             $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
         }

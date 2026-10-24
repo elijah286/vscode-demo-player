@@ -162,6 +162,57 @@ try {
     Arrange-Overlay 820 (Get-OverlayConversationHeight 820) $false $true
     Assert-Layout ($conversationMessages.Children.Count -eq 4 -and $conversationMessages.Children[0] -eq $first) 'Short history must retain more than two bubbles and original elements.'
     Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'Four short messages should fit naturally.'
+    $fitCases = 0
+    $unfitCases = 0
+    foreach ($screen in @(@(800,600), @(1366,768), @(1920,1080))) {
+        $area = [System.Windows.Rect]::new(0, 0, $screen[0], $screen[1])
+        foreach ($text in @(('W' * 239 + '.'), ('A complete question and answer. ' * 18), ([string][char]0x754C * 600), ('W' * 1200))) {
+            $fit = Get-DemoSummaryLayout $text $text 280 ($area.Width - 32) ($area.Height - 32)
+            if (-not $fit.Fits) {
+                $unfitCases++
+                Assert-Layout ($fit.Width -eq $area.Width - 32 -and $fit.Height -gt $area.Height - 32) 'Unfit text must be rejected only after measuring at the available work-area width.'
+                continue
+            }
+            $fitCases++
+            Set-History @((Message '0:input' $true $text), (Message '0:output' $false $text)) 'measured-pair'
+            $script:overlayWindow.Width = 280
+            $script:overlayWindow.Height = 180
+            Assert-Layout (Ensure-CurrentSummaryPairFits) 'A measured fit must apply successfully.'
+            Arrange-Overlay $script:overlayWindow.Width $script:overlayWindow.Height $false $true
+            $conversationPanel.ScrollToEnd()
+            $conversationPanel.UpdateLayout()
+            Assert-Layout ($script:overlayWindow.Width -le $area.Width - 32 -and $script:overlayWindow.Height -le $area.Height - 32) 'Window growth must stay inside the screen work area.'
+            Assert-Layout ($conversationPanel.ScrollableHeight -lt 1) 'The complete current pair must fit simultaneously without scrolling.'
+            foreach ($bubble in $conversationMessages.Children) {
+                Assert-FullBubbleText $bubble $text
+                $body = $bubble.Child.Children[1]
+                $firstGlyph = $body.ContentStart.GetInsertionPosition([System.Windows.Documents.LogicalDirection]::Forward).GetCharacterRect([System.Windows.Documents.LogicalDirection]::Forward)
+                $lastGlyph = $body.ContentEnd.GetInsertionPosition([System.Windows.Documents.LogicalDirection]::Backward).GetCharacterRect([System.Windows.Documents.LogicalDirection]::Backward)
+                $firstPoint = $body.TranslatePoint([System.Windows.Point]::new($firstGlyph.Left, $firstGlyph.Top), $conversationPanel)
+                $lastPoint = $body.TranslatePoint([System.Windows.Point]::new($lastGlyph.Right, $lastGlyph.Bottom), $conversationPanel)
+                Assert-Layout ($firstPoint.Y -ge 0 -and $lastPoint.Y -le $conversationPanel.ViewportHeight + 1) 'Both the first and final glyph of BOTH summaries must be visible in the viewport at once.'
+            }
+            $script:overlayWindow.MinHeight = 132
+        }
+    }
+    Assert-Layout ($fitCases -ge 6 -and $unfitCases -ge 1) 'Measured screen-fit coverage must include successful pairs and explicit rejection.'
+    $recording = [pscustomobject]@{
+        turns = @([pscustomobject]@{ snapshot = [pscustomobject]@{ requests = @([pscustomobject]@{ message = [pscustomobject]@{ text = 'Original question' } }) } })
+        promptSummaries = @('W' * 1200)
+        outputSummaries = @('W' * 1200)
+        playbackIncluded = @($true)
+    }
+    $beforeFitCheck = $recording | ConvertTo-Json -Depth 8 -Compress
+    $fitFailure = ''
+    try { Assert-DemoSummaryPairs $recording 280 768 568 } catch { $fitFailure = $_.Exception.Message }
+    Assert-Layout ($fitFailure -like 'Exchange 1:*cannot fit together*No text was truncated*') 'Preflight must name the exact included exchange and actionable fit failure.'
+    Assert-Layout (($recording | ConvertTo-Json -Depth 8 -Compress) -ceq $beforeFitCheck) 'Fit validation must never truncate or mutate saved summaries.'
+    $recording.playbackIncluded[0] = $false
+    Assert-DemoSummaryPairs $recording 280 768 568
+    Assert-Layout ($true) 'Excluded exchanges must not block summary playback.'
+    $recording.promptSummaries[0] = $null
+    Assert-Layout ((Get-DemoPlaybackInput $recording 0) -ceq 'Original question') 'Deleted input summaries must validate their real playback excerpt.'
+    $area = [System.Windows.Rect]::new(0, 0, 1920, 1080)
     foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300),
         ('I inspected the settings. ' * 10 + 'I set a !'),
         ('I inspected the settings. ' * 16 + 'Should I use blue or green?'),
@@ -240,7 +291,7 @@ try {
     Arrange-Overlay 320 400 $false $true
     Set-History $many 'follow'
     Arrange-Overlay 320 400 $false $true
-    Assert-Layout ($conversationPanel.VerticalOffset -eq 0) 'Appending output must preserve an older-history reading position.'
+    Assert-Layout ($conversationPanel.ScrollableHeight - $conversationPanel.VerticalOffset -lt 1) 'A newly revealed reply must return to the current pair; history remains scrollable between transitions.'
     Set-History $many[0..197] 'new-input'
     Wait-History
     Arrange-Overlay 320 400 $false $true

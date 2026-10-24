@@ -531,6 +531,7 @@ try {
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$storeDraft'
     }, $true)
     $storeDraft = $storeNode.Right.Expression.ScriptBlock.GetScriptBlock()
+    $summaryFitCache = @{}
     foreach ($name in @('reviewIssues', 'updateReview')) {
         $node = $summaryFunction.Find({
             param($candidate)
@@ -608,6 +609,21 @@ try {
     & $storeDraft
     Assert-Equal $dialog.Tag.Summaries[0] 'Replacement draft' 'Editing after clear can save a new summary'
     Assert-Equal ($null -eq $dialog.Tag.Summaries[1]) $true 'Editing one draft keeps other drafts cleared'
+    $originalWorkArea = ${function:Get-DemoSummaryWorkArea}
+    try {
+        function Get-DemoSummaryWorkArea { return [Windows.Rect]::new(0, 0, 800, 600) }
+        $summaryFitCache.Clear()
+        $dialog.Tag.Outputs[0] = 'W' * 1200
+        $summary.Text = 'W' * 1200
+        & $updateReview
+        Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Individually valid character counts must not bypass actual pair geometry'
+        Assert-Equal ($dialog.FindName('ReviewStatus').Text -like '*cannot fit together*without scrolling*') $true 'Review identifies an unfit pair with shortening guidance'
+        Assert-Equal $summary.Text.Length 1200 'Geometry rejection preserves the entire editable draft'
+        $include.IsChecked = $false
+        & $updateReview
+        Assert-Equal $dialog.FindName('Save').IsEnabled $true 'An excluded overlarge pair does not block included exchanges'
+        Assert-Equal $entry.recording.promptSummaries[0] 'First saved summary' 'Rejected geometry does not mutate saved summaries'
+    } finally { ${function:Get-DemoSummaryWorkArea} = $originalWorkArea }
 } finally { $dialog.Close() }
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'PlayerAI.ps1')
 $script:summaryRequests = [Collections.Generic.List[object]]::new()
