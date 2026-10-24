@@ -87,7 +87,32 @@ function Wait-History {
     $script:maxHistoryGap = [Math]::Max($script:maxHistoryGap, $timing.MaxGap)
 }
 
+function Invoke-FitProtocol([object[]]$Pairs) {
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $helper = Join-Path (Split-Path $PSScriptRoot -Parent) 'SummaryPresentation.ps1'
+    $process.StartInfo.Arguments = '-NoProfile -STA -ExecutionPolicy Bypass -File "' + $helper + '" -ValidateStdin'
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.RedirectStandardInput = $true
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+    try {
+        $process.Start() | Out-Null
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Write((ConvertTo-Json -InputObject $Pairs -Depth 4 -Compress))
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit(30000)) { Stop-Process -Id $process.Id -Force; throw 'Windows PowerShell fit protocol exceeded 30 seconds.' }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; ErrorText = $stderr.GetAwaiter().GetResult(); Output = $stdout.GetAwaiter().GetResult() }
+    } finally { $process.Dispose() }
+}
+
 try {
+    $protocol = Invoke-FitProtocol @(1..100 | ForEach-Object { @{exchange = $_; input = 'A complete prompt?'; output = 'Yes, a complete answer.'} })
+    Assert-Layout ($protocol.ExitCode -eq 0 -and -not $protocol.ErrorText) 'Windows PowerShell must measure 100 JSON pairs individually, not concatenate the array into one giant exchange.'
+    $protocol = Invoke-FitProtocol @(@{exchange=1; input='A short prompt?'; output='Yes.'}, @{exchange=2; input=('W' * 10000); output=('W' * 10000)})
+    Assert-Layout ($protocol.ExitCode -ne 0 -and $protocol.ErrorText -like '*Exchange 2:*cannot fit together*') 'Native fit validation must reject and identify the individual unfit pair, without saving or concatenating exchange numbers.'
     $promptText.Text = ('A synthetic summary that wraps across the available width. ' * 3).Trim()
     $promptProgress.Text = '1/24'
     foreach ($height in @(132, 180, 500)) {
