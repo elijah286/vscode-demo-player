@@ -519,7 +519,8 @@ summaries**; the full draft is retained and saving/playback is blocked with an
 explicit exchange number. Native VS Code review performs the same Windows layout
 check before saving. Enabling output summaries on an already-open, incompatible
 recording turns that option back off with an explanation. No text is truncated,
-automatically rewritten or regenerated; there are no automatic paid retries.
+automatically rewritten or regenerated. New AI generation, unlike saved/manual
+summary editing, includes bounded length correction covered by its consent notice.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
 reset the conversation deterministically. A missing/deleted output summary
@@ -579,7 +580,7 @@ preview shows all additional context before generation, including for prompt-onl
 generation, which now sends prior assistant context but still generates inputs only.
 Existing summaries are not regenerated automatically; delete a saved summary
 explicitly before generating a contextual replacement.
-For long OpenAI output sources, every combination request also retains up to
+For long output sources, every combination request also retains up to
 3,600 trailing characters of the original assistant source as verbatim grounding,
 so its closing question/choices do not depend solely on a partial model summary.
 This is part of the already displayed/consented source, not another exchange.
@@ -588,19 +589,37 @@ New AI drafts target **180-220 characters or fewer**, with a **600-character
 safety limit** to accommodate complete sentences and explicit questions/choices,
 not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
-Completed well-formed drafts above 600 characters are retained in full for
-explicit shortening/editing in review, together with the other completed drafts.
-They cannot be approved/saved unchanged, even at 601-1200 characters. The editor
-shows the exact count and limits; edit or delete the draft, without an automatic
-paid retry. Human-edited text may exceed the AI limit but must fit the 1200-character
-save limit. Draft transport is bounded at 4096 characters; larger responses fail
-explicitly, never silently slice or become a saved summary.
+Both providers automatically rewrite completed, well-formed overlong drafts before
+review. Each source part/combination permits **at most 4 requests**: one generation
+and up to three length corrections, with a fixed **90-second total deadline**
+(the player's helper watchdog allows 95 seconds including process overhead).
+Corrections resend the consented source/context and previous draft, prioritizing
+the recorded answer, final unanswered question/choices and qualifications over
+incidental detail. Each intermediate summary must fit 600 before combination.
+One source-consent notice covers these additional, potentially billed requests;
+progress describes generation/correction, limits and source/combination parts.
+Cancel stops further work but cannot undo sent requests or charges. Exhaustion
+fails the batch explicitly: no invalid or partial batch is offered as successful
+or saved; retry generation explicitly or choose another model.
+Draft transport remains bounded at 4096 characters; larger responses fail
+explicitly, never silently slice or become a saved summary. Valid first results
+use no correction requests. There are no automatic retries for malformed,
+incomplete/refused, authentication, TLS, billing, rate-limit or network failures.
+
+For older/in-flight unsaved overlong AI drafts, **Automatically shorten AI summaries**
+in the open player/native review repairs unchanged generated drafts only, after
+source/draft preview and paid-request consent (up to 4 correction requests per
+part). Valid/manual edited summaries, inclusion and other review decisions are
+kept; cancellation/failure leaves the batch unchanged. Save remains explicit and
+atomic. An already-running older app cannot gain new controls: reopen the updated
+app and regenerate unsaved drafts; saved recordings are never silently mutated.
+Human-edited text may exceed the AI limit but must fit the 1200-character save limit.
 Speak directly in the original speaker's voice: "I want...", "Can you...?" or
 "Yes.", not "User wants to..." or "The assistant...". For a user question,
 the output summary must lead with the actual recorded answer and qualifications;
 if the reply did not answer, it must say so, never invent an answer.
 Generation rejects malformed, visibly unfinished or role-narrated drafts explicitly,
-without slicing text or automatically retrying paid requests.
+without slicing text or retrying those failures.
 This includes obvious dangling endings such as "I set a !"; punctuation alone
 does not prove grammatical completeness. Local checks are not a semantic
 guarantee, so review the draft against its recorded source.
@@ -707,14 +726,14 @@ local and unchanged, but the consented text is sent to OpenAI.
 
 Progress identifies the exchange and summary kind. **Cancel** stops the helper;
 already sent requests may still incur charges. There is a 90-second limit per
-request and no automatic retries. Starting with v0.2.16, long sources are automatically split into
+request, including bounded automatic length correction as described above. Long sources are automatically split into
 parts of at most 64,000 characters. Each part is summarized in order, then
 intermediate summaries are combined into one overlay summary with additional
 bounded requests; no original source is silently truncated. Both source and
 combination requests incur API charges and are covered by the source-consent
 notice. Progress shows source/combination phase and part number; cancellation
 or any part failure stops the batch without saving partial drafts. Short
-sources still use one request each, with no cap on their aggregate batch size.
+sources use one request each when the first draft fits, with no cap on their aggregate batch size.
 A rejected key opens replacement settings;
 save a replacement and explicitly start generation again. Billing, access,
 network and invalid-output failures are reported explicitly. Cancellation or

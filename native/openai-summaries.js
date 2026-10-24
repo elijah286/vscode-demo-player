@@ -1,5 +1,5 @@
 const { readEntry, includedTurnIndices } = require('./demo-library');
-const { recordedOutput, summaryPrompt, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary } = require('./prompt-summary-authoring');
+const { recordedOutput, summaryPrompt, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary, fitGeneratedSummary } = require('./prompt-summary-authoring');
 
 const ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_MODEL = 'gpt-4.1-mini';
@@ -43,7 +43,14 @@ async function readResponse(response) {
     catch { throw new SummaryError('OpenAI returned invalid JSON. No summaries were saved.'); }
 }
 
-async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '', previous = '' }, { fetchImpl = fetch, timeoutMs = 90000 } = {}) {
+async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '', previous = '', rewrite = '' }, { fetchImpl = fetch, timeoutMs = 90000, signal, progress } = {}) {
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const totalSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    const checkCancelled = () => {
+        if (signal?.aborted) throw new SummaryError('Summary generation canceled. No summaries were saved.', 'OPENAI_CANCELLED');
+        if (deadline.aborted) throw new SummaryError('The OpenAI request timed out. Retry explicitly. No summaries were saved.', 'OPENAI_TIMEOUT');
+    };
+    if (typeof rewrite !== 'string') throw new SummaryError('The length correction draft is invalid. No request was sent.');
     if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(apiKey)) {
         throw new SummaryError('Enter a valid OpenAI API key in Settings.', 'OPENAI_AUTH');
     }
@@ -54,14 +61,24 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         typeof previous !== 'string' || previous.length > QUESTION_CONTEXT_LENGTH) {
         throw new SummaryError('The recorded summary source or kind is invalid. No request was sent.');
     }
+    try {
+        return await fitGeneratedSummary(candidate => requestOpenAISummary({ apiKey, model, source, kind, partial, combine, question, previous, rewrite: candidate },
+            { fetchImpl, signal: totalSignal }), { initial: rewrite, checkCancelled, progress });
+    } catch (error) {
+        if (error instanceof SummaryError) throw error;
+        throw new SummaryError(error.message);
+    }
+}
+
+async function requestOpenAISummary({ apiKey, model, source, kind, partial, combine, question, previous, rewrite }, { fetchImpl, signal }) {
     let response;
     let body;
     try {
         response = await fetchImpl(ENDPOINT, {
-            method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
+            method: 'POST', redirect: 'error', signal,
             headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model, input: summaryPrompt(source, kind, { partial, combine, question, previous }), max_output_tokens: 1024, store: false,
+                model, input: summaryPrompt(source, kind, { partial, combine, question, previous, rewrite }), max_output_tokens: 2048, store: false,
                 text: { format: {
                     type: 'json_schema', name: 'demo_player_summary', strict: true,
                     schema: {
@@ -78,6 +95,9 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         body = await readResponse(response);
     } catch (error) {
         if (error instanceof SummaryError) throw error;
+        if (signal.aborted && signal.reason?.name !== 'TimeoutError') {
+            throw new SummaryError('Summary generation canceled. No summaries were saved.', 'OPENAI_CANCELLED');
+        }
         const code = error.cause?.code ?? error.code;
         if (['SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
             'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID'].includes(code)) {
@@ -138,7 +158,9 @@ async function main() {
     }
     const request = JSON.parse(input);
     if (request.command === 'prepareSummaries') return prepareSummaries(request.root, request.id, request.scope);
-    if (request.command === 'generateSummary') return generateOpenAISummary(request);
+    if (request.command === 'generateSummary') return generateOpenAISummary(request, {
+        progress: state => process.stderr.write('SUMMARY_PROGRESS ' + JSON.stringify(state) + '\n')
+    });
     throw new SummaryError('Unknown OpenAI summary command.');
 }
 

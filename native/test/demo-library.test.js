@@ -407,8 +407,7 @@ test('output generation sends only selected recorded text and tool status, never
     model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(239) + '.'; })() });
     assert.equal((await generateSummary(vscode, model, source.text, undefined, 'output')).length, 240);
     model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(600) + '.'; })() });
-    assert.equal(await generateSummary(vscode, model, source.text, undefined, 'output'), 'o'.repeat(600) + '.',
-        'Completed overlong output is retained for explicit review, not discarded');
+    await assert.rejects(generateSummary(vscode, model, source.text, undefined, 'output'), /after 4 requests/);
     assert.equal(recordedOutput({ response: [{ kind: 'recordedSdkEvent', events: [] }] }).text, '');
 });
 
@@ -577,7 +576,7 @@ function authoringAPI(options = {}) {
                                 if (options.beforeReview) await options.beforeReview();
                                 if (options.cancelReview) { panel.dispose(); return; }
                                 receive({ command: 'save', drafts: options.reviewText ? JSON.parse(options.reviewText) :
-                                    calls.reviewDrafts.map(turn => ({ exchange: turn.exchange, kind: turn.kind, summary: 'Reviewed shorter query', status: 'approved' })) });
+                                    calls.reviewDrafts.map(turn => ({ exchange: turn.exchange, kind: turn.kind, summary: options.keepDrafts ? turn.summary : 'Reviewed shorter query', status: 'approved' })) });
                             });
                         }
                     }
@@ -609,27 +608,28 @@ async function authoringFixture(context, prompts = ['Long original query '.repea
     return result;
 }
 
-test('mixed valid and overlong completed VS Code drafts reach review intact and only reviewed edits are saved', async context => {
+test('mixed VS Code drafts automatically fit before review and save atomically without manual length edits', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
     const { source, root, inspection } = await authoringFixture(context, ['First long query '.repeat(25), 'Second long query '.repeat(25)]);
     const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Recovery', inspection.sha256));
     const file = path.join(root, added.id + '.demo.json');
     const before = await fs.readFile(file);
-    const outputs = ['I checked the result.', 'I checked ' + 'x'.repeat(590) + '.', 'I inspected ' + 'x'.repeat(1190) + '.', 'Yes.'];
+    const outputs = ['I checked the result.', 'I checked ' + 'x'.repeat(590) + '.', 'I chose blue.', 'I inspected ' + 'x'.repeat(1190) + '.', 'Should I use blue or green?', 'Yes.'];
+    const expected = [outputs[0], outputs[2], outputs[4], outputs[5]];
     const canceled = authoringAPI({ outputs, cancelReview: true });
     await activateSummaryAuthoring({ subscriptions: [] }, canceled.api, file).run();
-    assert.equal(canceled.calls.requests, 4);
+    assert.equal(canceled.calls.requests, 6);
     assert.equal(canceled.calls.reviews, 1);
-    assert.deepEqual(canceled.calls.reviewDrafts.map(turn => turn.summary), outputs);
+    assert.deepEqual(canceled.calls.reviewDrafts.map(turn => turn.summary), expected);
     assert.deepEqual(await fs.readFile(file), before);
-    const saved = authoringAPI({ outputs });
+    const saved = authoringAPI({ outputs, keepDrafts: true });
     await activateSummaryAuthoring({ subscriptions: [] }, saved.api, file).run();
-    assert.deepEqual(saved.calls.reviewDrafts.map(turn => turn.summary), outputs);
-    assert.equal(saved.calls.requests, 4, 'Length recovery never makes another model request');
+    assert.deepEqual(saved.calls.reviewDrafts.map(turn => turn.summary), expected);
+    assert.equal(saved.calls.requests, 6);
     assert.equal(saved.calls.errors.length, 0);
     const after = await library.readEntry(root, added.id);
-    assert.deepEqual(after.recording.promptSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
-    assert.deepEqual(after.recording.outputSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.promptSummaries, expected.slice(0, 2));
+    assert.deepEqual(after.recording.outputSummaries, expected.slice(2));
     assert.deepEqual(after.recording.turns, JSON.parse(before).recording.turns);
 });
 
@@ -656,6 +656,24 @@ test('AI authoring requires consent, a model, and review before persistence; fai
     assert.equal((await library.readEntry(root, added.id)).recording.promptSummaries[0], 'Reviewed shorter query');
     assert.equal((await library.readEntry(root, added.id)).recording.outputSummaries[0], 'Reviewed shorter query');
     assert.match(calls.consentMessages[0], /original user queries.*recorded assistant output/);
+});
+
+test('exhausted fitting and cancellation during correction never offer a partial native batch', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context);
+    const added = await library.addPackage(root, await library.createPackage(source, [0], 'Bounded fit', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    const overflow = 'I inspected the settings. '.repeat(60) + 'Ready.';
+    for (const options of [{ output: overflow }, { output: overflow, cancelAt: 2 }]) {
+        const { api, calls } = authoringAPI(options);
+        await activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
+        assert.equal(calls.requests, options.cancelAt ?? 4);
+        assert.equal(calls.reviews, 0);
+        assert.equal(calls.saved.length, 0);
+        assert.deepEqual(await fs.readFile(file), before);
+        assert.match(calls.errors[0], /after 4 requests|canceled/);
+    }
 });
 
 test('AI authoring refuses a concurrent summary edit instead of overwriting it', async context => {

@@ -117,12 +117,13 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
         $notes = [Collections.Generic.List[string]]::new()
         for ($index = 0; $index -lt $parts.Count; $index++) {
             $phase = if ($combine) { 'Combining summaries' } else { 'Summarizing source' }
-            $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count
+            $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count + '. Automatically shortens if needed; at most 4 requests, 90 seconds total for this part.'
             $summary = Invoke-DemoLibrary @{
                 command = 'generateSummary'; apiKey = $ApiKey; model = $Model
                 source = ($parts[$index] + $(if ($combine) { $closingContext } else { '' })); kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
                 question = $(if ($Candidate.kind -eq 'output') { [string]$Candidate.question } else { '' })
                 previous = [string]$Candidate.previous
+                rewrite = $(if ($parts.Count -eq 1) { [string]$Candidate.rewrite } else { '' })
             } $Progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
             $notes.Add($summary)
         }
@@ -133,11 +134,24 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
     throw 'The recorded summary source is empty. No summary was generated.'
 }
 
-function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','input','output')][string]$Scope) {
-    if ($script:openAISummaryBusy) { throw 'An AI summary is already being generated or reviewed.' }
+function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','input','output')][string]$Scope, $Repair) {
+    if ($script:openAISummaryBusy -and -not $Repair) { throw 'An AI summary is already being generated or reviewed.' }
+    $wasBusy = $script:openAISummaryBusy
     $script:openAISummaryBusy = $true
     try {
         $prepared = Invoke-DemoLibrary @{ command = 'prepareSummaries'; id = $Id; scope = $Scope } $Owner -Helper 'openai-summaries.js'
+        if ($Repair) {
+            $selected = @($prepared.candidates | ForEach-Object {
+                $candidate = $_
+                $match = @($Repair | Where-Object { $_.index -eq $candidate.index -and $_.kind -eq $candidate.kind })
+                if ($match.Count) {
+                    $candidate.rewrite = [string]$match[0].summary
+                    $candidate
+                }
+            })
+            if ($selected.Count -ne @($Repair).Count) { throw 'The source for an unsaved AI draft changed or is no longer eligible. Nothing was saved. Reopen generation from the current selection.' }
+            $prepared.candidates = $selected
+        }
         if (-not @($prepared.candidates).Count) {
             [Windows.MessageBox]::Show($Owner, 'No missing supported summaries need generation. Existing summaries are kept. Outputs without supported recorded text/tool status require manual summaries.', 'AI Summaries') | Out-Null
             return
@@ -157,10 +171,11 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
  </DockPanel>
 </Window>
 '@ $Owner
-        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Each summary also sends the shown previous input/output context; output summaries include the paired user question (each context up to 4000 characters; omitted middles are marked). Long sources are split, then combined with additional requests; no source text is dropped. Review for secrets before consenting. Only shown source/context, intermediate summaries and summarization instructions are sent, with API response storage disabled (OpenAI retention policies still apply). Raw tool arguments/results, reasoning and metadata are excluded. New summaries target 180-220 characters, up to 600 for complete thoughts/questions, in the speaker''s voice. Completed overlong drafts require shortening/editing in review (human-edited save limit 1200); no automatic retry. Existing summaries are kept. Nothing is saved until you review and save drafts. Canceling cannot undo requests or charges.'
+        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Each summary sends the shown previous exchange and paired user question (each up to 4000 characters; omissions marked). Long sources are split and combined; no source is dropped. Review for secrets. Only shown source/context, drafts and summarization instructions are sent; response storage is disabled (OpenAI retention policies apply). Raw tool arguments/results, reasoning and metadata are excluded. Target: 180-220 characters; AI maximum: 600. Each source part/combination uses at most 4 requests: one generation plus up to 3 automatic length rewrites (or up to 4 correction requests for an older draft), within 90 seconds total per part. Additional requests may be billed; this consent covers them. Incomplete/refused/failed requests are not retried. Saved/manual summaries are kept (manual limit 1200). Nothing is saved until Save summaries. Canceling cannot undo requests or charges.'
         $consent.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
             'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" +
             $(if ($_.previous) { "Previous exchange (context only):`r`n" + $_.previous + "`r`n`r`n" } else { '' }) +
+            $(if ($_.rewrite) { "Unsaved AI draft to shorten:`r`n" + $_.rewrite + "`r`n`r`n" } else { '' }) +
             $(if ($_.question) { "Paired user question/request (context only):`r`n" + $_.question + "`r`n`r`nRecorded assistant reply:`r`n" } else { '' }) + $_.source
         }) -join "`r`n`r`n---`r`n`r`n")
         $consent.FindName('Generate').Add_Click({ $consent.DialogResult = $true })
@@ -194,11 +209,12 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
             }
         })
         if ($progress.ShowDialog()) {
+            if ($Repair) { return ,@($progress.Tag.Drafts.ToArray()) }
             Show-DemoSummaryDialog $Owner $Id ([pscustomobject]@{ Entry = $prepared.entry; Outputs = $prepared.outputs; Drafts = @($progress.Tag.Drafts.ToArray()) }) | Out-Null
         } elseif ($progress.Tag.Failure) {
             if ($progress.Tag.Failure.Exception.Data['OpenAIAuth']) {
                 Show-PlayerAISettings $Owner -RequireKey -Rejected | Out-Null
             } else { throw $progress.Tag.Failure }
         }
-    } finally { $key = $null; $script:openAISummaryBusy = $false }
+    } finally { $key = $null; $script:openAISummaryBusy = $wasBusy }
 }
