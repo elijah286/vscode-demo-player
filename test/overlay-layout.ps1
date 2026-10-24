@@ -110,7 +110,7 @@ function Invoke-FitProtocol([object[]]$Pairs) {
 
 try {
     $protocol = Invoke-FitProtocol @(1..100 | ForEach-Object { @{exchange = $_; input = 'A complete prompt?'; output = 'Yes, a complete answer.'} })
-    Assert-Layout ($protocol.ExitCode -eq 0 -and -not $protocol.ErrorText) 'Windows PowerShell must measure 100 JSON pairs individually, not concatenate the array into one giant exchange.'
+    Assert-Layout ($protocol.ExitCode -eq 0) ("Windows PowerShell must measure 100 JSON pairs individually, not concatenate the array into one giant exchange. Exit: $($protocol.ExitCode). $($protocol.ErrorText)")
     $protocol = Invoke-FitProtocol @(@{exchange=1; input='A short prompt?'; output='Yes.'}, @{exchange=2; input=('W' * 10000); output=('W' * 10000)})
     Assert-Layout ($protocol.ExitCode -ne 0 -and $protocol.ErrorText -like '*Exchange 2:*cannot fit together*') 'Native fit validation must reject and identify the individual unfit pair, without saving or concatenating exchange numbers.'
     $promptText.Text = ('A synthetic summary that wraps across the available width. ' * 3).Trim()

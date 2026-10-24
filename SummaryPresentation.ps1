@@ -1,5 +1,9 @@
 param([switch]$ValidateStdin)
 
+if ($ValidateStdin) {
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+}
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 if (-not ('ReplayMessageFactory' -as [type])) {
@@ -109,7 +113,6 @@ function Assert-DemoSummaryPairs($Recording, [double]$Width, [double]$MaxWidth, 
 }
 
 if ($ValidateStdin) {
-    $ErrorActionPreference = 'Stop'
     [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
     $pairs = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
     foreach ($pair in $pairs) {
