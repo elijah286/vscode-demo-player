@@ -8,6 +8,26 @@ const { pathToFileURL } = require('node:url');
 const { DatabaseSync } = require('node:sqlite');
 const library = require('../demo-library');
 
+// Real Windows layout/stdio is covered by overlay-layout.ps1 and native UI acceptance.
+test.mock.method(require('node:child_process'), 'execFile', (executable, args, options, done) => {
+    assert.equal(executable, 'powershell.exe');
+    assert.equal(path.basename(args.at(-2)), 'SummaryPresentation.ps1');
+    assert.equal(args.at(-1), '-ValidateStdin');
+    assert.equal(options.windowsHide, true);
+    const stdin = new (require('node:events').EventEmitter)();
+    stdin.end = text => {
+        const pairs = JSON.parse(text);
+        assert.ok(Array.isArray(pairs));
+        for (const pair of pairs) {
+            assert.ok(Number.isInteger(pair.exchange) && pair.exchange > 0);
+            assert.equal(typeof pair.input, 'string');
+            assert.ok(pair.output === null || typeof pair.output === 'string');
+        }
+        queueMicrotask(() => done(null));
+    };
+    return { stdin };
+});
+
 async function fixture(context) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'demo-library-test-'));
     context.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -387,7 +407,8 @@ test('output generation sends only selected recorded text and tool status, never
     model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(239) + '.'; })() });
     assert.equal((await generateSummary(vscode, model, source.text, undefined, 'output')).length, 240);
     model.sendRequest = async () => ({ text: (async function* () { yield 'o'.repeat(600) + '.'; })() });
-    await assert.rejects(generateSummary(vscode, model, source.text, undefined, 'output'), /summary|summaries/);
+    assert.equal(await generateSummary(vscode, model, source.text, undefined, 'output'), 'o'.repeat(600) + '.',
+        'Completed overlong output is retained for explicit review, not discarded');
     assert.equal(recordedOutput({ response: [{ kind: 'recordedSdkEvent', events: [] }] }).text, '');
 });
 
@@ -498,7 +519,7 @@ function authoringAPI(options = {}) {
             if (options.stall) return new Promise(() => {});
             if (options.providerFailure || calls.requests === options.failAt) throw new Error('Synthetic provider failure');
             if (options.cancel || calls.requests === options.cancelAt) options.cancelSource.cancel();
-            return { text: (async function* () { yield options.output ?? 'Generated paraphrase.'; })() };
+            return { text: (async function* () { yield options.outputs?.[calls.requests - 1] ?? options.output ?? 'Generated paraphrase.'; })() };
         }
     };
     const api = {
@@ -587,6 +608,30 @@ async function authoringFixture(context, prompts = ['Long original query '.repea
     result.inspection = await library.inspectTranscript(result.source);
     return result;
 }
+
+test('mixed valid and overlong completed VS Code drafts reach review intact and only reviewed edits are saved', async context => {
+    const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
+    const { source, root, inspection } = await authoringFixture(context, ['First long query '.repeat(25), 'Second long query '.repeat(25)]);
+    const added = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Recovery', inspection.sha256));
+    const file = path.join(root, added.id + '.demo.json');
+    const before = await fs.readFile(file);
+    const outputs = ['I checked the result.', 'I checked ' + 'x'.repeat(590) + '.', 'I inspected ' + 'x'.repeat(1190) + '.', 'Yes.'];
+    const canceled = authoringAPI({ outputs, cancelReview: true });
+    await activateSummaryAuthoring({ subscriptions: [] }, canceled.api, file).run();
+    assert.equal(canceled.calls.requests, 4);
+    assert.equal(canceled.calls.reviews, 1);
+    assert.deepEqual(canceled.calls.reviewDrafts.map(turn => turn.summary), outputs);
+    assert.deepEqual(await fs.readFile(file), before);
+    const saved = authoringAPI({ outputs });
+    await activateSummaryAuthoring({ subscriptions: [] }, saved.api, file).run();
+    assert.deepEqual(saved.calls.reviewDrafts.map(turn => turn.summary), outputs);
+    assert.equal(saved.calls.requests, 4, 'Length recovery never makes another model request');
+    assert.equal(saved.calls.errors.length, 0);
+    const after = await library.readEntry(root, added.id);
+    assert.deepEqual(after.recording.promptSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.outputSummaries, ['Reviewed shorter query', 'Reviewed shorter query']);
+    assert.deepEqual(after.recording.turns, JSON.parse(before).recording.turns);
+});
 
 test('AI authoring requires consent, a model, and review before persistence; failures leave bytes unchanged', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
@@ -978,8 +1023,8 @@ test('AI authoring handles the 100-exchange selection limit with one consent and
     assert.equal(calls.requests, 200);
     assert.equal(calls.consent, 1);
     assert.equal(calls.reviews, 1);
+    assert.deepEqual(calls.errors, [], 'The complete 100-exchange batch must pass review and rendered-fit validation');
     assert.equal(calls.saved.length, 1);
-    assert.equal(calls.errors.length, 0);
     const after = await library.readEntry(root, added.id);
     assert.deepEqual(after.recording.promptSummaries, Array(100).fill('Reviewed shorter query'));
     assert.deepEqual(after.recording.outputSummaries, Array(100).fill('Reviewed shorter query'));

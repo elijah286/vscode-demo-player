@@ -306,16 +306,22 @@ function Start-DemoReplay {
     $script:launching = $true
     $status.Text = 'Validating selection and opening isolated playback...'
     try {
+        $summaryArea = Get-DemoSummaryWorkArea $(if ($script:overlayWindow.IsVisible) { $script:overlayWindow } else { $window })
         $started = Invoke-DemoBackgroundOperation {
-            param($Token, $Root, $Library, $Node, $Id, $Code, $Mode)
+            param($Token, $Root, $Library, $Node, $Id, $Code, $Mode, $CheckFit, $FitWidth, $FitMaxWidth, $FitMaxHeight)
             . (Join-Path $Root 'DemoDialogs.ps1')
             $script:LibraryRoot = $Library
             $script:NodePath = $Node
             if (-not $Node) { . (Join-Path $Root 'PlayerEnvironment.ps1'); $script:NodePath = Resolve-PlayerNode }
             Invoke-DemoLibrary @{ command = 'metadata'; id = $Id } | Out-Null
+            if ($CheckFit) {
+                $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id }
+                Assert-DemoSummaryPairs $entry.recording $FitWidth $FitMaxWidth $FitMaxHeight
+            }
             $launchArguments = @{ DemoPath = (Join-Path $Library ($Id + '.demo.json')); NoController = $true; CodePath = $Code; WindowMode = $Mode }
             & (Join-Path $Root 'Start-Replay.ps1') @launchArguments
-        } @($PSScriptRoot, $script:LibraryRoot, $script:NodePath, $script:selectedDemo.id, $script:CodePath, $script:replayMode) $window 'Opening isolated playback' -Cancellable $false
+        } @($PSScriptRoot, $script:LibraryRoot, $script:NodePath, $script:selectedDemo.id, $script:CodePath, $script:replayMode,
+            [bool]$showOutput.IsChecked, $script:overlayWindow.Width, ($summaryArea.Width - 32), ($summaryArea.Height - 32)) $window 'Opening isolated playback' -Cancellable $false
     } finally { $script:launching = $false }
     $script:ReplayProcessId = $started.ProcessId
     $script:ControlPath = $started.ControlPath

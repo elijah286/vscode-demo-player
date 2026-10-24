@@ -1,11 +1,35 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { readFileSync } = require('node:fs');
-const { readEntry, saveSummaryBatch, savePromptSummaries, validatePromptSummaries, includedTurnIndices } = require('./demo-library');
+const { execFile } = require('node:child_process');
+const { readEntry, saveSummaryBatch, savePromptSummaries, includedTurnIndices } = require('./demo-library');
 const { kindOf } = require('./replay');
 const { reviewSummaries } = require('./prompt-summary-review');
 const GENERATED_SUMMARY_LENGTH = 600;
 const QUESTION_CONTEXT_LENGTH = 4000;
+
+function validatePlaybackFit(recording, summaries) {
+    const pairs = includedTurnIndices(recording).map(index => {
+        const source = recording.turns[index].snapshot.requests[0].message.text.replace(/\s+/g, ' ').trim();
+        return {
+            exchange: index + 1,
+            input: summaries.promptSummaries[index] || (source.length > 300 ? source.slice(0, 297) + '...' : source),
+            output: summaries.outputSummaries[index]
+        };
+    });
+    return new Promise((resolve, reject) => {
+        let inputError;
+        const child = execFile('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File',
+            path.join(__dirname, '..', 'SummaryPresentation.ps1'), '-ValidateStdin'],
+        { windowsHide: true, timeout: 30000, encoding: 'utf8' }, error => {
+            if (error?.killed) reject(new Error('Windows playback layout validation exceeded 30 seconds. Your drafts are still open and nothing was saved. Try Save again after Windows is ready; no summary generation will be repeated.'));
+            else if (error || inputError) reject(new Error('Playback fit validation failed. Shorten the prompt/reply summaries so both fit together on screen, then save again. No summaries were saved. ' + (error || inputError).message));
+            else resolve();
+        });
+        child.stdin.on('error', error => { inputError = error; });
+        child.stdin.end(JSON.stringify(pairs), 'utf8');
+    });
+}
 
 function summaryQuestionContext(question) {
     if (question.length <= QUESTION_CONTEXT_LENGTH) return question;
@@ -24,9 +48,11 @@ function previousExchangeContext(recording, index) {
 }
 
 function validateGeneratedSummary(summary) {
-    validatePromptSummaries([summary], 1);
-    if (summary.length > GENERATED_SUMMARY_LENGTH) {
-        throw new Error('The generated summary exceeds the 600-character safety limit. No summary was saved; edit it into complete shorter statements or retry explicitly.');
+    if (typeof summary !== 'string' || !summary.trim() || /[\r\n]/.test(summary)) {
+        throw new Error('The generated summary must contain a nonempty statement on one line. No summary was saved.');
+    }
+    if (summary.length > 4096) {
+        throw new Error('The model returned too much text (over 4096 characters). No summary was saved.');
     }
     if (/^(?:the\s+)?(?:user|assistant)\b/i.test(summary)) {
         throw new Error('The generated summary narrates the speaker in third person. No summary was saved; use the speaker\'s own voice, such as "I want..." or "Yes.".');
@@ -257,15 +283,17 @@ function activateSummaryAuthoring(context, vscode, file) {
                     cancellation.dispose();
                 }
             });
-            const reviewed = await reviewSummaries(vscode, drafts);
-            if (!reviewed) return;
             const summaries = {
                 promptSummaries: entry.recording.promptSummaries?.slice() ?? entry.recording.turns.map(() => null),
                 outputSummaries: entry.recording.outputSummaries?.slice() ?? entry.recording.turns.map(() => null)
             };
-            for (const turn of reviewed) {
-                summaries[turn.kind === 'output' ? 'outputSummaries' : 'promptSummaries'][turn.exchange - 1] = turn.summary;
-            }
+            const reviewed = await reviewSummaries(vscode, drafts, async reviewed => {
+                for (const turn of reviewed) {
+                    summaries[turn.kind === 'output' ? 'outputSummaries' : 'promptSummaries'][turn.exchange - 1] = turn.summary;
+                }
+                await validatePlaybackFit(entry.recording, summaries);
+            });
+            if (!reviewed) return;
             if (scope !== 'both') {
                 const field = scope === 'input' ? 'promptSummaries' : 'outputSummaries';
                 await savePromptSummaries(root, id, summaries[field], entry.recording[field] ?? null, scope);

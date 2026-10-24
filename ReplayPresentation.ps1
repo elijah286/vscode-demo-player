@@ -1,4 +1,5 @@
 Add-Type -AssemblyName System.Windows.Forms
+. (Join-Path $PSScriptRoot 'SummaryPresentation.ps1')
 Add-Type -ReferencedAssemblies PresentationFramework,PresentationCore,WindowsBase,System.Xaml -TypeDefinition @'
 using System;
 using System.Windows;
@@ -16,32 +17,6 @@ public sealed class ReplayResizeTracker {
     public IntPtr OnMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled) {
         if (message == 0x0214) NativeResize = true;
         return IntPtr.Zero;
-    }
-}
-public static class ReplayMessageFactory {
-    private static readonly Brush Blue = new SolidColorBrush(Color.FromRgb(21, 87, 165));
-    private static readonly Brush Neutral = new SolidColorBrush(Color.FromRgb(233, 237, 242));
-    private static readonly Brush Dark = new SolidColorBrush(Color.FromRgb(32, 32, 32));
-    public static Border Create(int index, bool input, string summary) {
-        string name = index == 0 ? "First" : index == 1 ? "Second" : "Message" + index;
-        Brush foreground = input ? Brushes.White : Dark;
-        var label = new TextBlock { Text = input ? "You" : "AI", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = foreground };
-        var text = new TextBlock { Text = summary, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,4,0,0), Foreground = foreground };
-        AutomationProperties.SetAutomationId(label, name + "Label");
-        AutomationProperties.SetAutomationId(text, name + "Text");
-        var stack = new StackPanel();
-        stack.Children.Add(label);
-        stack.Children.Add(text);
-        if (!input) {
-            var arrow = new TextBlock { Text = "\u2193", Foreground = Brushes.DimGray };
-            AutomationProperties.SetAutomationId(arrow, "ConversationArrow" + index);
-            AutomationProperties.SetName(arrow, "Input followed by output");
-            stack.Children.Add(arrow);
-        }
-        return new Border { Child = stack, Padding = new Thickness(12,8,12,8), CornerRadius = new CornerRadius(10),
-            Margin = new Thickness(0,4,0,4), HorizontalAlignment = input ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            ToolTip = "Saved summary shown in full. If its wording is clipped, edit it against the original in Select exchanges, or delete that summary and explicitly generate it again. Playback never regenerates summaries.",
-            Background = input ? Blue : Neutral };
     }
 }
 '@
@@ -152,7 +127,10 @@ function Update-OverlayLayout {
     $timerPanel.Margin = if ($stacked) { [System.Windows.Thickness]::new(0,0,0,12) } elseif ($combined) { [System.Windows.Thickness]::new(24,0,0,0) } else { [System.Windows.Thickness]::new(0) }
 }
 
-$script:overlayWindow.Add_SizeChanged({ Update-OverlayLayout })
+$script:overlayWindow.Add_SizeChanged({
+    Update-OverlayLayout
+    if ($script:overlayWindow.IsVisible -and $script:outputMode -and -not $script:ensuringSummaryFit) { Ensure-CurrentSummaryPairFits | Out-Null }
+})
 $script:overlayResized = $false
 $script:overlayWindow.FindName('OverlayResize').Add_DragDelta({
     param($sender, $eventArgs)
@@ -220,21 +198,17 @@ function Update-Conversation($Overlay, [switch]$Immediate) {
             if ($before.id -cne $after.id -or $before.text -cne $after.text -or $before.input -ne $after.input) { $reset = $true; break }
         }
     }
-    $follow = $reset -or $conversationPanel.ScrollableHeight - $conversationPanel.VerticalOffset -lt 24
     if ($reset) {
         Stop-ConversationTransition
         $conversationMessages.Children.Clear()
         $script:conversationHistory = @()
-    }
-    for ($index = $script:conversationHistory.Count; $index -lt $history.Count; $index++) {
-        if ($history[$index].input) { $follow = $true }
     }
     $script:conversationHistory = $history
     $script:conversationRun = $conversation.run
     $script:conversationKey = $key
     $script:conversationTransitionCount++
     Set-ConversationFontSize $script:overlayWindow.Width
-    $script:conversationFollow = $follow
+    $script:conversationFollow = $true
     $script:conversationAnimate = -not $Immediate
     Add-ConversationMessages
 }
@@ -266,17 +240,45 @@ function Update-ReplayOverlays([switch]$MeasureOnly) {
     $desiredWidth = if ($script:outputMode -or ($promptVisible -and $timerVisible)) { 820 } elseif ($promptVisible) { 720 } else { 238 }
     $script:overlayWindow.MinWidth = if ($script:outputMode -or $promptVisible) { 280 } else { 238 }
     Update-OverlayLayout
-    if (-not ($script:overlayResized -or $script:overlayResizeTracker.NativeResize)) {
+    if (-not ($script:overlayResized -or $script:overlayResizeTracker.NativeResize) -and (-not $conversationActive -or $MeasureOnly)) {
         $script:overlayWindow.Width = [Math]::Min($desiredWidth, $area.Width - 32)
         $script:overlayWindow.Height = if ($conversationActive) { Get-OverlayConversationHeight $script:overlayWindow.Width } elseif ($promptVisible) { Get-OverlayPromptHeight $script:overlayWindow.Width $timerVisible } else { 104 }
     }
-    $script:overlayWindow.MinHeight = if ($script:outputMode -or $promptVisible) { 132 } else { 104 }
+    if (-not $conversationActive -or $MeasureOnly) { $script:overlayWindow.MinHeight = if ($script:outputMode -or $promptVisible) { 132 } else { 104 } }
+    if ($conversationActive -and -not $MeasureOnly -and -not (Ensure-CurrentSummaryPairFits)) { return }
     Update-OverlayLayout
     if ($MeasureOnly) { return }
     if ($promptVisible -or $timerVisible) {
         $script:overlayWindow.Owner = $window
         if (-not $script:overlayWindow.IsVisible) { $script:overlayWindow.Show() }
     } else { $script:overlayWindow.Hide() }
+}
+
+function Ensure-CurrentSummaryPairFits {
+    if ($script:ensuringSummaryFit) { return $true }
+    $messages = @($script:conversationHistory)
+    if (-not $messages.Count) { return $true }
+    $script:ensuringSummaryFit = $true
+    try {
+    $fitArea = if ($script:overlayWindow.IsVisible) { Get-DemoSummaryWorkArea $script:overlayWindow } else { $area }
+    $index = $messages.Count - 1
+    if (-not $messages[$index].input) { $index-- }
+    $inputText = if ($index -ge 0) { [string]$messages[$index].text } else { '' }
+    $outputText = if ($index + 1 -lt $messages.Count) { [string]$messages[$index + 1].text } else { [string]$script:lastView.overlay.conversation.outputSummary }
+    $fitWidth = if ($script:overlayResized -or $script:overlayResizeTracker.NativeResize) { $script:overlayWindow.Width } else { [Math]::Max(820, $script:overlayWindow.Width) }
+    $fit = Get-DemoSummaryLayout $inputText $outputText $fitWidth ($fitArea.Width - 32) ($fitArea.Height - 32)
+    if (-not $fit.Fits) {
+        $showOutput.IsChecked = $false
+        Show-DemoError $window 'The current prompt and reply cannot fit together on this screen. Output summaries have been turned off. Shorten their summaries in Review / edit summaries before enabling them again. No text was truncated.'
+        return $false
+    }
+    $script:overlayWindow.Width = $fit.Width
+    $script:overlayWindow.MinHeight = $fit.Height
+    $script:overlayWindow.Height = [Math]::Min($fitArea.Height - 32, [Math]::Max($script:overlayWindow.Height, $fit.Height))
+    $script:overlayWindow.Left = [Math]::Max($fitArea.Left + 16, [Math]::Min($script:overlayWindow.Left, $fitArea.Right - 16 - $script:overlayWindow.Width))
+    $script:overlayWindow.Top = [Math]::Max($fitArea.Top + 16, [Math]::Min($script:overlayWindow.Top, $fitArea.Bottom - 16 - $script:overlayWindow.Height))
+    return $true
+    } finally { $script:ensuringSummaryFit = $false }
 }
 
 function Get-OverlayConversationHeight([double]$Width) {

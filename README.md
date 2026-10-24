@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.22](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.22/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.23](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.23/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -505,12 +505,21 @@ The first input appears before playback. Only after the entire recorded reply
 finishes, a down arrow and its reviewed output summary appear below that input.
 **Next Step** appends the next input at the bottom. Previous messages remain,
 bounded to the current recording (at most 100 included exchanges / 200 bubbles).
-The view follows new inputs. Outputs follow the bottom only if you were already
-near it (within 24 layout units), so reading older messages is not interrupted.
-Follow-bottom is reapplied after WPF updates its scroll extent, so newly wrapped
-reply endings remain accessible rather than scrolling against the previous layout.
-Automatic height grows with short history up to 600 layout units or the available
-work area; longer history scrolls below the fixed timer. Manual resizing is retained.
+Each new input or revealed reply returns to the current exchange. Its complete
+prompt and reply must be visible together without scrolling. The overlay measures
+the real WPF bubbles, font, timer and padding, and grows within the monitor work
+area when necessary. A manual resize is retained only while the current pair still
+fits; it cannot make the pair clip. Older history remains scrollable between
+exchange transitions, below the fixed timer.
+
+Review/save and opening playback with output summaries enabled check included
+pairs using the same rendered layout, not just character counts. If a pair cannot
+fit even at the screen's available width and height, shorten it in **Review / edit
+summaries**; the full draft is retained and saving/playback is blocked with an
+explicit exchange number. Native VS Code review performs the same Windows layout
+check before saving. Enabling output summaries on an already-open, incompatible
+recording turns that option back off with an explanation. No text is truncated,
+automatically rewritten or regenerated; there are no automatic paid retries.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
 reset the conversation deterministically. A missing/deleted output summary
@@ -579,12 +588,18 @@ New AI drafts target **180-220 characters or fewer**, with a **600-character
 safety limit** to accommodate complete sentences and explicit questions/choices,
 not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
-The safety limit bounds model output for review, rather than truncating text.
+Completed well-formed drafts above 600 characters are retained in full for
+explicit shortening/editing in review, together with the other completed drafts.
+They cannot be approved/saved unchanged, even at 601-1200 characters. The editor
+shows the exact count and limits; edit or delete the draft, without an automatic
+paid retry. Human-edited text may exceed the AI limit but must fit the 1200-character
+save limit. Draft transport is bounded at 4096 characters; larger responses fail
+explicitly, never silently slice or become a saved summary.
 Speak directly in the original speaker's voice: "I want...", "Can you...?" or
 "Yes.", not "User wants to..." or "The assistant...". For a user question,
 the output summary must lead with the actual recorded answer and qualifications;
 if the reply did not answer, it must say so, never invent an answer.
-Generation rejects over-budget, visibly unfinished or role-narrated drafts explicitly,
+Generation rejects malformed, visibly unfinished or role-narrated drafts explicitly,
 without slicing text or automatically retrying paid requests.
 This includes obvious dangling endings such as "I set a !"; punctuation alone
 does not prove grammatical completeness. Local checks are not a semantic

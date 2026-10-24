@@ -519,7 +519,7 @@ try {
         outputSummaries = @('First recorded result', 'Second recorded result')
     } }
     $outputs = @('First original answer', 'Second original answer')
-    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Included = @($true, $true); Index = -1 }
+    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Included = @($true, $true); Index = -1; GeneratedOriginals = @{} }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
     $include = $dialog.FindName('Include')
@@ -531,6 +531,15 @@ try {
         $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$storeDraft'
     }, $true)
     $storeDraft = $storeNode.Right.Expression.ScriptBlock.GetScriptBlock()
+    $summaryFitCache = @{}
+    foreach ($name in @('reviewIssues', 'updateReview')) {
+        $node = $summaryFunction.Find({
+            param($candidate)
+            $candidate -is [Management.Automation.Language.AssignmentStatementAst] -and $candidate.Left.Extent.Text -eq ('$' + $name)
+        }, $true)
+        Set-Variable -Name $name -Value ($node.Right.Expression.ScriptBlock.GetScriptBlock())
+    }
+    $summary.Add_TextChanged($updateReview)
     $selectionNode = $summaryFunction.Find({
         param($node)
         $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Member.Value -eq 'Add_SelectionChanged'
@@ -539,6 +548,16 @@ try {
     $exchange.SelectedIndex = 0
     Assert-Equal $summary.Text 'First saved summary' 'Summary editor loads saved text'
     Assert-Equal $summary.MaxLength 0 'Manual editor must not silently clip pasted text before validation'
+    foreach ($length in @(601, 1201, 4096)) {
+        $longDraft = 'I checked ' + ('x' * ($length - 11)) + '.'
+        $dialog.Tag.GeneratedOriginals[0] = $longDraft
+        $summary.Text = $longDraft
+        Assert-Equal $summary.Text $longDraft 'Overlong draft stays intact in the editor'
+        Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Unedited AI overflow cannot save'
+        Assert-Equal ($dialog.FindName('ReviewStatus').Text.Contains([string]$length)) $true 'Recovery shows exact character count'
+        $summary.Text = 'I checked the synthetic result.'
+        Assert-Equal $dialog.FindName('Save').IsEnabled $true 'Shortening makes the batch saveable'
+    }
     $summary.Text = 'x' * 1200
     & $storeDraft
     Assert-Equal $dialog.Tag.Summaries[0].Length 1200 'A full-budget manual summary is preserved'
@@ -590,6 +609,21 @@ try {
     & $storeDraft
     Assert-Equal $dialog.Tag.Summaries[0] 'Replacement draft' 'Editing after clear can save a new summary'
     Assert-Equal ($null -eq $dialog.Tag.Summaries[1]) $true 'Editing one draft keeps other drafts cleared'
+    $originalWorkArea = ${function:Get-DemoSummaryWorkArea}
+    try {
+        function Get-DemoSummaryWorkArea { return [Windows.Rect]::new(0, 0, 800, 600) }
+        $summaryFitCache.Clear()
+        $dialog.Tag.Outputs[0] = 'W' * 1200
+        $summary.Text = 'W' * 1200
+        & $updateReview
+        Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Individually valid character counts must not bypass actual pair geometry'
+        Assert-Equal ($dialog.FindName('ReviewStatus').Text -like '*cannot fit together*without scrolling*') $true 'Review identifies an unfit pair with shortening guidance'
+        Assert-Equal $summary.Text.Length 1200 'Geometry rejection preserves the entire editable draft'
+        $include.IsChecked = $false
+        & $updateReview
+        Assert-Equal $dialog.FindName('Save').IsEnabled $true 'An excluded overlarge pair does not block included exchanges'
+        Assert-Equal $entry.recording.promptSummaries[0] 'First saved summary' 'Rejected geometry does not mutate saved summaries'
+    } finally { ${function:Get-DemoSummaryWorkArea} = $originalWorkArea }
 } finally { $dialog.Close() }
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'PlayerAI.ps1')
 $script:summaryRequests = [Collections.Generic.List[object]]::new()

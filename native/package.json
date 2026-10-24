@@ -2,7 +2,7 @@
   "name": "historical-transcript-replay",
   "displayName": "Transcript Playback",
   "description": "Replay original local chat transcripts in the native VS Code interface without model or tool execution.",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "publisher": "local",
   "engines": {
     "vscode": "^1.140.0"
@@ -104,7 +104,7 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test:unit": "node --test test/replay.test.js test/demo-library.test.js test/history-catalog.test.js test/native-reference.test.js test/updater.test.js test/openai-summaries.test.js",
+    "test:unit": "node --test test/replay.test.js test/demo-library.test.js test/history-catalog.test.js test/native-reference.test.js test/updater.test.js test/openai-summaries.test.js test/summary-fit-review.test.js",
     "test:references:native": "node test-native.js --references",
     "pretest": "npm run lint",
     "test": "node test-native.js"

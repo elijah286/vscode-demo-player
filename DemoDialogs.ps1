@@ -1,3 +1,4 @@
+. (Join-Path $PSScriptRoot 'SummaryPresentation.ps1')
 if (-not ('DemoLibraryJson' -as [type])) {
     Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
 using System;
@@ -91,6 +92,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
     $cancellation = [Threading.CancellationTokenSource]::new()
     $worker = [PowerShell]::Create()
     $runspace = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
     $worker.Runspace = $runspace
     $controls = [Collections.Generic.List[object]]::new()
     $state = @{ Cancellation = $cancellation; OwnerClosed = $false; Finished = $false; Job = $null; Failure = $null; Clock = [Diagnostics.Stopwatch]::StartNew() }
@@ -1048,6 +1050,16 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
     return $dialog.ShowDialog()
 }
 
+function Get-DemoSummaryReviewIssue([string]$Text, [string]$Original) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    if ($Text -match "[`r`n]") { return 'Use one line, or delete this summary.' }
+    if ($Text.Length -gt 1200) { return "$($Text.Length) characters; edit to at most 1200 before saving (AI limit: 600)." }
+    if ($Original.Length -gt 600 -and $Text.Trim() -ceq $Original.Trim()) {
+        return "$($Text.Length) characters exceeds the AI limit of 600. Shorten/edit this draft before saving; human-edited summaries may use up to 1200."
+    }
+    return ''
+}
+
 function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     $entry = if ($Generated) { $Generated.Entry } else { Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner }
     $outputs = if ($Generated) { @($Generated.Outputs) } else { @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner) }
@@ -1056,7 +1068,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Input / Output Summaries"
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. AI drafts target 180-220 characters, with room up to 600 for complete thoughts and questions/choices, in the speaker's voice. Preserve recorded answers; never invent success. Saved summaries allow 1200 characters. Existing clipped summaries are not repaired automatically: edit them here, or delete the affected summary and explicitly generate it again. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
@@ -1066,7 +1078,8 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
   <TextBox x:Name="Original" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryOriginal"/>
   <TextBlock Grid.Row="3" Text="Overlay summary (up to 1200 characters, one line)" Margin="0,12,0,6"/>
   <TextBox x:Name="Summary" Grid.Row="4" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
-  <WrapPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+  <TextBlock x:Name="ReviewStatus" Grid.Row="5" TextWrapping="Wrap" AutomationProperties.AutomationId="SummaryReviewStatus"/>
+  <WrapPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
    <Button x:Name="Clear" Content="Clear all summaries" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="ClearSummaryDrafts"/>
    <Button x:Name="DeleteSummary" Content="Delete this summary" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="DeletePromptSummary"/>
    <Button x:Name="Cancel" Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
@@ -1079,16 +1092,18 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
     $outputDrafts = [object[]]::new($entry.recording.turns.Count)
     if ($null -ne $entry.recording.outputSummaries) { $outputDrafts = [object[]]$entry.recording.outputSummaries.Clone() }
+    $generatedOriginals = @{}
     if ($Generated) {
         $dialog.Title = 'Review AI Summaries'
         foreach ($draft in $Generated.Drafts) {
+            $generatedOriginals[2 * $draft.index + [int]($draft.kind -eq 'output')] = [string]$draft.summary
             if ($draft.kind -eq 'input') { $drafts[$draft.index] = $draft.summary }
             else { $outputDrafts[$draft.index] = $draft.summary }
         }
     }
     $included = @($entry.recording.turns | ForEach-Object { $true })
     if ($null -ne $entry.recording.playbackIncluded) { $included = @($entry.recording.playbackIncluded.Clone()) }
-    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Included = $included; Index = -1 }
+    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Included = $included; Index = -1; GeneratedOriginals = $generatedOriginals }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
     $include = $dialog.FindName('Include')
@@ -1098,17 +1113,56 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     }
     $storeDraft = {
         if ($dialog.Tag.Index -ge 0) {
-            $value = if ([string]::IsNullOrWhiteSpace($summary.Text)) { $null } else { $summary.Text.Trim() }
+            $value = if ([string]::IsNullOrWhiteSpace($summary.Text)) { $null } else { $summary.Text }
             $turn = [int][Math]::Floor($dialog.Tag.Index / 2)
             if ($dialog.Tag.Index % 2 -eq 0) { $dialog.Tag.Summaries[$turn] = $value }
             else { $dialog.Tag.Outputs[$turn] = $value }
             $dialog.Tag.Included[$turn] = [bool]$include.IsChecked
         }
     }
+    $summaryFitCache = @{}
+    $reviewIssues = {
+        for ($item = 0; $item -lt 2 * $entry.recording.turns.Count; $item++) {
+            $turn = [int][Math]::Floor($item / 2)
+            $text = if ($item % 2 -eq 0) { $dialog.Tag.Summaries[$turn] } else { $dialog.Tag.Outputs[$turn] }
+            $issue = Get-DemoSummaryReviewIssue ([string]$text) ([string]$dialog.Tag.GeneratedOriginals[$item])
+            if ($issue) {
+                'Exchange ' + ($turn + 1) + $(if ($item % 2 -eq 0) { ' input: ' } else { ' output: ' }) + $issue
+            }
+        }
+        for ($turn = 0; $turn -lt $entry.recording.turns.Count; $turn++) {
+                if (-not $dialog.Tag.Included[$turn]) { continue }
+                $inputText = [string]$dialog.Tag.Summaries[$turn]
+                if (-not $inputText) {
+                    $inputText = Get-DemoPlaybackInput $entry.recording $turn -SourceOnly
+                }
+                $outputText = [string]$dialog.Tag.Outputs[$turn]
+                $reviewArea = Get-DemoSummaryWorkArea $dialog
+                $fitKey = $reviewArea.ToString() + [char]0 + $inputText + [char]0 + $outputText
+                if (-not $summaryFitCache.ContainsKey($fitKey)) {
+                    if ($summaryFitCache.Count -ge 256) { $summaryFitCache.Clear() }
+                    $summaryFitCache[$fitKey] = Get-DemoSummaryLayout $inputText $outputText 820 ($reviewArea.Width - 32) ($reviewArea.Height - 32)
+                }
+                $fit = $summaryFitCache[$fitKey]
+                if (-not $fit.Fits) { 'Exchange ' + ($turn + 1) + ': shorten the prompt/reply summaries; the rendered pair cannot fit together on this screen without scrolling.' }
+        }
+    }
+    $updateReview = {
+        & $storeDraft
+        $issues = @(& $reviewIssues)
+        $dialog.FindName('Save').IsEnabled = $issues.Count -eq 0
+        $dialog.FindName('ReviewStatus').Text = "$($summary.Text.Length)/1200 characters. " + $(if ($issues.Count) {
+            "$($issues.Count) summaries need editing/deletion. " + $issues[0]
+        } elseif ($summary.Text.Length -gt 600) {
+            'Above the AI limit of 600; saving explicitly accepts this human-edited summary.'
+        } else { 'Nothing is saved until Save summaries. Overlong AI drafts require editing; no automatic retry.' })
+    }
+    $summary.Add_TextChanged($updateReview)
     $exchange.Add_SelectionChanged({
         & $storeDraft
         $dialog.Tag.Index = $exchange.SelectedIndex
         if ($exchange.SelectedIndex -ge 0) {
+            $dialog.Tag.Loading = $true
             $turn = [int][Math]::Floor($exchange.SelectedIndex / 2)
             $include.IsChecked = [bool]$dialog.Tag.Included[$turn]
             if ($exchange.SelectedIndex % 2 -eq 0) {
@@ -1118,11 +1172,14 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
                 $dialog.FindName('Original').Text = $outputs[$turn]
                 $summary.Text = [string]$dialog.Tag.Outputs[$turn]
             }
+            $dialog.Tag.Loading = $false
         }
         $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
+        & $updateReview
+        & $updateReview
     })
     $updateInclusion = {
-        if ($dialog.Tag.Index -ge 0) {
+        if ($dialog.Tag.Index -ge 0 -and -not $dialog.Tag.Loading) {
             $dialog.Tag.Included[[int][Math]::Floor($dialog.Tag.Index / 2)] = [bool]$include.IsChecked
             $dialog.FindName('IncludedCount').Text = "$(@($dialog.Tag.Included | Where-Object { $_ }).Count)/$($entry.recording.turns.Count) exchanges included"
         }
@@ -1134,11 +1191,14 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         $dialog.Tag.Summaries = [object[]]::new($entry.recording.turns.Count)
         $dialog.Tag.Outputs = [object[]]::new($entry.recording.turns.Count)
         $summary.Text = ''
+        & $updateReview
     })
     $dialog.FindName('DeleteSummary').Add_Click({ $summary.Text = '' })
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
+            $issues = @(& $reviewIssues)
+            if ($issues.Count) { throw ($issues -join "`n") }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
                 summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs); playbackIncluded = @($dialog.Tag.Included) }
                 expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
