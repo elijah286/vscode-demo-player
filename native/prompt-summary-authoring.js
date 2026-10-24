@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { readFileSync } = require('node:fs');
-const { readEntry, saveSummaryBatch, savePromptSummaries, validatePromptSummaries, includedTurnIndices } = require('./demo-library');
+const { readEntry, saveSummaryBatch, savePromptSummaries, includedTurnIndices } = require('./demo-library');
 const { kindOf } = require('./replay');
 const { reviewSummaries } = require('./prompt-summary-review');
 const GENERATED_SUMMARY_LENGTH = 600;
@@ -24,9 +24,11 @@ function previousExchangeContext(recording, index) {
 }
 
 function validateGeneratedSummary(summary) {
-    validatePromptSummaries([summary], 1);
-    if (summary.length > GENERATED_SUMMARY_LENGTH) {
-        throw new Error('The generated summary exceeds the 600-character safety limit. No summary was saved; edit it into complete shorter statements or retry explicitly.');
+    if (typeof summary !== 'string' || !summary.trim() || /[\r\n]/.test(summary)) {
+        throw new Error('The generated summary must contain a nonempty statement on one line. No summary was saved.');
+    }
+    if (summary.length > 4096) {
+        throw new Error('The model returned too much text (over 4096 characters). No summary was saved.');
     }
     if (/^(?:the\s+)?(?:user|assistant)\b/i.test(summary)) {
         throw new Error('The generated summary narrates the speaker in third person. No summary was saved; use the speaker\'s own voice, such as "I want..." or "Yes.".');

@@ -141,7 +141,7 @@ test('generation rejects incomplete, clipped and third-person drafts without tri
     for (const summary of [
         'I want to repair the framewor', 'I can proceed, however,', 'I found a mismatch...',
         'User wants to repair the project.', 'The user responded affirmatively.',
-        'The assistant repaired the project.', 'x'.repeat(600) + '.',
+        'The assistant repaired the project.', 'x'.repeat(4096) + '.',
         'I set a !', 'I inspected the settings. '.repeat(10) + 'I set a !',
         'I confirmed the result and.', 'I updated the!'
     ]) {
@@ -155,6 +155,44 @@ test('generation rejects incomplete, clipped and third-person drafts without tri
     for (const summary of ['I want to repair the project.', 'Can you repair it?', 'Yes.', 'No.', 'I said "Yes."', 'x'.repeat(239) + '.']) {
         assert.equal(await generateOpenAISummary(request, { fetchImpl: reply(completed(summary)) }), summary);
     }
+});
+
+test('both providers retain complete 601-4096 character drafts for review, including intermediate reductions, without retries', async () => {
+    const { generateSummary } = require('../prompt-summary-authoring');
+    const { validateReviewedDrafts, summaryReviewIssue } = require('../prompt-summary-review');
+    const vscode = { LanguageModelChatMessage: { User: content => ({ content }) } };
+    for (const length of [600, 601, 1200, 1201, 4096]) {
+        const summary = 'I checked ' + 'x'.repeat(length - 11) + '.';
+        assert.equal(summary.length, length);
+        for (const mode of [{}, { partial: true }, { combine: true }]) {
+            let calls = 0;
+            const result = await generateOpenAISummary({ ...request, ...mode }, { fetchImpl: async () => {
+                calls++;
+                return Response.json(completed(summary));
+            } });
+            assert.equal(result, summary);
+            assert.equal(calls, 1);
+        }
+        const model = { countTokens: async () => 10, maxInputTokens: 10000,
+            sendRequest: async () => ({ text: (async function* () { yield summary; })() }) };
+        assert.equal(await generateSummary(vscode, model, request.source), summary);
+        const draft = { exchange: 1, kind: 'input', summary };
+        const approved = { ...draft, status: 'approved' };
+        if (length > 600) {
+            assert.match(summaryReviewIssue(summary, summary), new RegExp(String(length)));
+            assert.throws(() => validateReviewedDrafts([approved], [draft]), /edit|Shorten/);
+            assert.deepEqual(validateReviewedDrafts([{ ...approved, summary: 'I checked the result.' }], [draft]),
+                [{ exchange: 1, kind: 'input', summary: 'I checked the result.' }]);
+            assert.deepEqual(validateReviewedDrafts([{ ...approved, status: 'deleted', summary: null }], [draft]),
+                [{ exchange: 1, kind: 'input', summary: null }]);
+        } else assert.equal(summaryReviewIssue(summary, summary), '');
+    }
+    const original = 'I checked ' + 'x'.repeat(690) + '.';
+    assert.equal(summaryReviewIssue(original.replace('checked', 'reviewed'), original), '', 'Human-edited text may explicitly use the manual budget');
+    for (const summary of ['I checked ' + 'x'.repeat(601) + ' a !', 'The assistant ' + 'x'.repeat(601) + '.', 'I checked.\n' + 'x'.repeat(601) + '.']) {
+        await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(completed(summary)) }), /No summary was saved/);
+    }
+    await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(completed(' '.repeat(4096) + 'Yes.')) }), /too much text/);
 });
 
 test('paired context bounds both ends with an explicit omission notice without splitting Unicode', () => {

@@ -121,6 +121,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
         Object.keys(structured).length !== 1 || typeof structured.summary !== 'string') {
         throw new SummaryError('OpenAI returned an invalid structured summary. No summaries were saved.');
     }
+    if (structured.summary.length > 4096) throw new SummaryError('The model returned too much text (over 4096 characters). No summary was saved.');
     const summary = structured.summary.trim();
     if (!summary) throw new SummaryError('OpenAI returned an empty summary. No summaries were saved.');
     try { validateGeneratedSummary(summary); }

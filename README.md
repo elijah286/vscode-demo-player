@@ -579,12 +579,18 @@ New AI drafts target **180-220 characters or fewer**, with a **600-character
 safety limit** to accommodate complete sentences and explicit questions/choices,
 not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
-The safety limit bounds model output for review, rather than truncating text.
+Completed well-formed drafts above 600 characters are retained in full for
+explicit shortening/editing in review, together with the other completed drafts.
+They cannot be approved/saved unchanged, even at 601-1200 characters. The editor
+shows the exact count and limits; edit or delete the draft, without an automatic
+paid retry. Human-edited text may exceed the AI limit but must fit the 1200-character
+save limit. Draft transport is bounded at 4096 characters; larger responses fail
+explicitly, never silently slice or become a saved summary.
 Speak directly in the original speaker's voice: "I want...", "Can you...?" or
 "Yes.", not "User wants to..." or "The assistant...". For a user question,
 the output summary must lead with the actual recorded answer and qualifications;
 if the reply did not answer, it must say so, never invent an answer.
-Generation rejects over-budget, visibly unfinished or role-narrated drafts explicitly,
+Generation rejects malformed, visibly unfinished or role-narrated drafts explicitly,
 without slicing text or automatically retrying paid requests.
 This includes obvious dangling endings such as "I set a !"; punctuation alone
 does not prove grammatical completeness. Local checks are not a semantic

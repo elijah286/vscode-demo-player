@@ -100,7 +100,10 @@ global.fetch = async (url, options) => {
     const reject = path.join(__dirname, 'reject-next-key');
     if (fs.existsSync(reject)) { fs.unlinkSync(reject); return Response.json({ error: { message: 'Synthetic rejected key' } }, { status: 401 }); }
     if (fs.existsSync(path.join(__dirname, 'delay-summary'))) return new Promise(() => {});
-    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary: 'Synthetic OpenAI ' + kind + ' summary.' }) }] }] });
+    const overflow = path.join(__dirname, 'overlong-summary');
+    const length = kind === 'output' && fs.existsSync(overflow) ? Number(fs.readFileSync(overflow, 'utf8')) : 0;
+    const summary = length ? 'I checked ' + 'x'.repeat(length - 11) + '.' : 'Synthetic OpenAI ' + kind + ' summary.';
+    return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 };
 '@)
 $library = Join-Path $evidence 'library'
@@ -585,6 +588,45 @@ try {
     if ($generatedEntry.recording.promptSummaries[0] -cne $overlaySummary -or $generatedEntry.recording.promptSummaries[1] -or
         $generatedEntry.recording.outputSummaries[1] -cne 'Synthetic OpenAI output summary.') { throw 'AI save/cancel did not preserve its scope or existing manual summaries.' }
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($generatedEntry.recording.outputSummaries) } | Out-Null
+    foreach ($length in @(601, 1201)) {
+        [IO.File]::WriteAllText((Join-Path $evidence 'overlong-summary'), [string]$length)
+        $beforeRecovery = [IO.File]::ReadAllText((Join-Path $library ($summaryEntry.id + '.demo.json')))
+        foreach ($saveRecovery in @($false, $true)) {
+            Invoke-Button $dialog 'AiPromptSummaries'
+            $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'overlong generation consent'
+            if ((Find-Element $aiConsent 'Id' 'OpenAIConsentNotice').Current.Name -notmatch '180-220.*600.*1200') { throw 'Consent must explain the actual AI and manual budgets.' }
+            Invoke-Button $aiConsent 'ConfirmOpenAIGeneration'
+            $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'mixed valid and overlong batch review'
+            $text = [System.Windows.Automation.ValuePattern](Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            if ($text.Current.Value -cne 'Synthetic OpenAI input summary.') { throw 'An overlong output discarded the valid input draft.' }
+            if ((Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled) { throw 'An unvisited invalid draft must block whole-batch save.' }
+            $choice = Find-Element $review 'Id' 'SummaryExchange'
+            $choice.SetFocus()
+            [System.Windows.Forms.SendKeys]::SendWait('{END}{ENTER}')
+            $fullDraft = 'I checked ' + ('x' * ($length - 11)) + '.'
+            Wait-Until { $text.Current.Value -ceq $fullDraft } 'full overflow draft visible in editable WPF text box' | Out-Null
+            if ((Find-Element $review 'Id' 'SummaryReviewStatus').Current.Name -notmatch "$length.*600") { throw 'Length recovery must show exact count and actionable limit.' }
+            if ([IO.File]::ReadAllText((Join-Path $library ($summaryEntry.id + '.demo.json'))) -cne $beforeRecovery) { throw 'Generation or review changed saved bytes before explicit save.' }
+            $requestsAtReview = @(Get-Content -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')).Count
+            if ($saveRecovery) {
+                $text.SetValue('I checked the result. Should I use blue or green?')
+                Invoke-Button $review 'SaveSummaries'
+            } else { Invoke-Button $review 'Cancel' }
+            Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'finish overflow review' | Out-Null
+            if (@(Get-Content -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')).Count -ne $requestsAtReview) { throw 'Recovery must not retry paid generation.' }
+            if (-not $saveRecovery -and [IO.File]::ReadAllText((Join-Path $library ($summaryEntry.id + '.demo.json'))) -cne $beforeRecovery) { throw 'Canceling overflow review changed saved bytes.' }
+        }
+        $recovered = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+        if ($recovered.recording.promptSummaries[1] -cne 'Synthetic OpenAI input summary.' -or
+            $recovered.recording.outputSummaries[1] -cne 'I checked the result. Should I use blue or green?' -or
+            $recovered.recording.promptSummaries[0] -cne $overlaySummary -or $recovered.recording.outputSummaries[0] -cne $outputSummary) { throw 'Mixed overflow recovery did not atomically preserve/save the correct summaries.' }
+        Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $summaryEntry.id
+            summaries = @{ promptSummaries = @($overlaySummary, $null); outputSummaries = @($outputSummary, $null) }
+            expected = @{ promptSummaries = @($recovered.recording.promptSummaries); outputSummaries = @($recovered.recording.outputSummaries) }
+        } | Out-Null
+    }
+    Remove-Item -LiteralPath (Join-Path $evidence 'overlong-summary')
+    Write-Output 'OVERLENGTH RECOVERY UI PASSED: 601/1201 full drafts, mixed batch retained, unseen overflow blocks save, exact counts, edit/save, byte-preserving cancel, no automatic requests.'
     Save-WindowImage $dialog 'library-captured.png'
     Invoke-Button $dialog 'SelectDemo'
     $selectedControls = Wait-Until {
