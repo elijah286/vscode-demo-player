@@ -77,7 +77,7 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
         const body = JSON.parse(options.body);
         assert.equal(body.model, DEFAULT_MODEL);
         assert.equal(body.store, false);
-        assert.equal(body.max_output_tokens, 1024);
+        assert.equal(body.max_output_tokens, 2048);
         assert.equal(body.tools, undefined);
         assert.equal(body.text.format.type, 'json_schema');
         assert.equal(body.text.format.strict, true);
@@ -108,7 +108,8 @@ test('output summaries preserve failure/omission instructions and never answer e
 test('invalid inputs fail before any HTTP request', async () => {
     for (const change of [{ apiKey: 'short' }, { apiKey: key + '\n' }, { model: '' }, { model: '../other' },
         { source: '' }, { source: 'x'.repeat(64001) }, { kind: 'other' }, { partial: 'yes' }, { combine: 'yes' },
-        { question: 12 }, { question: 'x'.repeat(4001), kind: 'output' }, { question: 'Not allowed for an input draft.' }]) {
+        { question: 12 }, { question: 'x'.repeat(4001), kind: 'output' }, { question: 'Not allowed for an input draft.' },
+        { source: '', rewrite: 'Yes.' }, { rewrite: 12 }]) {
         await assert.rejects(generateOpenAISummary({ ...request, ...change }, { fetchImpl: () => assert.fail('No request allowed') }));
     }
 });
@@ -157,30 +158,38 @@ test('generation rejects incomplete, clipped and third-person drafts without tri
     }
 });
 
-test('both providers retain complete 601-4096 character drafts for review, including intermediate reductions, without retries', async () => {
+test('both providers automatically fit complete overlong drafts before review and intermediate reduction', async () => {
     const { generateSummary } = require('../prompt-summary-authoring');
     const { validateReviewedDrafts, summaryReviewIssue } = require('../prompt-summary-review');
     const vscode = { LanguageModelChatMessage: { User: content => ({ content }) } };
-    for (const length of [600, 601, 1200, 1201, 4096]) {
+    for (const length of [600, 601, 1200, 1201, 1457, 4096]) {
         const summary = 'I checked ' + 'x'.repeat(length - 11) + '.';
         assert.equal(summary.length, length);
         for (const mode of [{}, { partial: true }, { combine: true }]) {
             let calls = 0;
-            const result = await generateOpenAISummary({ ...request, ...mode }, { fetchImpl: async () => {
+            const result = await generateOpenAISummary({ ...request, ...mode }, { fetchImpl: async (_url, options) => {
                 calls++;
-                return Response.json(completed(summary));
+                const prompt = JSON.parse(options.body).input;
+                if (calls > 1) {
+                    assert.match(prompt, /AUTOMATIC LENGTH CORRECTION/);
+                    assert.ok(prompt.includes(String(length) + ' characters'));
+                    assert.ok(prompt.endsWith(JSON.stringify(request.source)));
+                }
+                return Response.json(completed(calls === 1 ? summary : 'I checked the result.'));
             } });
-            assert.equal(result, summary);
-            assert.equal(calls, 1);
+            assert.equal(result, length <= 600 ? summary : 'I checked the result.');
+            assert.equal(calls, length <= 600 ? 1 : 2);
         }
+        let calls = 0;
         const model = { countTokens: async () => 10, maxInputTokens: 10000,
-            sendRequest: async () => ({ text: (async function* () { yield summary; })() }) };
-        assert.equal(await generateSummary(vscode, model, request.source), summary);
+            sendRequest: async () => { calls++; return { text: (async function* () { yield calls === 1 ? summary : 'I checked the result.'; })() }; } };
+        assert.equal(await generateSummary(vscode, model, request.source), length <= 600 ? summary : 'I checked the result.');
+        assert.equal(calls, length <= 600 ? 1 : 2);
         const draft = { exchange: 1, kind: 'input', summary };
         const approved = { ...draft, status: 'approved' };
         if (length > 600) {
             assert.match(summaryReviewIssue(summary, summary), new RegExp(String(length)));
-            assert.throws(() => validateReviewedDrafts([approved], [draft]), /edit|Shorten/);
+            assert.throws(() => validateReviewedDrafts([approved], [draft]), /Automatically shorten/);
             assert.deepEqual(validateReviewedDrafts([{ ...approved, summary: 'I checked the result.' }], [draft]),
                 [{ exchange: 1, kind: 'input', summary: 'I checked the result.' }]);
             assert.deepEqual(validateReviewedDrafts([{ ...approved, status: 'deleted', summary: null }], [draft]),
@@ -193,6 +202,108 @@ test('both providers retain complete 601-4096 character drafts for review, inclu
         await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(completed(summary)) }), /No summary was saved/);
     }
     await assert.rejects(generateOpenAISummary(request, { fetchImpl: reply(completed(' '.repeat(4096) + 'Yes.')) }), /too much text/);
+});
+
+test('bounded sequential rewrites keep source questions, choices, paired and previous context in both providers', async () => {
+    const { generateSummary, MAX_SUMMARY_REQUESTS } = require('../prompt-summary-authoring');
+    const source = 'No. The project cannot run. Should I use blue or green?';
+    const options = { question: 'Can it run?', previous: 'I need a frame.' };
+    const overflow = 'I inspected the settings. '.repeat(60) + 'Ready.';
+    const final = 'No, the project cannot run. Should I use blue or green?';
+    for (const success of [true, false]) {
+        for (const provider of ['openai', 'vscode']) {
+            let calls = 0;
+            const respond = prompt => {
+                calls++;
+                assert.ok(prompt.endsWith(JSON.stringify(source)));
+                assert.ok(prompt.includes(JSON.stringify(options.question)));
+                assert.ok(prompt.includes(JSON.stringify(options.previous)));
+                if (calls > 1) {
+                    assert.match(prompt, /restore any question\/choices omitted/);
+                    assert.match(prompt, /recorded answer or lack of answer/);
+                    assert.ok(prompt.includes(JSON.stringify(overflow)));
+                }
+                return success && calls === MAX_SUMMARY_REQUESTS ? final : overflow;
+            };
+            const generate = provider === 'openai' ? () => generateOpenAISummary({ ...request, source, kind: 'output', ...options }, {
+                fetchImpl: async (_url, http) => Response.json(completed(respond(JSON.parse(http.body).input)))
+            }) : () => generateSummary({ LanguageModelChatMessage: { User: content => ({ content }) } }, {
+                maxInputTokens: 10000, countTokens: async () => 1,
+                sendRequest: async messages => ({ text: (async function* () { yield respond(messages[0].content); })() })
+            }, source, undefined, 'output', options);
+            if (success) assert.equal(await generate(), final);
+            else await assert.rejects(generate(), /after 4 requests.*No drafts were saved/);
+            assert.equal(calls, MAX_SUMMARY_REQUESTS);
+        }
+    }
+});
+
+test('cancellation and provider failure during a length rewrite never trigger more requests', async () => {
+    const overflow = 'I inspected the settings. '.repeat(60) + 'Ready.';
+    for (const mode of ['cancel', 'auth', 'incomplete', 'refusal']) {
+        const controller = new AbortController();
+        let calls = 0;
+        await assert.rejects(generateOpenAISummary(request, {
+            signal: controller.signal,
+            fetchImpl: async (_url, options) => {
+                calls++;
+                if (calls === 1) return Response.json(completed(overflow));
+                if (mode === 'auth') return Response.json({}, { status: 401 });
+                if (mode === 'incomplete') return Response.json({ status: 'incomplete', output: [] });
+                if (mode === 'refusal') return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal' }] }] });
+                controller.abort();
+                options.signal.throwIfAborted();
+            }
+        }), /canceled|rejected|did not complete|declined/);
+        assert.equal(calls, 2);
+    }
+});
+
+test('native long-source reductions fit every intermediate and retain original closing questions in rewrite/combine', async () => {
+    const { generateSummary } = require('../prompt-summary-authoring');
+    const source = 'Original grounded evidence. '.repeat(3000) + 'Should I use blue or green?';
+    const overflow = 'I inspected the settings. '.repeat(60) + 'Ready.';
+    let calls = 0;
+    let combinations = 0;
+    const result = await generateSummary({ LanguageModelChatMessage: { User: content => ({ content }) } }, {
+        maxInputTokens: 100000, countTokens: async () => 1,
+        sendRequest: async messages => {
+            const prompt = messages[0].content;
+            calls++;
+            if (prompt.includes('ordered partial summaries')) {
+                combinations++;
+                assert.match(prompt, /Should I use blue or green/);
+                assert.match(prompt, /Recorded assistant closing context/);
+                assert.doesNotMatch(prompt.split('Recorded query (JSON string):\n')[1], /I inspected the settings/);
+            }
+            const correcting = prompt.includes('AUTOMATIC LENGTH CORRECTION:');
+            return { text: (async function* () { yield correcting ? 'I checked the evidence. Should I use blue or green?' : overflow; })() };
+        }
+    }, source, undefined, 'output');
+    assert.equal(result, 'I checked the evidence. Should I use blue or green?');
+    assert.equal(calls, 6);
+    assert.equal(combinations, 2);
+});
+
+test('one total deadline covers generation and all length corrections without restarting the budget', async () => {
+    let calls = 0;
+    const signals = new Set();
+    const keepAlive = setTimeout(() => {}, 1000);
+    try {
+        await assert.rejects(generateOpenAISummary(request, {
+            timeoutMs: 100,
+            fetchImpl: async (_url, options) => {
+                signals.add(options.signal);
+                calls++;
+                if (calls === 1) return Response.json(completed('I checked the evidence. '.repeat(40) + 'Ready.'));
+                return new Promise((resolve, reject) => {
+                    options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+                });
+            }
+        }), error => error.code === 'OPENAI_TIMEOUT');
+        assert.equal(calls, 2);
+        assert.equal(signals.size, 1);
+    } finally { clearTimeout(keepAlive); }
 });
 
 test('paired context bounds both ends with an explicit omission notice without splitting Unicode', () => {

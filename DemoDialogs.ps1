@@ -87,7 +87,7 @@ function Stop-DemoLibraryProcess($State) {
 }
 
 function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments, $Owner,
-    [string]$Activity, [switch]$KeepOwnerEnabled, [bool]$Cancellable = $true) {
+    [string]$Activity, [switch]$KeepOwnerEnabled, [bool]$Cancellable = $true, [hashtable]$ProgressState) {
     if ($Owner.Resources.Contains('DemoPlayerOperation')) { throw 'This window already has an operation in progress. Wait or cancel it before retrying.' }
     $cancellation = [Threading.CancellationTokenSource]::new()
     $worker = [PowerShell]::Create()
@@ -110,7 +110,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
                 'AiSummaries', 'AiResponses', 'ClearSummaries', 'SelectionSummaries', 'SelectionAiSummaries',
                 'SelectionAiResponses', 'SelectionClearSummaries', 'Sessions', 'Demos', 'Turns',
                 'Source', 'Reviewed', 'Title', 'SavedTitle', 'SelectAll', 'SelectAvailable', 'ClearSelection',
-                'RawPayload', 'Summary', 'Exchange', 'Clear', 'DeleteSummary')) {
+                'RawPayload', 'Summary', 'Exchange', 'Clear', 'DeleteSummary', 'RepairLengths', 'Include')) {
                 if ($Owner.Tag.Scan -and $name -in @('Load', 'Browse', 'Refresh', 'AddLocation')) { continue }
                 $control = $Owner.FindName($name)
                 if ($control) {
@@ -170,6 +170,9 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
                 } else { $Activity + ' (' + [int]$state.Clock.Elapsed.TotalSeconds + 's)' }
                 $operationWindow.FindName('CancelOperation').IsEnabled = $Cancellable -and -not $cancellation.IsCancellationRequested
             }
+            if ($ProgressState -and $ProgressState.Message) {
+                $Owner.FindName('Progress').Text = $ProgressState.Message
+            }
             if ($state.Job -and $state.Job.IsCompleted) { $frame.Continue = $false }
             } catch { $state.Failure = $_; $frame.Continue = $false }
         }.GetNewClosure())
@@ -207,7 +210,8 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
 function Invoke-DemoLibrary([hashtable]$Request, $Owner,
     [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js',
     [ValidateRange(1,95)][int]$TimeoutSeconds = 30, [switch]$KeepOwnerEnabled,
-    [Threading.CancellationToken]$CancellationToken = [Threading.CancellationToken]::None) {
+    [Threading.CancellationToken]$CancellationToken = [Threading.CancellationToken]::None,
+    [hashtable]$SummaryProgress) {
     if ($Owner) {
         $activity = switch ($Request.command) {
             'list' { 'Loading saved selections' }
@@ -220,23 +224,45 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
             'generateSummary' { 'Generating an AI summary' }
             default { 'Updating the demo library' }
         }
+        $summaryProgress = if ($Request.command -eq 'generateSummary' -and $Owner.FindName('Progress')) {
+            [hashtable]::Synchronized(@{ Prefix = $Owner.FindName('Progress').Text; Message = '' })
+        } else { $null }
         return Invoke-DemoBackgroundOperation {
-            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout)
+            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout, $SummaryProgress)
             . $Source
             if (-not $Node) { . (Join-Path (Split-Path $Source -Parent) 'PlayerEnvironment.ps1'); $Node = Resolve-PlayerNode }
             $script:NodePath = $Node
             $script:LibraryRoot = $Root
-            Invoke-DemoLibrary $Request -Helper $Helper -TimeoutSeconds $Timeout -CancellationToken $Token
-        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled
+            Invoke-DemoLibrary $Request -Helper $Helper -TimeoutSeconds $Timeout -CancellationToken $Token -SummaryProgress $SummaryProgress
+        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds, $summaryProgress) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled -ProgressState $summaryProgress
     }
     $state = Start-DemoLibraryProcess $Request $Helper
     $process = $state.Process
     try {
         $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
+        $errors = $null
+        $errorText = [Text.StringBuilder]::new()
+        $errorLine = $null
+        if ($SummaryProgress) { $errorLine = $process.StandardError.ReadLineAsync() }
+        else { $errors = $process.StandardError.ReadToEndAsync() }
+        $readProgress = {
+            while ($errorLine -and $errorLine.IsCompleted) {
+                $line = $errorLine.GetAwaiter().GetResult()
+                if ($null -eq $line) { $errorLine = $null; break }
+                if ($line.StartsWith('SUMMARY_PROGRESS ')) {
+                    $update = $line.Substring(17) | ConvertFrom-Json
+                    if ($update.attempt -lt 1 -or $update.attempt -gt 4 -or $update.maximum -ne 4) { throw 'Invalid AI summary progress response. No success was confirmed.' }
+                    $SummaryProgress.Message = $SummaryProgress.Prefix + ' ' +
+                        $(if ($update.correcting) { 'Automatically shortening' } else { 'Generating' }) +
+                        ', request ' + $update.attempt + '/' + $update.maximum + '.'
+                } else { $null = $errorText.AppendLine($line) }
+                $errorLine = $process.StandardError.ReadLineAsync()
+            }
+        }
         do {
             if ($CancellationToken.IsCancellationRequested) { break }
             Complete-DemoLibraryInput $state
+            if ($SummaryProgress) { . $readProgress }
             if ($process.HasExited) { break }
             $process.WaitForExit(50) | Out-Null
         } while ($state.Clock.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000))
@@ -251,9 +277,19 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
         }
         Complete-DemoLibraryInput $state
         if (-not $state.InputClosed) { throw 'The demo library helper exited before the request was sent. No success was confirmed.' }
-        if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($output, $errors), 2000)) { throw 'Timed out reading the library helper output.' }
+        if ($SummaryProgress) {
+            while ($errorLine) {
+                if (-not $errorLine.Wait(2000)) { throw 'Timed out reading AI summary progress.' }
+                . $readProgress
+            }
+            $pending = @($output)
+        } else { $pending = @($output, $errors) }
+        if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$pending, 2000)) { throw 'Timed out reading the library helper output.' }
         $text = $output.GetAwaiter().GetResult()
-        if (-not $text) { throw ('The demo library helper returned no result. ' + $errors.GetAwaiter().GetResult()) }
+        if (-not $text) {
+            $diagnostic = if ($SummaryProgress) { $errorText.ToString() } else { $errors.GetAwaiter().GetResult() }
+            throw ('The demo library helper returned no result. ' + $diagnostic)
+        }
         $response = [DemoLibraryJson]::Parse($text)
         if (-not $response.ok -or $process.ExitCode -ne 0) {
             if ($response.code -eq 'OPENAI_AUTH') {
@@ -1053,10 +1089,10 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
 function Get-DemoSummaryReviewIssue([string]$Text, [string]$Original) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
     if ($Text -match "[`r`n]") { return 'Use one line, or delete this summary.' }
-    if ($Text.Length -gt 1200) { return "$($Text.Length) characters; edit to at most 1200 before saving (AI limit: 600)." }
     if ($Original.Length -gt 600 -and $Text.Trim() -ceq $Original.Trim()) {
-        return "$($Text.Length) characters exceeds the AI limit of 600. Shorten/edit this draft before saving; human-edited summaries may use up to 1200."
+        return "$($Text.Length) characters exceeds the AI limit of 600. Use Automatically shorten AI summaries before saving (manual save limit: 1200)."
     }
+    if ($Text.Length -gt 1200) { return "$($Text.Length) characters; edit to at most 1200 before saving (AI limit: 600)." }
     return ''
 }
 
@@ -1069,7 +1105,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. AI drafts target 180-220 characters, with room up to 600 for complete thoughts and questions/choices, in the speaker's voice. Preserve recorded answers; never invent success. Saved summaries allow 1200 characters. Existing clipped summaries are not repaired automatically: edit them here, or delete the affected summary and explicitly generate it again. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. AI generation automatically rewrites drafts to fit 600 characters, targeting 180-220, with complete thoughts and questions/choices. Preserve recorded answers; never invent success. Older unsaved overlong AI drafts can be shortened with AI below after consent. Saved/manual summaries are not automatically changed and allow 1200 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
    <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>
@@ -1080,6 +1116,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
   <TextBox x:Name="Summary" Grid.Row="4" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryText"/>
   <TextBlock x:Name="ReviewStatus" Grid.Row="5" TextWrapping="Wrap" AutomationProperties.AutomationId="SummaryReviewStatus"/>
   <WrapPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+   <Button x:Name="RepairLengths" Content="Automatically shorten AI summaries" Padding="12,6" Margin="0,0,8,0" AutomationProperties.AutomationId="RepairSummaryLengths"/>
    <Button x:Name="Clear" Content="Clear all summaries" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="ClearSummaryDrafts"/>
    <Button x:Name="DeleteSummary" Content="Delete this summary" Padding="16,6" Margin="0,0,8,0" AutomationProperties.AutomationId="DeletePromptSummary"/>
    <Button x:Name="Cancel" Content="Cancel" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
@@ -1150,12 +1187,20 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     $updateReview = {
         & $storeDraft
         $issues = @(& $reviewIssues)
+        $repairable = @($dialog.Tag.GeneratedOriginals.Keys | Where-Object {
+            $item = [int]$_
+            $turn = [int][Math]::Floor($item / 2)
+            $text = if ($item % 2 -eq 0) { [string]$dialog.Tag.Summaries[$turn] } else { [string]$dialog.Tag.Outputs[$turn] }
+            $text.Length -gt 600 -and $text -ceq $dialog.Tag.GeneratedOriginals[$item]
+        })
+        $dialog.FindName('RepairLengths').IsEnabled = $repairable.Count -gt 0
+        $dialog.FindName('RepairLengths').Visibility = if ($Generated) { 'Visible' } else { 'Collapsed' }
         $dialog.FindName('Save').IsEnabled = $issues.Count -eq 0
         $dialog.FindName('ReviewStatus').Text = "$($summary.Text.Length)/1200 characters. " + $(if ($issues.Count) {
-            "$($issues.Count) summaries need editing/deletion. " + $issues[0]
+            "$($issues.Count) summaries need attention. " + $(if ($repairable.Count) { 'Use Automatically shorten AI summaries; no manual length repair is needed. ' } else { '' }) + $issues[0]
         } elseif ($summary.Text.Length -gt 600) {
             'Above the AI limit of 600; saving explicitly accepts this human-edited summary.'
-        } else { 'Nothing is saved until Save summaries. Overlong AI drafts require editing; no automatic retry.' })
+        } else { 'Nothing is saved until Save summaries. Generated AI drafts fit 600 characters; manual summaries allow 1200.' })
     }
     $summary.Add_TextChanged($updateReview)
     $exchange.Add_SelectionChanged({
@@ -1194,6 +1239,39 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         & $updateReview
     })
     $dialog.FindName('DeleteSummary').Add_Click({ $summary.Text = '' })
+    $dialog.FindName('RepairLengths').Add_Click({
+        try {
+            & $storeDraft
+            $repairs = @($dialog.Tag.GeneratedOriginals.Keys | Sort-Object | ForEach-Object {
+                $item = [int]$_
+                $turn = [int][Math]::Floor($item / 2)
+                $text = if ($item % 2 -eq 0) { [string]$dialog.Tag.Summaries[$turn] } else { [string]$dialog.Tag.Outputs[$turn] }
+                if ($text.Length -gt 600 -and $text -ceq $dialog.Tag.GeneratedOriginals[$item]) {
+                    [pscustomobject]@{ index = $turn; kind = $(if ($item % 2 -eq 0) { 'input' } else { 'output' }); summary = $text }
+                }
+            })
+            if (-not $repairs.Count) { return }
+            . (Join-Path $PSScriptRoot 'PlayerAI.ps1')
+            $fixed = Invoke-DemoOpenAISummaries $dialog $Id 'both' -Repair $repairs
+            if (-not $fixed) { return }
+            foreach ($draft in $fixed) {
+                if ($draft.summary.Length -gt 600) { throw 'AI correction returned an invalid length. Nothing was saved.' }
+            }
+            foreach ($draft in $fixed) {
+                $item = 2 * $draft.index + [int]($draft.kind -eq 'output')
+                if ($draft.kind -eq 'input') { $dialog.Tag.Summaries[$draft.index] = $draft.summary }
+                else { $dialog.Tag.Outputs[$draft.index] = $draft.summary }
+                $dialog.Tag.GeneratedOriginals[$item] = [string]$draft.summary
+            }
+            $turn = [int][Math]::Floor($dialog.Tag.Index / 2)
+            $summary.Text = if ($dialog.Tag.Index % 2 -eq 0) { [string]$dialog.Tag.Summaries[$turn] } else { [string]$dialog.Tag.Outputs[$turn] }
+            & $updateReview
+        } catch {
+            if ($_.Exception -is [OperationCanceledException]) {
+                $dialog.FindName('ReviewStatus').Text = 'AI shortening canceled. Drafts and saved data are unchanged. Use Automatically shorten AI summaries to retry explicitly.'
+            } else { Show-DemoError $dialog $_ }
+        }
+    })
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
