@@ -8,6 +8,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('library-lifecycle-test-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'native')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'DemoDialogs.ps1') -Destination $scratch
+Copy-Item -LiteralPath (Join-Path $root 'SummaryPresentation.ps1') -Destination $scratch
 $helperPath = Join-Path $scratch 'native\library-cli.js'
 $pidPath = Join-Path $scratch 'native\helper.pid'
 $failures = [Collections.Generic.List[string]]::new()
