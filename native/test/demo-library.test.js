@@ -8,6 +8,26 @@ const { pathToFileURL } = require('node:url');
 const { DatabaseSync } = require('node:sqlite');
 const library = require('../demo-library');
 
+// Real Windows layout/stdio is covered by overlay-layout.ps1 and native UI acceptance.
+test.mock.method(require('node:child_process'), 'execFile', (executable, args, options, done) => {
+    assert.equal(executable, 'powershell.exe');
+    assert.equal(path.basename(args.at(-2)), 'SummaryPresentation.ps1');
+    assert.equal(args.at(-1), '-ValidateStdin');
+    assert.equal(options.windowsHide, true);
+    const stdin = new (require('node:events').EventEmitter)();
+    stdin.end = text => {
+        const pairs = JSON.parse(text);
+        assert.ok(Array.isArray(pairs));
+        for (const pair of pairs) {
+            assert.ok(Number.isInteger(pair.exchange) && pair.exchange > 0);
+            assert.equal(typeof pair.input, 'string');
+            assert.ok(pair.output === null || typeof pair.output === 'string');
+        }
+        queueMicrotask(() => done(null));
+    };
+    return { stdin };
+});
+
 async function fixture(context) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'demo-library-test-'));
     context.after(() => fs.rm(directory, { recursive: true, force: true }));

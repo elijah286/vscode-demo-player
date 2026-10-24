@@ -22,7 +22,8 @@ function validatePlaybackFit(recording, summaries) {
         const child = execFile('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File',
             path.join(__dirname, '..', 'SummaryPresentation.ps1'), '-ValidateStdin'],
         { windowsHide: true, timeout: 30000, encoding: 'utf8' }, error => {
-            if (error || inputError) reject(new Error('Playback fit validation failed. Shorten the prompt/reply summaries so both fit together on screen, then save again. No summaries were saved. ' + (error || inputError).message));
+            if (error?.killed) reject(new Error('Windows playback layout validation exceeded 30 seconds. Your drafts are still open and nothing was saved. Try Save again after Windows is ready; no summary generation will be repeated.'));
+            else if (error || inputError) reject(new Error('Playback fit validation failed. Shorten the prompt/reply summaries so both fit together on screen, then save again. No summaries were saved. ' + (error || inputError).message));
             else resolve();
         });
         child.stdin.on('error', error => { inputError = error; });
