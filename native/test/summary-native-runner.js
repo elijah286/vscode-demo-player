@@ -4,13 +4,19 @@ const path = require('node:path');
 const vscode = require('vscode');
 const { chromium } = require('playwright');
 const library = require('../demo-library');
-const { activateSummaryAuthoring, recordedOutput } = require('../prompt-summary-authoring');
+const { activateSummaryAuthoring, recordedOutput, generateSummary } = require('../prompt-summary-authoring');
+const { reviewSummaries } = require('../prompt-summary-review');
 
 async function reviewFrame(page) {
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
         for (const frame of page.frames()) {
-            if (await frame.locator('#exchanges').count()) return frame;
+            if (frame.isDetached()) continue;
+            try {
+                if (await frame.locator('#exchanges').count()) return frame;
+            } catch (error) {
+                if (page.isClosed() || !/detached|Target page, context or browser has been closed/.test(error.message)) throw error;
+            }
         }
         await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -96,6 +102,7 @@ async function run() {
         assert.equal(browser.contexts()[0].pages().filter(candidate => candidate.url().includes('workbench')).length, 1, 'Repeated launch reuses one dedicated authoring workspace');
         await progress('repeated output selection verified');
         let requests = 0;
+        const sourceCalls = new Map();
         const overlong = length => 'I checked ' + 'x'.repeat(length - 11) + '.';
         const syntheticModel = {
             name: 'Synthetic summary model', vendor: 'test', id: 'synthetic', maxInputTokens: 10000,
@@ -107,7 +114,11 @@ async function run() {
                     assert.match(text, /Do not assume the user request succeeded/);
                 }
                 requests++;
-                const draft = requests === 1 || requests === 10 ? overlong(601) : requests === 3 ? overlong(1201) : 'Synthetic draft ' + requests + '.';
+                const sources = [...prompts, ...outputs];
+                const sourceIndex = sources.findIndex(source => text.endsWith(JSON.stringify(source)));
+                const count = (sourceCalls.get(sourceIndex) ?? 0) + 1;
+                sourceCalls.set(sourceIndex, count);
+                const draft = count === 1 && [0, 2].includes(sourceIndex) ? overlong(sourceIndex === 0 ? 601 : 1201) : 'Synthetic draft ' + (sourceIndex + 1) + '.';
                 return { text: (async function* () { yield draft; })() };
             }
         };
@@ -143,13 +154,13 @@ async function run() {
         const save = frame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true });
         assert.equal(await original.inputValue(), prompts[0], 'Full original is visible automatically after generation');
         assert.equal(await original.getAttribute('readonly'), '', 'Original cannot be edited');
-        assert.equal(await summary.inputValue(), overlong(601), 'The complete 601-character draft is visible, not discarded or sliced');
-        assert.match(await frame.locator('#error').textContent(), /601.*600/);
-        assert.ok(await frame.getByRole('button', { name: 'Approve & next', exact: true }).isDisabled());
+        assert.equal(await summary.inputValue(), 'Synthetic draft 1.', 'The overlong draft is automatically rewritten before review');
+        assert.equal(await frame.locator('#error').textContent(), '');
+        assert.ok(await frame.getByRole('button', { name: 'Approve & next', exact: true }).isEnabled());
         assert.ok(await save.isDisabled(), 'Pending drafts cannot be saved');
         await frame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
-        assert.match(await frame.locator('#status').textContent(), /7\/9 reviewed.*2 pending/);
-        assert.ok(await save.isDisabled(), 'Approve all keeps both overflow drafts pending');
+        assert.match(await frame.locator('#status').textContent(), /9\/9 reviewed.*0 pending/);
+        assert.ok(await save.isEnabled(), 'All automatically fitted drafts save without manual repairs');
         await summary.fill('Invalid\nmultiline');
         assert.ok(await frame.getByRole('button', { name: 'Approve & next', exact: true }).isDisabled());
         await frame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
@@ -159,9 +170,8 @@ async function run() {
         assert.equal(await original.inputValue(), prompts[1], 'Individual approval advances to the next original');
         await frame.getByRole('button', { name: 'Delete summary & next', exact: true }).click();
         assert.equal(await original.inputValue(), prompts[2]);
-        assert.equal(await summary.inputValue(), overlong(1201), 'Drafts beyond the manual storage budget remain fully editable');
-        assert.match(await frame.locator('#error').textContent(), /1201.*1200/);
-        assert.ok(await save.isDisabled());
+        assert.equal(await summary.inputValue(), 'Synthetic draft 3.', '1201-character draft was rewritten before review');
+        assert.equal(await frame.locator('#error').textContent(), '');
         await summary.fill('Synthetic draft 3.');
         await frame.getByRole('button', { name: 'Previous', exact: true }).click();
         assert.equal(await original.inputValue(), prompts[1], 'Deleting only a summary leaves its full original in the list');
@@ -201,13 +211,13 @@ async function run() {
         assert.equal(playback[1].promptSummary.length, 300, 'Deleted summary uses the bounded original excerpt');
         assert.equal(playback[0].outputSummary, 'Reviewed recorded result');
         assert.equal(playback[1].outputSummary, null, 'Deleting an output summary never invents a fallback result');
-        assert.equal(requests, 9, 'One synthetic provider request per eligible input/output');
+        assert.equal(requests, 11, 'Nine generation requests plus exactly two automatic length rewrites');
         const saved = await fs.readFile(file);
         const canceled = authoring.run();
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const canceledFrame = await reviewFrame(page);
-        assert.equal(await canceledFrame.locator('#summary').inputValue(), overlong(601));
+        assert.equal(await canceledFrame.locator('#summary').inputValue(), 'Synthetic draft 2.');
         await canceledFrame.getByRole('button', { name: 'Cancel', exact: true }).click();
         await canceled;
         assert.deepEqual(await fs.readFile(file), saved, 'Canceling automatic review preserves the saved library byte-for-byte');
@@ -241,6 +251,44 @@ async function run() {
         assert.equal(promptsSaved.recording.promptSummaries.filter(Boolean).length, entry.recording.turns.length);
         assert.deepEqual(promptsSaved.recording.outputSummaries, responseSaved.recording.outputSummaries);
         assert.deepEqual(promptsSaved.recording.turns, entry.recording.turns);
+        const legacyBefore = await fs.readFile(file);
+        const legacySource = 'No, the action failed. Should I use blue or green?';
+        let repairRequests = 0;
+        const legacy = reviewSummaries(vscode, [
+            { exchange: 1, kind: 'input', prompt: 'Yes.', summary: 'Yes.' },
+            { exchange: 1, kind: 'output', prompt: legacySource, summary: overlong(1457) }
+        ], undefined, async draft => {
+            const consent = await vscode.window.showWarningMessage('Shorten the shown unsaved draft and source with AI? Up to 4 billed requests.', { modal: true }, 'Shorten with AI');
+            if (consent !== 'Shorten with AI') return undefined;
+            return generateSummary(vscode, {
+                maxInputTokens: 10000, countTokens: async () => 1,
+                sendRequest: async messages => {
+                    repairRequests++;
+                    const prompt = messages[0].content.map(part => part.value).join('');
+                    assert.match(prompt, /1457 characters/);
+                    assert.ok(prompt.endsWith(JSON.stringify(legacySource)));
+                    return { text: (async function* () { yield legacySource; })() };
+                }
+            }, draft.prompt, undefined, draft.kind, { rewrite: draft.summary });
+        });
+        const legacyFrame = await reviewFrame(page);
+        await legacyFrame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
+        assert.ok(await legacyFrame.locator('#save').isDisabled());
+        assert.equal(await legacyFrame.locator('#summary').inputValue(), overlong(1457));
+        await legacyFrame.getByRole('button', { name: 'Automatically shorten AI summaries', exact: true }).click();
+        await page.getByRole('button', { name: 'Shorten with AI', exact: true }).click();
+        await legacyFrame.locator('#summary').evaluate((element, text) => new Promise(resolve => {
+            const interval = setInterval(() => { if (element.value === text) { clearInterval(interval); resolve(); } }, 20);
+        }), legacySource);
+        assert.match(await legacyFrame.locator('#status').textContent(), /1\/2 reviewed.*1 pending/);
+        assert.equal(repairRequests, 1);
+        await legacyFrame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
+        assert.ok(await legacyFrame.locator('#save').isEnabled());
+        await legacyFrame.locator('#save').click();
+        const repaired = await legacy;
+        assert.deepEqual(repaired.map(draft => draft.summary), ['Yes.', legacySource]);
+        assert.deepEqual(await fs.readFile(file), legacyBefore, 'Legacy review does not mutate saved data itself');
+        console.log('NATIVE AUTOMATIC FIT PASSED: 601/1201 automatic generation rewrites, approve-all enables Save without typing; explicit legacy1457 repair keeps other approvals and source question/choices; no paid requests.');
         console.log('NATIVE CONTROLLER PROMPT SCOPE PASSED: short and long missing inputs, prompt-only consent/review/save, unchanged outputs/originals.');
         console.log('NATIVE EXPLICIT RESPONSE GENERATION PASSED: real response-only launch inbox, provider setup, scoped consent, output-only review/edit/approve/save, input-summary preservation and original-answer fidelity; synthetic model only.');
         console.log('NATIVE SUMMARY AUTHORING PASSED: real isolated activation, consent, missing-provider guidance, automatic comparison webview, full read-only originals, editable 300-char summaries, invalid-input gating, individual approval/advance, deletion/restoration, list navigation, approve-all preserving deletions, edit revokes approval, save/playback fidelity, cancel byte preservation, inert HTML-like data. Synthetic provider only; no external AI requests.');

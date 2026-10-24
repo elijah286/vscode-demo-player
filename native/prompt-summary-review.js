@@ -5,8 +5,8 @@ const { MAX_PROMPT_SUMMARY_LENGTH } = require('./replay');
 function summaryReviewIssue(text, original) {
     if (!text?.trim()) return 'Write a summary on one line, or delete it.';
     if (/[\r\n]/.test(text)) return 'Use one line, or delete the summary.';
+    if (original?.length > 600 && text.trim() === original.trim()) return text.length + ' characters exceeds the AI limit of 600. Use Automatically shorten AI summaries before approval (manual save limit: ' + MAX_PROMPT_SUMMARY_LENGTH + ').';
     if (text.length > MAX_PROMPT_SUMMARY_LENGTH) return text.length + ' characters; edit to at most ' + MAX_PROMPT_SUMMARY_LENGTH + ' before saving (AI limit: 600).';
-    if (original?.length > 600 && text.trim() === original.trim()) return text.length + ' characters exceeds the AI limit of 600. Shorten/edit this draft before approval; human-edited summaries may use up to ' + MAX_PROMPT_SUMMARY_LENGTH + '.';
     return '';
 }
 
@@ -53,7 +53,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 <h1>Review input/output summaries</h1>
 <p>Compare each AI draft with its recorded source. Edit, approve, or delete the summary only.
 Playback keeps full originals. Deleted input summaries use excerpts; deleted outputs show an actionable missing-summary notice.</p>
-<p>AI drafts target 180-220 characters, with room up to 600 for complete thoughts and questions/choices. Overlong completed drafts are retained in full for shortening/editing, not retried automatically. Edit or delete them before approval. Human-edited saved summaries allow 1200 characters. Speak as the user ("I want...", "Can you...?", "Yes.") or assistant ("I found...", "Yes, ..."), not "User wants" or "The assistant". Preserve recorded answers and questions/choices; never invent success. Existing clipped summaries are never regenerated automatically.</p>
+<p>AI drafts are automatically rewritten to fit 600 characters before review, targeting 180-220. For an older unsaved overlong AI draft, use Automatically shorten AI summaries; this sends its source/context and draft with your consent, using up to 4 additional billed requests. Human-edited saved summaries allow 1200 characters. Preserve speaker voice, recorded answers and questions/choices; never invent success. Existing saved summaries are never regenerated automatically.</p>
 <main><nav aria-label="Generated summaries"><label for="exchanges">Exchanges</label><select id="exchanges" size="10"></select></nav>
 <section aria-label="Summary comparison">
 <h2 id="heading"></h2>
@@ -65,12 +65,13 @@ Playback keeps full originals. Deleted input summaries use excerpts; deleted out
 <div><button id="approve">Approve &amp; next</button><button id="delete">Delete summary &amp; next</button><button id="all">Approve all remaining</button></div>
 </section></main>
 <p id="status" role="status" aria-live="polite"></p><p id="error" role="alert"></p>
-<button id="save">Save reviewed summaries for playback</button><button id="cancel">Cancel</button>
+<button id="repair">Automatically shorten AI summaries</button><button id="save">Save reviewed summaries for playback</button><button id="cancel">Cancel</button>
 <p>Nothing is saved until you save the reviewed batch. Then return to the interaction picker and choose Use selected exchanges or Use saved selection; enable Show prompt summary in the controller.</p>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 const drafts = ${data}.map(turn => ({ ...turn, originalSummary: turn.summary, status: 'pending' }));
 let index = 0;
+let repairing = false;
 const get = id => document.getElementById(id);
 const MAX_PROMPT_SUMMARY_LENGTH = ${MAX_PROMPT_SUMMARY_LENGTH};
 const issueFor = ${summaryReviewIssue.toString()};
@@ -85,12 +86,14 @@ function update() {
     selected.selectedIndex = index;
     const pending = drafts.filter(turn => turn.status === 'pending').length;
     get('status').textContent = (drafts.length - pending) + '/' + drafts.length + ' reviewed. ' + pending + ' pending.';
-    get('save').disabled = pending > 0 || drafts.some(turn => turn.status !== 'deleted' && !valid(turn));
-    get('previous').disabled = index === 0;
-    get('next').disabled = index === drafts.length - 1;
-    get('approve').disabled = !valid(drafts[index]);
+    get('save').disabled = repairing || pending > 0 || drafts.some(turn => turn.status !== 'deleted' && !valid(turn));
+    get('repair').disabled = repairing || !drafts.some(turn => turn.status !== 'deleted' && turn.summary === turn.originalSummary && turn.summary.length > 600);
+    for (const id of ['summary', 'approve', 'delete', 'all', 'exchanges', 'previous', 'next']) get(id).disabled = repairing;
+    get('previous').disabled = repairing || index === 0;
+    get('next').disabled = repairing || index === drafts.length - 1;
+    get('approve').disabled = repairing || !valid(drafts[index]);
     get('count').textContent = (drafts[index].summary ?? '').length + '/${MAX_PROMPT_SUMMARY_LENGTH} characters - ' + drafts[index].status +
-        ((drafts[index].summary ?? '').length > 600 ? ' (above AI limit of 600; approval requires a human edit)' : '');
+        ((drafts[index].summary ?? '').length > 600 ? ' (above AI limit of 600; automatic shortening available for unchanged AI drafts)' : '');
     get('error').textContent = drafts[index].status === 'deleted' ? '' : issueFor(drafts[index].summary ?? '', drafts[index].originalSummary);
 }
 function show() {
@@ -127,19 +130,60 @@ get('save').onclick = () => {
     vscode.postMessage({ command: 'save', drafts: drafts.map(({ exchange, kind, summary, status }) => ({ exchange, kind, summary, status })) });
 };
 get('cancel').onclick = () => vscode.postMessage({ command: 'cancel' });
-window.addEventListener('message', event => { if (event.data.command === 'error') { update(); get('error').textContent = event.data.message; } });
+get('repair').onclick = () => {
+    repairing = true; update();
+    get('status').textContent = 'Automatically shortening; cancellation is available in the progress notification.';
+    vscode.postMessage({ command: 'repair', drafts: drafts.map(({ summary, status }) => ({ summary, status })) });
+};
+window.addEventListener('message', event => {
+    if (event.data.command === 'repaired') {
+        for (const change of event.data.changes) {
+            drafts[change.index].summary = change.summary;
+            drafts[change.index].originalSummary = change.summary;
+            drafts[change.index].status = 'pending';
+        }
+        repairing = false; show();
+    }
+    if (event.data.command === 'error') { repairing = false; update(); get('error').textContent = event.data.message; }
+});
 show();
 </script></body></html>`;
 }
 
-function reviewSummaries(vscode, drafts, validateFit) {
+function reviewSummaries(vscode, drafts, validateFit, repairDraft) {
     const panel = vscode.window.createWebviewPanel('demoPlayer.summaryReview', 'Review input/output summaries',
         vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] });
     return new Promise(resolve => {
         let saving = false;
+        let closed = false;
+        const correction = new AbortController();
         const received = panel.webview.onDidReceiveMessage(async message => {
             if (message?.command === 'cancel') panel.dispose();
-            if (message?.command !== 'save') return;
+            if (message?.command === 'repair' && !saving && !closed) {
+                saving = true;
+                try {
+                    if (!repairDraft) throw new Error('Reopen AI authoring to enable automatic shortening. Nothing was saved.');
+                    if (!Array.isArray(message.drafts) || message.drafts.length !== drafts.length) throw new Error('Invalid summary repair request.');
+                    const changes = [];
+                    for (const [index, draft] of drafts.entries()) {
+                        const current = message.drafts[index];
+                        if (current?.status === 'deleted' || current?.summary !== draft.summary || draft.summary.length <= 600) continue;
+                        const summary = await repairDraft(draft, correction.signal);
+                        if (closed) return;
+                        if (summary === undefined) continue;
+                        if (typeof summary !== 'string' || summary.length > 600 || summaryReviewIssue(summary)) throw new Error('AI shortening did not return a valid draft. Nothing was saved.');
+                        changes.push({ index, summary });
+                    }
+                    if (!closed) {
+                        for (const change of changes) drafts[change.index] = { ...drafts[change.index], summary: change.summary };
+                        void panel.webview.postMessage({ command: 'repaired', changes });
+                    }
+                } catch (error) {
+                    if (!closed) void panel.webview.postMessage({ command: 'error', message: error.message });
+                } finally { saving = false; }
+                return;
+            }
+            if (message?.command !== 'save' || closed) return;
             if (saving) return;
             saving = true;
             try {
@@ -154,6 +198,8 @@ function reviewSummaries(vscode, drafts, validateFit) {
             }
         });
         const disposed = panel.onDidDispose(() => {
+            closed = true;
+            correction.abort();
             received.dispose();
             disposed.dispose();
             resolve(undefined);

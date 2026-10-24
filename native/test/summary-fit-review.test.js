@@ -22,6 +22,7 @@ test('a failed rendered-pair check keeps the review open and allows editing/retr
     }, [{ exchange: 1, kind: 'input', summary: 'Original complete draft.' }], async () => {
         if (++attempts === 1) throw new Error('Exchange 1: prompt and reply cannot fit together on this screen.');
     });
+
     await receive({ command: 'save', drafts: [{ exchange: 1, kind: 'input', summary: 'Original complete draft.', status: 'approved' }] });
     assert.equal(disposed, false);
     assert.match(errors[0].message, /Exchange 1:.*cannot fit together/);
@@ -30,3 +31,73 @@ test('a failed rendered-pair check keeps the review open and allows editing/retr
     assert.equal(disposed, true);
     assert.equal(attempts, 2);
 });
+
+test('legacy review repair changes only unchanged generated overflows and saves only after explicit approval', async () => {
+        const { generateSummary } = require('../prompt-summary-authoring');
+        let receive;
+        let disposed;
+        const messages = [];
+        const panel = {
+            dispose() { disposed(); },
+            onDidDispose(callback) { disposed = callback; return { dispose() {} }; },
+            webview: {
+                onDidReceiveMessage(callback) { receive = callback; return { dispose() {} }; },
+                postMessage(message) { messages.push(message); }
+            }
+        };
+        const source = 'No, the action failed. Should I use blue or green?';
+        const original = 'I checked ' + 'x'.repeat(1446) + '.';
+        let requests = 0;
+        const drafts = [
+            { exchange: 1, kind: 'input', prompt: 'Yes.', summary: 'Yes.' },
+            { exchange: 1, kind: 'output', prompt: source, summary: original },
+            { exchange: 2, kind: 'output', prompt: source, summary: original }
+        ];
+        const result = reviewSummaries({
+            ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }
+        }, drafts, undefined, async draft => generateSummary({
+            LanguageModelChatMessage: { User: content => ({ content }) }
+        }, {
+            maxInputTokens: 10000, countTokens: async () => 1,
+            sendRequest: async messages => {
+                requests++;
+                assert.match(messages[0].content, /1457 characters/);
+                assert.ok(messages[0].content.endsWith(JSON.stringify(source)));
+                return { text: (async function* () { yield source; })() };
+            }
+        }, draft.prompt, undefined, draft.kind, { rewrite: draft.summary }));
+        await receive({ command: 'repair', drafts: [
+            { summary: 'Yes.', status: 'approved' }, { summary: original, status: 'pending' },
+            { summary: 'Human edited longer text.', status: 'approved' }
+        ] });
+        assert.equal(requests, 1);
+        assert.deepEqual(messages, [{ command: 'repaired', changes: [{ index: 1, summary: source }] }]);
+        await receive({ command: 'save', drafts: [
+            { exchange: 1, kind: 'input', summary: 'Yes.', status: 'approved' },
+            { exchange: 1, kind: 'output', summary: source, status: 'approved' },
+            { exchange: 2, kind: 'output', summary: 'Human edited longer text.', status: 'approved' }
+        ] });
+        assert.equal((await result)[1].summary, source);
+    });
+
+    test('failed or canceled legacy repair leaves original drafts intact and rejects saving invalid results', async () => {
+        for (const failure of [new Error('Canceled correction.'), 'x'.repeat(601)]) {
+            let receive;
+            let disposed;
+            const messages = [];
+            const original = 'I checked ' + 'x'.repeat(1446) + '.';
+            const drafts = [{ exchange: 1, kind: 'output', summary: original }];
+            const panel = {
+                dispose() { disposed(); },
+                onDidDispose(callback) { disposed = callback; return { dispose() {} }; },
+                webview: { onDidReceiveMessage(callback) { receive = callback; return { dispose() {} }; }, postMessage(message) { messages.push(message); } }
+            };
+            const result = reviewSummaries({ ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel } },
+                drafts, undefined, async () => { if (failure instanceof Error) throw failure; return failure; });
+            await receive({ command: 'repair', drafts: [{ summary: original, status: 'pending' }] });
+            assert.equal(drafts[0].summary, original);
+            assert.equal(messages[0].command, 'error');
+            await receive({ command: 'cancel' });
+            assert.equal(await result, undefined);
+        }
+    });
