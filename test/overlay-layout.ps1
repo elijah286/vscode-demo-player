@@ -101,8 +101,9 @@ function Invoke-FitProtocol([object[]]$Pairs) {
         $process.Start() | Out-Null
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $process.StandardInput.Write((ConvertTo-Json -InputObject $Pairs -Depth 4 -Compress))
-        $process.StandardInput.Close()
+        $bytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $Pairs -Depth 4 -Compress))
+        $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+        $process.StandardInput.BaseStream.Close()
         if (-not $process.WaitForExit(30000)) { Stop-Process -Id $process.Id -Force; throw 'Windows PowerShell fit protocol exceeded 30 seconds.' }
         return [pscustomobject]@{ ExitCode = $process.ExitCode; ErrorText = $stderr.GetAwaiter().GetResult(); Output = $stdout.GetAwaiter().GetResult() }
     } finally { $process.Dispose() }

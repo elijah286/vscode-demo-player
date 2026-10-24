@@ -114,7 +114,7 @@ function Assert-DemoSummaryPairs($Recording, [double]$Width, [double]$MaxWidth, 
 
 if ($ValidateStdin) {
     [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
-    $pairs = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
+    $pairs = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd().TrimStart([char]0xFEFF))
     foreach ($pair in $pairs) {
         $fit = Get-DemoSummaryLayout ([string]$pair.input) ([string]$pair.output)
         if (-not $fit.Fits) {
