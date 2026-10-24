@@ -96,6 +96,7 @@ async function run() {
         assert.equal(browser.contexts()[0].pages().filter(candidate => candidate.url().includes('workbench')).length, 1, 'Repeated launch reuses one dedicated authoring workspace');
         await progress('repeated output selection verified');
         let requests = 0;
+        const overlong = length => 'I checked ' + 'x'.repeat(length - 11) + '.';
         const syntheticModel = {
             name: 'Synthetic summary model', vendor: 'test', id: 'synthetic', maxInputTokens: 10000,
             countTokens: async () => 100,
@@ -106,7 +107,8 @@ async function run() {
                     assert.match(text, /Do not assume the user request succeeded/);
                 }
                 requests++;
-                return { text: (async function* () { yield 'Synthetic draft ' + requests; })() };
+                const draft = requests === 1 || requests === 10 ? overlong(601) : requests === 3 ? overlong(1201) : 'Synthetic draft ' + requests + '.';
+                return { text: (async function* () { yield draft; })() };
             }
         };
         // Only the provider and model picker are synthetic; use real VS Code consent, progress and webview APIs.
@@ -141,17 +143,26 @@ async function run() {
         const save = frame.getByRole('button', { name: 'Save reviewed summaries for playback', exact: true });
         assert.equal(await original.inputValue(), prompts[0], 'Full original is visible automatically after generation');
         assert.equal(await original.getAttribute('readonly'), '', 'Original cannot be edited');
-        assert.equal(await summary.inputValue(), 'Synthetic draft 1');
+        assert.equal(await summary.inputValue(), overlong(601), 'The complete 601-character draft is visible, not discarded or sliced');
+        assert.match(await frame.locator('#error').textContent(), /601.*600/);
+        assert.ok(await frame.getByRole('button', { name: 'Approve & next', exact: true }).isDisabled());
         assert.ok(await save.isDisabled(), 'Pending drafts cannot be saved');
+        await frame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
+        assert.match(await frame.locator('#status').textContent(), /7\/9 reviewed.*2 pending/);
+        assert.ok(await save.isDisabled(), 'Approve all keeps both overflow drafts pending');
         await summary.fill('Invalid\nmultiline');
         assert.ok(await frame.getByRole('button', { name: 'Approve & next', exact: true }).isDisabled());
         await frame.getByRole('button', { name: 'Approve all remaining', exact: true }).click();
-        assert.match(await frame.locator('#error').textContent(), /invalid summary/);
+        assert.match(await frame.locator('#error').textContent(), /one line/);
         await summary.fill('W'.repeat(300));
         await frame.getByRole('button', { name: 'Approve & next', exact: true }).click();
         assert.equal(await original.inputValue(), prompts[1], 'Individual approval advances to the next original');
         await frame.getByRole('button', { name: 'Delete summary & next', exact: true }).click();
         assert.equal(await original.inputValue(), prompts[2]);
+        assert.equal(await summary.inputValue(), overlong(1201), 'Drafts beyond the manual storage budget remain fully editable');
+        assert.match(await frame.locator('#error').textContent(), /1201.*1200/);
+        assert.ok(await save.isDisabled());
+        await summary.fill('Synthetic draft 3.');
         await frame.getByRole('button', { name: 'Previous', exact: true }).click();
         assert.equal(await original.inputValue(), prompts[1], 'Deleting only a summary leaves its full original in the list');
         assert.equal(await summary.inputValue(), '');
@@ -179,8 +190,8 @@ async function run() {
         await save.click();
         await generated;
         const after = await library.readEntry(path.dirname(file), entry.id);
-        assert.deepEqual(after.recording.promptSummaries, ['W'.repeat(300), null, 'Synthetic draft 3', 'Synthetic draft 4', null]);
-        assert.deepEqual(after.recording.outputSummaries, ['Reviewed recorded result', null, 'Synthetic draft 7', 'Synthetic draft 8', 'Synthetic draft 9']);
+        assert.deepEqual(after.recording.promptSummaries, ['W'.repeat(300), null, 'Synthetic draft 3.', 'Synthetic draft 4.', null]);
+        assert.deepEqual(after.recording.outputSummaries, ['Reviewed recorded result', null, 'Synthetic draft 7.', 'Synthetic draft 8.', 'Synthetic draft 9.']);
         assert.deepEqual(after.recording.turns, entry.recording.turns, 'All original prompts, replies and payload hashes are unchanged');
         assert.deepEqual(after.recording.source, entry.recording.source);
         const playback = await library.packageRecordings(file);
@@ -196,12 +207,13 @@ async function run() {
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const canceledFrame = await reviewFrame(page);
+        assert.equal(await canceledFrame.locator('#summary').inputValue(), overlong(601));
         await canceledFrame.getByRole('button', { name: 'Cancel', exact: true }).click();
         await canceled;
         assert.deepEqual(await fs.readFile(file), saved, 'Canceling automatic review preserves the saved library byte-for-byte');
         const responseGenerated = authoring.run(undefined, 'output');
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
-        assert.ok(await page.getByText(/User prompts are not sent or summarized by this action/).isVisible(), 'Response-only consent excludes user prompts explicitly');
+        assert.ok(await page.getByText(/paired user question context/).isVisible(), 'Response-only consent explicitly includes the paired question as context');
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const responseFrame = await reviewFrame(page);
         assert.equal(await responseFrame.locator('#exchanges option').count(), 1, 'Only the single missing output is generated, not the deleted input summary');
@@ -218,7 +230,7 @@ async function run() {
         const missingInputs = responseSaved.recording.turns.length - responseSaved.recording.promptSummaries.filter(Boolean).length;
         const promptsGenerated = authoring.run(undefined, 'input');
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
-        assert.ok(await page.getByText(/Assistant replies are not sent or summarized by this action/).isVisible());
+        assert.ok(await page.getByText(/Only input summaries are generated by this action/).isVisible());
         await page.getByRole('button', { name: 'Generate summaries', exact: true }).click();
         const inputFrame = await reviewFrame(page);
         assert.equal(await inputFrame.locator('#exchanges option').count(), missingInputs, 'Prompt-only mode includes every missing input, even the short prompt');
