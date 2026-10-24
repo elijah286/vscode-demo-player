@@ -1003,8 +1003,8 @@ test('AI authoring handles the 100-exchange selection limit with one consent and
     assert.equal(calls.requests, 200);
     assert.equal(calls.consent, 1);
     assert.equal(calls.reviews, 1);
+    assert.deepEqual(calls.errors, [], 'The complete 100-exchange batch must pass review and rendered-fit validation');
     assert.equal(calls.saved.length, 1);
-    assert.equal(calls.errors.length, 0);
     const after = await library.readEntry(root, added.id);
     assert.deepEqual(after.recording.promptSummaries, Array(100).fill('Reviewed shorter query'));
     assert.deepEqual(after.recording.outputSummaries, Array(100).fill('Reviewed shorter query'));
