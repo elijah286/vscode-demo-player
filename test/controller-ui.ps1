@@ -4,6 +4,7 @@ param(
     [string]$ApplicationRoot,
     [switch]$Installed,
     [switch]$PlaybackOnly,
+    [switch]$SummaryOnly,
     [switch]$LargeSummarySources
 )
 
@@ -108,7 +109,9 @@ global.fetch = async (url, options) => {
     if (body.store !== false || body.tools || options.redirect !== 'error') throw new Error('Unsafe synthetic API request');
     const kind = body.input.startsWith('Summarize what the recorded assistant') ? 'output' : 'input';
     const correcting = body.input.includes('AUTOMATIC LENGTH CORRECTION:');
-    fs.appendFileSync(path.join(__dirname, 'openai-requests.jsonl'), JSON.stringify({ kind, model: body.model, correcting }) + '\n');
+    const pattern = body.text?.format?.schema?.properties?.summary?.pattern;
+    if (typeof pattern !== 'string' || new RegExp(pattern, 'u').test('x'.repeat(601))) throw new Error('Missing hard summary length constraint');
+    fs.appendFileSync(path.join(__dirname, 'openai-requests.jsonl'), JSON.stringify({ kind, model: body.model, correcting, pattern }) + '\n');
     const reject = path.join(__dirname, 'reject-next-key');
     if (fs.existsSync(reject)) { fs.unlinkSync(reject); return Response.json({ error: { message: 'Synthetic rejected key' } }, { status: 401 }); }
     if (fs.existsSync(path.join(__dirname, 'delay-summary'))) return new Promise(() => {});
@@ -219,6 +222,13 @@ function Invoke-Button($Parent, [string]$Id) {
     $script:tasks.Add([DemoUITest]::Invoke($element))
 }
 
+function Invoke-AISummaryAction($Parent, [string]$Scope = 'Both') {
+    Invoke-Button $Parent 'AiPromptSummaries'
+    $scopeDialog = Wait-Until { Get-AppWindow 'Generate AI summaries' } 'one consolidated summary action'
+    ([System.Windows.Automation.SelectionItemPattern](Find-Element $scopeDialog 'Id' ('SummaryScope' + $Scope)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    Invoke-Button $scopeDialog 'ContinueSummaryScope'
+}
+
 function Save-WindowImage($Element, [string]$Name) {
     $Element.SetFocus()
     $bounds = $Element.Current.BoundingRectangle
@@ -307,6 +317,53 @@ try {
     $launch = Start-TestPlayer
     $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'standalone controller'
+    if ($SummaryOnly) {
+        $entryPath = Join-Path $library ($saved.id + '.demo.json')
+        $before = [IO.File]::ReadAllText($entryPath)
+        Invoke-Button $window 'ChooseDemo'
+        $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'summary action picker'
+        ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        $item = Wait-Until {
+            $list = Find-Element $dialog 'Id' 'DemoList'
+            $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+            if ($items.Count -eq 1) { return $items[0] }
+        } 'saved synthetic entry for constrained summaries'
+        ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        Invoke-Button $dialog 'AiPromptSummaries'
+        $scopeDialog = Wait-Until { Get-AppWindow 'Generate AI summaries' } 'scope cancellation'
+        Invoke-Button $scopeDialog 'CancelSummaryScope'
+        Wait-Until { -not (Get-AppWindow 'Generate AI summaries') } 'scope cancellation returns to selection' | Out-Null
+        if ([IO.File]::ReadAllText($entryPath) -cne $before -or (Test-Path (Join-Path $evidence 'openai-requests.jsonl'))) { throw 'Cancelling scope wrote data or sent a request.' }
+        foreach ($scope in @('Both','Input','Output')) {
+            Invoke-AISummaryAction $dialog $scope
+            if ($scope -eq 'Both') {
+                $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'synthetic key for constrained generation'
+                ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-openai-key-for-ui-tests')
+                Invoke-Button $settingsDialog 'SaveOpenAISettings'
+            }
+            $consent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'constrained generation source/charge consent'
+            if ((Find-Element $consent 'Id' 'OpenAIConsentNotice').Current.Name -notmatch 'schema constrains generation to 300 Unicode') { throw 'Consent omitted the enforced schema bound.' }
+            Invoke-Button $consent 'ConfirmOpenAIGeneration'
+            $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'constrained summary review'
+            $draft = (Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+            if ($draft.Length -gt 600 -or $draft -notmatch '^Synthetic OpenAI (input|output) summary\.$') { throw 'Constrained generation did not produce a complete bounded review draft.' }
+            if ($scope -eq 'Both') {
+                Invoke-Button $review 'Cancel'
+            } else { Invoke-Button $review 'SaveSummaries' }
+            Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'explicit summary save/cancel' | Out-Null
+            $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            if ($scope -eq 'Both' -and [IO.File]::ReadAllText($entryPath) -cne $before) { throw 'Cancel saved the combined drafts.' }
+            if ($scope -eq 'Input' -and (@($entry.recording.promptSummaries | Where-Object { $_ }).Count -ne 2 -or
+                @($entry.recording.outputSummaries | Where-Object { $_ }).Count)) { throw 'Input scope changed outputs or omitted prompts.' }
+        }
+        $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+        if (@($entry.recording.outputSummaries | Where-Object { $_ }).Count -ne 2) { throw 'Output scope did not save the two outputs.' }
+        $requests = @(Get-Content (Join-Path $evidence 'openai-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        if ($requests.Count -ne 8 -or @($requests | Where-Object correcting).Count) { throw 'Constrained valid drafts made extra rewrite requests.' }
+        if ([IO.File]::ReadAllText($target) -cne $targetContent -or [IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Summary generation changed original sources.' }
+        Write-Output 'SUMMARY UI ACCEPTANCE PASSED: one action, combined/input/output scopes, scope cancel without requests/writes, consent explains schema bound, strict pattern on all8 synthetic requests, complete bounded drafts, explicit combined cancel/input-save/output-save, originals unchanged. No live key/request. Live constrained decoder fidelity NOT certified by this synthetic check.'
+        return
+    }
     $play = Find-Element $window 'Id' 'PlayPause'
     if ($play.Current.IsEnabled) { throw 'Play must be disabled without a selected demo.' }
     foreach ($id in @('GeneratePromptSummaries', 'GenerateOutputSummaries')) {
@@ -586,14 +643,14 @@ try {
     if ((Invoke-DemoLibrary @{ command = 'list' } | Where-Object id -eq $summaryEntry.id).presentation.overlay.promptSummary -cne 'Show the first recorded interaction.') { throw 'Clearing did not restore the default excerpt.' }
     Invoke-DemoLibrary @{ command = 'summaries'; id = $summaryEntry.id; summaries = @($overlaySummary, $null); expected = @($cleared.recording.promptSummaries) } | Out-Null
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($cleared.recording.outputSummaries) } | Out-Null
-    Invoke-Button $dialog 'AiPromptSummaries'
+    Invoke-AISummaryAction $dialog
     $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'missing key prompts inside the player'
     if (-not (Find-Element $settingsDialog 'Id' 'OpenAIKey').Current.IsPassword) { throw 'API key entry must be masked.' }
     Find-Element $settingsDialog 'Id' 'OpenAIKeyLink' | Out-Null
     Invoke-Button $settingsDialog 'CancelOpenAISettings'
     Wait-Until { -not (Get-AppWindow 'OpenAI Settings') } 'cancel missing key' | Out-Null
     if (Test-Path -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')) { throw 'Canceling key entry sent an API request.' }
-    Invoke-Button $dialog 'AiPromptSummaries'
+    Invoke-AISummaryAction $dialog
     $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'enter synthetic key'
     ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-openai-key-for-ui-tests')
     Invoke-Button $settingsDialog 'SaveOpenAISettings'
@@ -602,10 +659,10 @@ try {
     Wait-Until { -not (Get-AppWindow 'Generate OpenAI Summaries') } 'decline content transmission' | Out-Null
     if (Test-Path -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')) { throw 'Declining source consent sent an API request.' }
     foreach ($action in @(
-        @{ Button = 'AiPromptSummaries'; Kind = 'input'; Save = $false },
-        @{ Button = 'AiResponseSummaries'; Kind = 'output'; Save = $true }
+        @{ Scope = 'Both'; Kind = 'input'; Save = $false },
+        @{ Scope = 'Output'; Kind = 'output'; Save = $true }
     )) {
-        Invoke-Button $dialog $action.Button
+        Invoke-AISummaryAction $dialog $action.Scope
         $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'saved key reused without prompting'
         Invoke-Button $aiConsent 'ConfirmOpenAIGeneration'
         $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'OpenAI drafts reviewed in the player'
@@ -622,7 +679,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $evidence 'overlong-summary'), [string]$length)
         $beforeRecovery = [IO.File]::ReadAllText((Join-Path $library ($summaryEntry.id + '.demo.json')))
         foreach ($saveRecovery in @($false, $true)) {
-            Invoke-Button $dialog 'AiPromptSummaries'
+            Invoke-AISummaryAction $dialog
             $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'overlong generation consent'
             if ((Find-Element $aiConsent 'Id' 'OpenAIConsentNotice').Current.Name -notmatch '180-220.*600.*4 requests.*1200') { throw 'Consent must explain budgets and bounded billed rewrites.' }
             $requestsBefore = @(Get-Content -LiteralPath (Join-Path $evidence 'openai-requests.jsonl')).Count
@@ -659,7 +716,7 @@ try {
     }
     Remove-Item -LiteralPath (Join-Path $evidence 'overlong-summary')
     [IO.File]::WriteAllText((Join-Path $evidence 'legacy-review-draft'), 'Simulate old in-flight helper result')
-    Invoke-Button $dialog 'AiPromptSummaries'
+    Invoke-AISummaryAction $dialog
     $aiConsent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'legacy generation consent'
     Invoke-Button $aiConsent 'ConfirmOpenAIGeneration'
     $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'legacy unsaved 1457 draft'

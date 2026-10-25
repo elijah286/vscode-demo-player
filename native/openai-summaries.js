@@ -4,6 +4,8 @@ const { recordedOutput, summaryPrompt, QUESTION_CONTEXT_LENGTH, summaryQuestionC
 const ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_MODEL = 'gpt-4.1-mini';
 const MODEL_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,179}$/;
+// JSON Schema counts Unicode characters; 300 also fits 600 UTF-16 code units.
+const SUMMARY_PATTERN = '^[^\\r\\n]{1,300}$';
 
 class SummaryError extends Error {
     constructor(message, code = 'OPENAI_FAILED') { super(message); this.code = code; }
@@ -82,7 +84,7 @@ async function requestOpenAISummary({ apiKey, model, source, kind, partial, comb
                 text: { format: {
                     type: 'json_schema', name: 'demo_player_summary', strict: true,
                     schema: {
-                        type: 'object', properties: { summary: { type: 'string' } },
+                        type: 'object', properties: { summary: { type: 'string', pattern: SUMMARY_PATTERN } },
                         required: ['summary'], additionalProperties: false
                     }
                 } }
@@ -115,7 +117,7 @@ async function requestOpenAISummary({ apiKey, model, source, kind, partial, comb
         const message = response.status === 429
             ? 'OpenAI quota or rate limit reached. Check API billing and limits, then retry explicitly.'
             : response.status === 403 ? 'OpenAI denied access. Check project permissions and model access.'
-                : response.status === 400 || response.status === 404 ? 'OpenAI rejected the request or model. Check the model ID and API access in Settings.'
+                : response.status === 400 || response.status === 404 ? 'OpenAI rejected the model or required constrained summary schema. Choose a model that supports strict Structured Outputs with string patterns in Settings (for example gpt-4.1-mini). The length constraint will not be disabled.'
                     : 'OpenAI failed to generate a summary (HTTP ' + response.status + '). Retry explicitly later.';
         throw new SummaryError(message + ' No summaries were saved.');
     }
@@ -174,4 +176,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary };
+module.exports = { ENDPOINT, DEFAULT_MODEL, SUMMARY_PATTERN, prepareSummaries, generateOpenAISummary };
