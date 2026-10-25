@@ -545,8 +545,9 @@ try {
             ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
             Invoke-Button $dialog 'SelectDemo'
             Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'SummaryDisplayLanguage').Current.IsEnabled } 'saved language restored after restart' | Out-Null
-            $persistedLanguage = ([System.Windows.Automation.SelectionPattern](Find-Element $window 'Id' 'SummaryDisplayLanguage').GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)).Current.GetSelection()[0].Current.Name
-            if ($persistedLanguage -cne 'Simplified Chinese (Mandarin)') { throw 'Restart lost the saved display language.' }
+            $persistedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            $persistedLabel = Find-Element (Find-Element $window 'Id' 'SummaryDisplayLanguage') 'Name' 'Simplified Chinese (Mandarin)'
+            if ($persistedEntry.recording.summaryLanguage -cne 'zh-CN' -or $persistedLabel.Current.IsOffscreen) { throw 'Restart lost the saved display language or its visible label.' }
             $translationRequests = @(Get-Content (Join-Path $evidence 'translation-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
             if ($translationRequests.Count -ne 24) { throw 'Unexpected translation request count or hidden retries.' }
             if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture -or [IO.File]::ReadAllText($target) -cne $targetContent) { throw 'Translation/playback changed original source or edit target.' }
