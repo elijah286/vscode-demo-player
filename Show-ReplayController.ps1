@@ -258,7 +258,9 @@ function Update-ControllerSummaryLinks {
             if ($summaryLanguage.Tag -cne $languageStamp) {
                 $summaryLanguage.Items.Clear()
                 foreach ($item in @($script:selectedDemo.summaryLanguages)) {
-                    if ($null -ne $item) { $summaryLanguage.Items.Add($item) | Out-Null }
+                    if ($null -ne $item) {
+                        $summaryLanguage.Items.Add([pscustomobject]@{ value = [string]$item.value; label = [string]$item.label }) | Out-Null
+                    }
                 }
                 $summaryLanguage.Tag = $languageStamp
             }

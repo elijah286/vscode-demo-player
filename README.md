@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.28](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.28/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.29](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.29/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -738,6 +738,10 @@ For focused synthetic desktop acceptance, run `test\controller-ui.ps1` with
 choices, review cancellation and explicit saving, unchanged English exchanges,
 and Chinese prompt/reply summaries through isolated native playback.
 The mocked responses do not certify live-provider translation fidelity.
+It also verifies offline Original/Chinese switching in both overlay modes,
+native playback in both languages and selection persistence after restart.
+Use `-PickerOnly` instead for focused six-exchange/two-unavailable desktop
+acceptance, available-subset actions/capture and all-unavailable feedback.
 
 **Settings**, immediately left of **Check for updates**, lets you save, replace
 or delete an OpenAI API key and change the model ID. AI generation prompts for

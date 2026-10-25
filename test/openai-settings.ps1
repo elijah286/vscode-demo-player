@@ -184,15 +184,17 @@ try {
         $script:selectedDemo = @{ count = 1; summaryCounts = @{ input = 0; output = 0 } }
         & $links
         Assert-True (-not $translateSummaries.IsEnabled) 'Generate or save summaries before translating.'
-        $script:selectedDemo = @{ id = 'synthetic'; count = 1; summaryCounts = @{ input = 1; output = 1 }
-            summaryLanguage = 'fr'; summaryLanguages = @(
-                [pscustomobject]@{ value = 'original'; label = 'Original' },
-                [pscustomobject]@{ value = 'fr'; label = 'French' }
-            )
-        }
+        $script:selectedDemo = [DemoLibraryJson]::Parse('{"id":"synthetic","count":1,"summaryCounts":{"input":1,"output":1},"summaryLanguage":"fr","summaryLanguages":[{"value":"original","label":"Original"},{"value":"fr","label":"French"}]}')
         & $links
         Assert-True ($summaryLanguage.IsEnabled -and $summaryLanguage.SelectedValue -ceq 'fr') 'Saved languages enable the picker and restore the persisted selection.'
         Assert-True ($summaryLanguage.Items.Count -eq 2) 'Only available language versions are offered.'
+        foreach ($item in $summaryLanguage.Items) {
+            $label = [Windows.Controls.TextBlock]::new()
+            $binding = [Windows.Data.Binding]::new('label')
+            $binding.Source = $item
+            [Windows.Data.BindingOperations]::SetBinding($label, [Windows.Controls.TextBlock]::TextProperty, $binding) | Out-Null
+            Assert-True ($label.Text -ceq $item.label) 'Production JSON language choices have WPF-bindable visible labels.'
+        }
         $firstItem = $summaryLanguage.Items[0]
         & $links
         Assert-True ([object]::ReferenceEquals($firstItem, $summaryLanguage.Items[0])) 'Routine refresh does not rebuild the language list.'
