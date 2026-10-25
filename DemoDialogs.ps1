@@ -1034,6 +1034,14 @@ function Show-DemoSummaryScope($Owner) {
     }
 }
 
+function Get-DemoSummaryExpected($Recording) {
+    return @{
+        promptSummaries = $Recording.promptSummaries; outputSummaries = $Recording.outputSummaries
+        playbackIncluded = $Recording.playbackIncluded; summaryLanguage = $Recording.summaryLanguage
+        summaryRevision = $Recording.summaryRevision
+    }
+}
+
 function Show-DemoExchangeSelection($Owner, [string]$Id) {
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
     $outputs = @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner)
@@ -1099,7 +1107,7 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
             $replies = if ($null -ne $entry.recording.outputSummaries) { @($entry.recording.outputSummaries) } else { [object[]]::new($checks.Count) }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
                 summaries = @{ promptSummaries = @($inputs); outputSummaries = @($replies); playbackIncluded = @($checks | ForEach-Object { [bool]$_.IsChecked }) }
-                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
+                expected = Get-DemoSummaryExpected $entry.recording
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { $dialog.FindName('Error').Text = $_.Exception.Message }
@@ -1151,6 +1159,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
     $outputDrafts = [object[]]::new($entry.recording.turns.Count)
     if ($null -ne $entry.recording.outputSummaries) { $outputDrafts = [object[]]$entry.recording.outputSummaries.Clone() }
+    if ($Generated.Language) {
+        $variant = $entry.recording.summaryVariants.($Generated.Language)
+        $drafts = [object[]]::new($entry.recording.turns.Count)
+        $outputDrafts = [object[]]::new($entry.recording.turns.Count)
+        if ($null -ne $variant) {
+            $drafts = [object[]]$variant.promptSummaries.Clone()
+            $outputDrafts = [object[]]$variant.outputSummaries.Clone()
+        }
+    }
     $generatedOriginals = @{}
     if ($Generated) {
         $dialog.Title = 'Review AI Summaries'
@@ -1300,8 +1317,9 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             $issues = @(& $reviewIssues)
             if ($issues.Count) { throw ($issues -join "`n") }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
+                language = $Generated.Language
                 summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs); playbackIncluded = @($dialog.Tag.Included) }
-                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
+                expected = Get-DemoSummaryExpected $entry.recording
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
@@ -1320,7 +1338,7 @@ function Show-DemoClearSummariesNotice($Owner, [string]$Id) {
     if ($answer -ne 'OK') { return $false }
     Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
         summaries = @{ promptSummaries = @([object[]]::new($entry.recording.turns.Count)); outputSummaries = @([object[]]::new($entry.recording.turns.Count)) }
-        expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+        expected = Get-DemoSummaryExpected $entry.recording
     } $Owner | Out-Null
     return $true
 }

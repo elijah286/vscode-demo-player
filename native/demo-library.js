@@ -12,6 +12,10 @@ const MAX_BYTES = 100 * 1024 * 1024;
 const MAX_TURNS = 100;
 const MAX_DEMOS = 1000;
 const NOTICE = 'Recorded payloads only. External files, images, and link targets are not bundled. Tool transitions and timing are reconstructed for presentation.';
+const SUMMARY_LANGUAGES = Object.freeze({
+    original: 'Original', 'zh-CN': 'Simplified Chinese (Mandarin)', fr: 'French',
+    de: 'German', it: 'Italian', en: 'English'
+});
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const contentHash = value => hash(JSON.stringify(value));
@@ -112,6 +116,7 @@ function validatePackage(value) {
     if (!Array.isArray(value.turns) || !value.turns.length || value.turns.length > MAX_TURNS) throw new Error('A demo must contain 1 to 100 exchanges.');
     validatePromptSummaries(value.promptSummaries, value.turns.length);
     validatePromptSummaries(value.outputSummaries, value.turns.length);
+    validateSummaryLanguages(value);
     validatePlaybackIncluded(value.playbackIncluded, value.turns.length);
     const indices = new Set();
     for (const turn of value.turns) {
@@ -186,25 +191,84 @@ function validatePromptSummaries(summaries, count) {
     }
 }
 
-async function savePromptSummaries(root, id, summaries, expected, kind = 'input') {
+function validateSummaryLanguages(recording) {
+    if (recording.summaryVariants === undefined && recording.summaryLanguage === undefined) return;
+    const variants = recording.summaryVariants;
+    if (!uuid.test(recording.summaryRevision) || !variants || typeof variants !== 'object' || Array.isArray(variants) ||
+        !Object.hasOwn(variants, 'original') || !Object.hasOwn(variants, recording.summaryLanguage)) {
+        throw new Error('Invalid saved summary languages.');
+    }
+    for (const [language, pair] of Object.entries(variants)) {
+        if (!Object.hasOwn(SUMMARY_LANGUAGES, language) || !pair) throw new Error('Invalid saved summary language.');
+        for (const field of ['promptSummaries', 'outputSummaries']) {
+            if (pair[field] === undefined) throw new Error('Missing language summaries.');
+            validatePromptSummaries(pair[field], recording.turns.length);
+        }
+    }
+    for (const field of ['promptSummaries', 'outputSummaries']) {
+        if (JSON.stringify(recording[field]) !== JSON.stringify(variants[recording.summaryLanguage][field])) {
+            throw new Error('Displayed summaries do not match the selected language.');
+        }
+    }
+}
+
+function summaryPair(recording) {
+    return Object.fromEntries(['promptSummaries', 'outputSummaries'].map(field =>
+        [field, recording[field] ?? recording.turns.map(() => null)]));
+}
+
+function assertSummaryLanguage(recording, expected) {
+    if ((recording.summaryLanguage ?? 'original') !== (expected?.summaryLanguage ?? 'original') ||
+        (recording.summaryRevision ?? null) !== (expected?.summaryRevision ?? null)) {
+        throw new Error('Summary languages changed since opening this editor. Reopen it before saving.');
+    }
+}
+
+async function selectSummaryLanguage(root, id, language, expected) {
+    if (!Object.hasOwn(SUMMARY_LANGUAGES, language)) throw new Error('Choose a supported summary language.');
+    return withLock(root, async () => {
+        const entry = await readEntry(root, id);
+        assertSummaryLanguage(entry.recording, expected);
+        for (const field of ['promptSummaries', 'outputSummaries']) {
+            if (JSON.stringify(entry.recording[field] ?? null) !== JSON.stringify(expected?.[field] ?? null)) {
+                throw new Error('Summaries changed since choosing a language. Refresh before switching.');
+            }
+        }
+        if (!entry.recording.summaryVariants?.[language]) throw new Error('Translate and save summaries in this language before selecting it.');
+        entry.recording.summaryLanguage = language;
+        entry.recording.summaryRevision = crypto.randomUUID();
+        Object.assign(entry.recording, entry.recording.summaryVariants[language]);
+        await atomicEntry(root, entry, true);
+        return summarize(entry);
+    });
+}
+
+async function savePromptSummaries(root, id, summaries, expected, kind = 'input', expectedLanguages) {
     if (!['input', 'output'].includes(kind)) throw new Error('Unknown summary kind.');
     const field = kind === 'input' ? 'promptSummaries' : 'outputSummaries';
     return withLock(root, async () => {
         const entry = await readEntry(root, id);
+        assertSummaryLanguage(entry.recording, expectedLanguages);
         validatePromptSummaries(summaries, entry.recording.turns.length);
         if (summaries === undefined) throw new Error('Supply the summaries to save.');
         if (JSON.stringify(entry.recording[field] ?? null) !== JSON.stringify(expected)) {
             throw new Error('Summaries changed since opening this editor. Reopen it before saving.');
         }
         entry.recording[field] = summaries;
+        if (entry.recording.summaryVariants) {
+            entry.recording.summaryVariants[entry.recording.summaryLanguage] = summaryPair(entry.recording);
+            entry.recording.summaryRevision = crypto.randomUUID();
+        }
         await atomicEntry(root, entry, true);
         return summarize(entry);
     });
 }
 
-async function saveSummaryBatch(root, id, summaries, expected) {
+async function saveSummaryBatch(root, id, summaries, expected, language) {
+    if (language !== undefined && !Object.hasOwn(SUMMARY_LANGUAGES, language)) throw new Error('Choose a supported summary language.');
     return withLock(root, async () => {
         const entry = await readEntry(root, id);
+        assertSummaryLanguage(entry.recording, expected);
         for (const field of ['promptSummaries', 'outputSummaries']) {
             validatePromptSummaries(summaries?.[field], entry.recording.turns.length);
             if (summaries?.[field] === undefined) throw new Error('Supply both input and output summaries.');
@@ -219,8 +283,16 @@ async function saveSummaryBatch(root, id, summaries, expected) {
             }
             entry.recording.playbackIncluded = summaries.playbackIncluded;
         }
+        if (language !== undefined && !entry.recording.summaryVariants) {
+            entry.recording.summaryVariants = { original: summaryPair(entry.recording) };
+        }
         entry.recording.promptSummaries = summaries.promptSummaries;
         entry.recording.outputSummaries = summaries.outputSummaries;
+        if (entry.recording.summaryVariants) {
+            entry.recording.summaryLanguage = language ?? entry.recording.summaryLanguage;
+            entry.recording.summaryVariants[entry.recording.summaryLanguage] = summaryPair(entry.recording);
+            entry.recording.summaryRevision = crypto.randomUUID();
+        }
         await atomicEntry(root, entry, true);
         return summarize(entry);
     });
@@ -267,7 +339,9 @@ function summarize(entry) {
         input: indices.filter(index => entry.recording.promptSummaries?.[index]).length,
         output: indices.filter(index => entry.recording.outputSummaries?.[index]).length
     };
-    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: indices.length, totalCount: entry.recording.turns.length, summaryCounts, source: entry.recording.source.fileName, preview: recordings[0].request.message.text, notice: entry.recording.notice, presentation: { overlay, progress, estimateProfile } };
+    const summaryLanguage = entry.recording.summaryLanguage ?? 'original';
+    const summaryLanguages = Object.keys(entry.recording.summaryVariants ?? { original: null }).map(value => ({ value, label: SUMMARY_LANGUAGES[value] }));
+    return { id: entry.id, title: entry.title, createdAt: entry.recording.createdAt, count: indices.length, totalCount: entry.recording.turns.length, summaryCounts, summaryLanguage, summaryLanguages, source: entry.recording.source.fileName, preview: recordings[0].request.message.text, notice: entry.recording.notice, presentation: { overlay, progress, estimateProfile } };
 }
 
 async function listDemos(root) {
@@ -453,4 +527,4 @@ async function discoverSessions(storageRoot, folder) {
     ].join(' ') };
 }
 
-module.exports = { FORMAT, NOTICE, MAX_BYTES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, entryMetadata, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch, includedTurnIndices };
+module.exports = { FORMAT, NOTICE, MAX_BYTES, SUMMARY_LANGUAGES, defaultLibraryRoot, inspectTranscript, createPackage, validatePackage, readPackage, packageRecordings, readEntry, listDemos, entryMetadata, addPackage, renameDemo, deleteDemo, exportDemo, discoverSessions, readBounded, parseSnapshot, sessionIndex, validatePromptSummaries, savePromptSummaries, saveSummaryBatch, selectSummaryLanguage, includedTurnIndices };

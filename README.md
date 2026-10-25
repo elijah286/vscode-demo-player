@@ -712,12 +712,24 @@ Each summary permits up to four requests for length correction within 90 seconds
 failed/refused requests are not retried automatically.
 
 Choose **Translate and review**, check/edit the drafts against the originals,
-then **Save summaries**. Saving replaces only the saved overlay summaries,
-including their exported copies; it does not translate or modify the English
+then **Save summaries**. Saving retains a separate version for that language and
+selects it for display; it does not translate or modify the English
 chat, recordings, payload hashes or replayed prompts/replies. Both the prompt-only
 summary and input/output conversation window use the saved translation.
-There is no separate English-summary backup or per-language cache: translate
-again with **English**, or edit/regenerate summaries, to return to English.
+Use **Summary language** below the translation button to select **Original** or
+any saved translation. Stop playback before switching; the next playback uses
+that language in both overlay modes, counts and timing estimates. Switching is
+offline, makes no AI requests and persists for that recording across restarts
+and export/import. The dropdown is disabled until another language is saved.
+Manual edits/deletions affect only the selected language. To generate missing
+summaries from the recorded conversation, select **Original**, then translate
+again as needed; language versions are not automatically synchronized.
+Only included summaries are translated into a new version; missing/excluded
+summaries are not filled with another language. Existing versions remain intact.
+**Original** means the summaries saved before the first language-versioned
+translation, not necessarily English. Older translations that already overwrote
+English summaries have no recoverable English backup; translate them to
+**English** or edit them to create a new version.
 Canceling review leaves saved summaries unchanged. Saved translations work
 offline during playback; translation itself requires access to OpenAI.
 

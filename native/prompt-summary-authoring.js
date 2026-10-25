@@ -252,6 +252,9 @@ function activateSummaryAuthoring(context, vscode, file) {
             const root = path.dirname(file);
             const id = path.basename(file, '.demo.json');
             const entry = await readEntry(root, id);
+            if (entry.recording.summaryLanguage && entry.recording.summaryLanguage !== 'original') {
+                throw new Error('Select Original in Summary language before generating missing summaries.');
+            }
             const included = new Set(includedTurnIndices(entry.recording));
             const manualOutputs = [];
             const candidates = entry.recording.turns.flatMap((turn, index) => {
@@ -381,11 +384,13 @@ function activateSummaryAuthoring(context, vscode, file) {
             if (!reviewed) return;
             if (scope !== 'both') {
                 const field = scope === 'input' ? 'promptSummaries' : 'outputSummaries';
-                await savePromptSummaries(root, id, summaries[field], entry.recording[field] ?? null, scope);
+                await savePromptSummaries(root, id, summaries[field], entry.recording[field] ?? null, scope, entry.recording);
             } else {
                 await saveSummaryBatch(root, id, summaries, {
                     promptSummaries: entry.recording.promptSummaries ?? null,
-                    outputSummaries: entry.recording.outputSummaries ?? null
+                    outputSummaries: entry.recording.outputSummaries ?? null,
+                    summaryLanguage: entry.recording.summaryLanguage,
+                    summaryRevision: entry.recording.summaryRevision
                 });
             }
             void vscode.window.showInformationMessage('Saved reviewed summaries (' + reviewed.filter(turn => turn.summary !== null).length + ' approved, ' + reviewed.filter(turn => turn.summary === null).length + ' deleted). Return to the interaction picker and choose Use selected exchanges or Use saved selection; enable Show summary of output for the conversation overlay. Playback keeps complete originals and never calls AI.');

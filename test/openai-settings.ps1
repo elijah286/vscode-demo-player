@@ -4,6 +4,7 @@ Add-Type -AssemblyName PresentationFramework
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $root 'DemoDialogs.ps1')
 . (Join-Path $root 'PlayerAI.ps1')
+$summaryReview = ${function:Show-DemoSummaryDialog}
 $original = $env:LOCALAPPDATA
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('openai-settings-test-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($scratch) | Out-Null
@@ -141,6 +142,7 @@ try {
             Assert-True ($Generated.Drafts[0].kind -eq 'input' -and $Generated.Drafts[1].kind -eq 'output') 'Review retains aligned input/output kinds.'
             Assert-True ($Generated.Outputs[0] -ceq 'Original English reply') 'Review retains the English original for comparison.'
             Assert-True ($Generated.Entry.id -eq 'synthetic') 'Review retains the optimistic save snapshot.'
+            Assert-True ($Generated.Language -ceq $script:translationLanguage) 'Review carries the selected language through to the versioned save.'
         }
         foreach ($mode in @('confirm', 'cancel', 'failure')) {
             foreach ($language in @('zh-CN', 'fr', 'de', 'it', 'en')) {
@@ -162,6 +164,7 @@ try {
         }, $true)
         $window = [Windows.Markup.XamlReader]::Parse($xamlNode.Value)
         $translateSummaries = $window.FindName('TranslateSummaries')
+        $summaryLanguage = $window.FindName('SummaryLanguage')
         $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
         $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
         $selectExchanges = $window.FindName('SelectExchanges')
@@ -181,8 +184,130 @@ try {
         $script:selectedDemo = @{ count = 1; summaryCounts = @{ input = 0; output = 0 } }
         & $links
         Assert-True (-not $translateSummaries.IsEnabled) 'Generate or save summaries before translating.'
+        $script:selectedDemo = @{ id = 'synthetic'; count = 1; summaryCounts = @{ input = 1; output = 1 }
+            summaryLanguage = 'fr'; summaryLanguages = @(
+                [pscustomobject]@{ value = 'original'; label = 'Original' },
+                [pscustomobject]@{ value = 'fr'; label = 'French' }
+            )
+        }
+        & $links
+        Assert-True ($summaryLanguage.IsEnabled -and $summaryLanguage.SelectedValue -ceq 'fr') 'Saved languages enable the picker and restore the persisted selection.'
+        Assert-True ($summaryLanguage.Items.Count -eq 2) 'Only available language versions are offered.'
+        $firstItem = $summaryLanguage.Items[0]
+        & $links
+        Assert-True ([object]::ReferenceEquals($firstItem, $summaryLanguage.Items[0])) 'Routine refresh does not rebuild the language list.'
+        $script:ReplayProcessId = 123
+        & $links
+        Assert-True (-not $summaryLanguage.IsEnabled) 'Language changes are disabled during playback.'
+        $script:ReplayProcessId = $null
+        $script:selectedDemo.summaryLanguage = 'original'
+        $script:selectedDemo.summaryLanguages = @([pscustomobject]@{ value = 'original'; label = 'Original' })
+        & $links
+        Assert-True (-not $summaryLanguage.IsEnabled -and $summaryLanguage.SelectedValue -ceq 'original') 'Untranslated recordings show Original without offering unavailable languages.'
+        $script:selectedDemo = $null
+        & $links
+        Assert-True (-not $summaryLanguage.IsEnabled -and $summaryLanguage.Items.Count -eq 0) 'Changing away from a recording clears its language choices.'
+        function Test-DisplayLanguageInteraction {
+            $script:displayReads = 0
+            $script:displaySaves = 0
+            $script:displayIdleUpdates = 0
+            $script:translationFailure = $null
+            $script:selectedDemo = @{ id = 'synthetic'; count = 1; summaryCounts = @{ input = 1; output = 1 }
+                summaryLanguage = 'fr'; summaryLanguages = @(
+                    [pscustomobject]@{ value = 'original'; label = 'Original' },
+                    [pscustomobject]@{ value = 'fr'; label = 'French' }
+                )
+            }
+            function Invoke-DemoLibrary($Request, $Owner) {
+                if ($Request.command -eq 'read') {
+                    $script:displayReads++
+                    return @{ recording = @{
+                        promptSummaries = @('Bonjour.'); outputSummaries = @('Oui.')
+                        summaryLanguage = 'fr'; summaryRevision = 'synthetic-revision'
+                        turns = @('Private original payload must not be sent back')
+                        summaryVariants = @{ original = 'Not needed in optimistic save request' }
+                    } }
+                }
+                Assert-True ($Request.command -eq 'summaryLanguage') 'Display switching uses only the offline library helper, never the AI provider.'
+                Assert-True ($Request.language -ceq 'original') 'The requested display language reaches persistence.'
+                Assert-True ($Request.expected.summaryRevision -ceq 'synthetic-revision') 'Display switching checks the current language revision.'
+                Assert-True (-not $Request.expected.ContainsKey('turns') -and -not $Request.expected.ContainsKey('summaryVariants')) 'Optimistic state excludes original payloads and the potentially large language cache.'
+                $script:displaySaves++
+                $script:selectedDemo.summaryLanguage = $Request.language
+                return $script:selectedDemo
+            }
+            function Set-IdleView { $script:displayIdleUpdates++ }
+            function Update-ControllerSummaryLinks { & $links }
+            & $links
+            $handler = $controller.Find({ param($node)
+                $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+                $node.Expression.Extent.Text -eq '$summaryLanguage' -and $node.Member.Value -eq 'Add_SelectionChanged'
+            }, $true).Arguments[0].ScriptBlock.GetScriptBlock()
+            $summaryLanguage.Add_SelectionChanged($handler)
+            $summaryLanguage.SelectedItem = $summaryLanguage.Items[0]
+            Assert-True ($displayReads -eq 1 -and $displaySaves -eq 1 -and $displayIdleUpdates -eq 1) "A real WPF selection event persists once and immediately refreshes the idle overlay. Reads=$displayReads Saves=$displaySaves Idle=$displayIdleUpdates Error=$translationFailure"
+            Assert-True ($null -eq $translationFailure) 'Successful display switching reports no error.'
+            $script:ReplayProcessId = 123
+            & $links
+            $summaryLanguage.SelectedItem = $summaryLanguage.Items[1]
+            Assert-True ($displaySaves -eq 1 -and $translationFailure -match 'Stop playback') 'Even programmatic changes while replay is attached are rejected visibly without writes.'
+            Assert-True ($summaryLanguage.SelectedItem.value -ceq 'original') 'A rejected selection restores the saved language.'
+            $script:ReplayProcessId = $null
+            $summaryLanguage.Remove_SelectionChanged($handler)
+        }
+        Test-DisplayLanguageInteraction
     }
     Test-TranslationWorkflow
+    function Test-VersionedTranslationReview {
+        function Get-DemoSummaryWorkArea($Window) { return [Windows.SystemParameters]::WorkArea }
+        function Invoke-DemoLibrary($Request, $Owner) {
+            Assert-True ($Request.command -eq 'summaryBatch') 'Review persists all translated drafts in one batch.'
+            $script:reviewCaptured = $Request
+        }
+        function New-DemoDialog($Xaml, $Owner) {
+            $parsed = [Windows.Markup.XamlReader]::Parse($Xaml)
+            $fake = [pscustomobject]@{ Window = $parsed; Tag = $null; DialogResult = $false; Title = '' }
+            $fake | Add-Member ScriptMethod FindName { param($Name) return $this.Window.FindName($Name) }
+            $fake | Add-Member ScriptMethod ShowDialog {
+                Assert-True ($this.FindName('Summary').Text -ceq 'Translated input.') 'Review shows the generated target-language draft.'
+                $this.FindName('Exchange').SelectedIndex = 2
+                Assert-True ($this.FindName('Summary').Text -ceq $script:expectedExcluded) 'Excluded summaries use the target version, never a different source language.'
+                $this.FindName('Save').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                return $this.DialogResult
+            }
+            return $fake
+        }
+        function Show-DemoError($Owner, $Failure) { throw $Failure }
+        foreach ($language in @('it', 'de')) {
+            $script:reviewCaptured = $null
+            $script:expectedExcluded = if ($language -eq 'de') { 'Saved German excluded summary.' } else { '' }
+            $recording = @{
+                turns = @(
+                    @{ snapshot = @{ requests = @(@{ message = @{ text = 'Original input.' } }) } },
+                    @{ snapshot = @{ requests = @(@{ message = @{ text = 'Excluded input.' } }) } }
+                )
+                promptSummaries = @('French source summary.', 'Excluded French summary.')
+                outputSummaries = @('French source reply.', $null)
+                playbackIncluded = @($true, $false); summaryLanguage = 'fr'; summaryRevision = 'snapshot-revision'
+                summaryVariants = @{ de = @{
+                    promptSummaries = @('Old German.', 'Saved German excluded summary.'); outputSummaries = @('Old German reply.', $null)
+                } }
+            }
+            $generated = [pscustomobject]@{
+                Entry = @{ recording = $recording }; Outputs = @('Original reply.', 'Excluded reply.')
+                Language = $language; Drafts = @(
+                    @{ index = 0; kind = 'input'; summary = 'Translated input.' },
+                    @{ index = 0; kind = 'output'; summary = 'Translated output.' }
+                )
+            }
+            Assert-True (& $summaryReview $null 'synthetic' $generated) 'The reviewed translation can be saved without displaying a desktop window.'
+            Assert-True ($reviewCaptured.language -ceq $language) 'The save command carries the chosen language.'
+            Assert-True ($reviewCaptured.expected.summaryRevision -ceq 'snapshot-revision' -and -not $reviewCaptured.expected.ContainsKey('turns')) 'Review saves against the bounded optimistic snapshot.'
+            Assert-True ($reviewCaptured.summaries.outputSummaries[0] -ceq 'Translated output.') 'Both target-language summary kinds are saved.'
+            Assert-True ($recording.promptSummaries[0] -ceq 'French source summary.') 'Draft review does not mutate the saved source language.'
+        }
+    }
+    Test-VersionedTranslationReview
     $script:NodePath = if ($NodePath) { $NodePath } else { (Get-Command node.exe -ErrorAction Stop).Source }
     $script:LibraryRoot = Join-Path $scratch 'library'
     foreach ($helper in @('openai-summaries.js', 'library-cli.js')) {
