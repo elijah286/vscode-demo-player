@@ -79,7 +79,7 @@ if (-not $script:standalone) {
               VerticalAlignment="Center" AutomationProperties.AutomationId="AutoContinue"
               ToolTip="Advance after completion and 2-10 seconds to read the visible summary. Uncheck to stay on this exchange."/>
     <Button x:Name="SelectExchanges" Grid.Row="12" Content="Select exchanges..." IsEnabled="False"
-            AutomationProperties.AutomationId="SelectExchanges" ToolTip="Choose exchanges for the next replay. Stop playback first."/>
+            AutomationProperties.AutomationId="SelectExchanges" ToolTip="Choose exchanges before playback or while paused. Saving while paused prepares the current included exchange, or the next included exchange, without autoplay."/>
     <StackPanel Grid.Row="13" Margin="0,8,0,0">
       <TextBlock x:Name="SpeedLabel" Text="Speed: user 2.0s / reply 5.0s" FontSize="12"/>
       <Slider x:Name="PlaybackSpeed" Minimum="0" Maximum="100" Value="0" TickFrequency="1" IsSnapToTickEnabled="True"
@@ -162,7 +162,7 @@ $selectExchanges = $window.FindName('SelectExchanges')
 $playbackSpeed = $window.FindName('PlaybackSpeed')
 $speedLabel = $window.FindName('SpeedLabel')
 $runEstimate = $window.FindName('RunEstimate')
-$playbackSpeed.Add_ValueChanged({ Update-PlaybackEstimate })
+$playbackSpeed.Add_ValueChanged({ Cancel-AutoContinue; Update-PlaybackEstimate })
 $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
 $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
 $frameColor = $window.FindName('FrameColor')
@@ -200,6 +200,7 @@ $script:launching = $false
 $script:autoDeadline = $null
 $script:autoKey = $null
 $script:autoHandledKey = $null
+$script:selectionResumePending = $false
 $windowMode.SelectedIndex = 0
 . (Join-Path $PSScriptRoot 'ReplayPresentation.ps1')
 
@@ -212,7 +213,10 @@ function Update-ControllerSummaryLinks {
     $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen -and -not $script:launching -and -not $window.Resources.Contains('DemoPlayerOperation')
     $generatePromptSummaries.IsEnabled = $enabled
     $generateOutputSummaries.IsEnabled = $enabled
-    $selectExchanges.IsEnabled = $enabled
+    $pausedSelection = $script:ReplayProcessId -and $script:lastView.action -eq 'resume' -and
+        $null -ne $script:lastView.originalIndex -and -not $script:actionTask -and -not $script:stopping -and -not $script:switching
+    $selectExchanges.IsEnabled = [bool]$script:selectedDemo -and ($enabled -or ($pausedSelection -and
+        -not $script:pickerOpen -and -not $script:launching -and -not $script:summaryRefreshing -and -not $window.Resources.Contains('DemoPlayerOperation')))
 }
 
 function Refresh-ControllerSummaries {
@@ -249,16 +253,58 @@ function Invoke-ControllerSummaryAuthoring([ValidateSet('input', 'output')][stri
 }
 $generatePromptSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'input' })
 $generateOutputSummaries.Add_Click({ Invoke-ControllerSummaryAuthoring 'output' })
+function Get-ReselectionResumeTurn($Recording, [int]$OriginalIndex) {
+    $before = 0
+    for ($index = 0; $index -lt $Recording.turns.Count; $index++) {
+        if ($null -ne $Recording.playbackIncluded -and -not $Recording.playbackIncluded[$index]) { continue }
+        if ($index -ge $OriginalIndex) { break }
+        $before++
+    }
+    return $before
+}
+
 $selectExchanges.Add_Click({
     try {
         if (-not $selectExchanges.IsEnabled) { return }
-        Show-DemoExchangeSelection $window $script:selectedDemo.id | Out-Null
-        $script:summaryStamp = $null
-        Refresh-ControllerSummaries
+        $wasPaused = [bool]$script:ReplayProcessId
+        $originalIndex = $script:lastView.originalIndex
+        $script:pickerOpen = $true
+        Update-ControllerSummaryLinks
+        Cancel-AutoContinue -BlockCurrent
+        if (Show-DemoExchangeSelection $window $script:selectedDemo.id) {
+            if ($wasPaused) {
+                if (-not $script:ReplayProcessId -or $script:lastView.action -ne 'resume' -or $script:actionTask) {
+                    throw 'Selection was saved, but playback is no longer paused. Pause or reopen playback before applying the changed selection.'
+                }
+                $entry = Invoke-DemoLibrary @{ command = 'read'; id = $script:selectedDemo.id } $window
+                if ($showOutput.IsChecked) {
+                    $fitArea = Get-DemoSummaryWorkArea $script:overlayWindow
+                    Assert-DemoSummaryPairs $entry.recording $script:overlayWindow.Width ($fitArea.Width - 32) ($fitArea.Height - 32)
+                }
+                $script:selectedDemo = Invoke-DemoLibrary @{ command = 'metadata'; id = $script:selectedDemo.id } $window
+                $script:switchView = $script:lastView.PSObject.Copy()
+                $script:switchView.resumeTurn = Get-ReselectionResumeTurn $entry.recording ([int]$originalIndex)
+                $script:selectionResumePending = $true
+                $script:switching = $true
+                $script:deadline = [DateTime]::UtcNow.AddSeconds(15)
+                $playPause.IsEnabled = $false
+                $nextStep.IsEnabled = $false
+                $status.Text = 'Preparing changed exchange selection'
+                Send-Control 'stop'
+            } else {
+                $script:summaryStamp = $null
+            }
+        }
     } catch { Show-DemoError $window $_ }
+    finally {
+        $script:pickerOpen = $false
+        if (-not $script:ReplayProcessId) { Refresh-ControllerSummaries }
+        Update-ControllerSummaryLinks
+    }
 })
 
 function Set-IdleView {
+    $script:selectionResumePending = $false
     Cancel-AutoContinue -ResetRun
     $script:lastView = $script:selectedDemo.presentation
     $status.Text = if ($script:lastFault) { 'Stopped: ' + $script:lastFault } elseif ($script:selectedDemo) { 'Selected - ' + $script:selectedDemo.count + ' exchanges' } else { 'Find an agent interaction to replay' }
@@ -410,8 +456,8 @@ function Get-ReadingDwellSeconds([string]$Text) {
 
 function Get-EstimatedRunMilliseconds($Profile, [int]$Speed, [bool]$Auto, [bool]$Output, [bool]$Prompt) {
     $milliseconds = $Profile.count * (7000 - 59 * $Speed)
-    if ($Auto) {
-        $milliseconds += if ($Output) { $Profile.outputDwellMilliseconds } elseif ($Prompt) { $Profile.promptDwellMilliseconds } else { $Profile.noSummaryDwellMilliseconds }
+    if ($Auto -and $Output) {
+        $milliseconds += $Profile.outputDwellMilliseconds * (1 - 0.008 * $Speed)
     }
     return $milliseconds
 }
@@ -428,7 +474,7 @@ function Update-PlaybackEstimate {
 }
 
 function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
-    if (-not $autoContinue.IsChecked -or $script:stopping -or $script:switching -or
+    if (-not $autoContinue.IsChecked -or $script:stopping -or $script:switching -or $script:pickerOpen -or $script:selectionResumePending -or
         -not $script:pairedVisible -or $View.phase -ne 'review' -or -not $View.nextEnabled) {
         Cancel-AutoContinue
         return $false
@@ -437,9 +483,9 @@ function Test-AutoContinueDue($View, [DateTime]$Now = [DateTime]::UtcNow) {
     if (-not $key -or $key -ceq $script:autoHandledKey) { return $false }
     if ($key -cne $script:autoKey) {
         $script:autoKey = $key
-        $text = if ($showOutput.IsChecked) { [string]$View.overlay.conversation.outputSummary } elseif ($showPrompt.IsChecked) { [string]$View.overlay.promptSummary } else { '' }
+        $text = if ($showOutput.IsChecked) { [string]$View.overlay.conversation.outputSummary } else { '' }
         if ($showOutput.IsChecked -and [string]::IsNullOrWhiteSpace($text)) { $text = $script:missingOutputSummary }
-        $seconds = Get-ReadingDwellSeconds $text
+        $seconds = if ($showOutput.IsChecked) { (Get-ReadingDwellSeconds $text) * (1 - 0.008 * [int]$playbackSpeed.Value) } else { 0 }
         $script:autoDeadline = $Now.AddSeconds($seconds)
     }
     if ($script:actionTask -or $Now -lt $script:autoDeadline) { return $false }
@@ -453,8 +499,8 @@ $autoContinue.Add_Checked({ Update-PlaybackEstimate })
 $autoContinue.Add_Unchecked({ Update-PlaybackEstimate })
 $showPrompt.Add_Checked({ Update-PlaybackEstimate })
 $showPrompt.Add_Unchecked({ Update-PlaybackEstimate })
-$showOutput.Add_Checked({ Update-PlaybackEstimate })
-$showOutput.Add_Unchecked({ Update-PlaybackEstimate })
+$showOutput.Add_Checked({ Cancel-AutoContinue; Update-PlaybackEstimate })
+$showOutput.Add_Unchecked({ Cancel-AutoContinue; Update-PlaybackEstimate })
 
 function Send-Control([string]$Action) {
     if (-not $Action.StartsWith('speed?')) { Cancel-AutoContinue -BlockCurrent }
@@ -542,6 +588,7 @@ $playPause.Add_Click({
         return
     }
     if ($script:action) {
+        $script:selectionResumePending = $false
         $playPause.IsEnabled = $false
         $nextStep.IsEnabled = $false
         Send-Control $script:action
@@ -687,6 +734,16 @@ $timer.Add_Tick({
                 default { [char]0xE768 }
             }
             $script:lastView = $view
+            if ($script:selectionResumePending) {
+                if ($view.phase -in @('ready', 'review')) {
+                    $script:action = 'play'
+                    $primaryLabel.Text = 'Resume'
+                    $playPause.ToolTip = 'Resume at the selected exchange'
+                    [System.Windows.Automation.AutomationProperties]::SetName($playPause, 'Resume')
+                    $nextStep.IsEnabled = $false
+                } elseif ($view.phase -eq 'complete') { $script:selectionResumePending = $false }
+            }
+            Update-ControllerSummaryLinks
             $script:replayMode = $view.windowMode
             $script:modeUpdating = $true
             try { $windowMode.SelectedIndex = if ($view.windowMode -eq 'Agents') { 1 } else { 0 } } finally { $script:modeUpdating = $false }

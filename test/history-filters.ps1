@@ -384,7 +384,7 @@ try {
         $generatePromptSummaries = $controller.FindName('GeneratePromptSummaries')
         $generateOutputSummaries = $controller.FindName('GenerateOutputSummaries')
         $selectExchanges = $controller.FindName('SelectExchanges')
-        foreach ($name in @('Update-ControllerSummaryLinks', 'Refresh-ControllerSummaries', 'Invoke-ControllerSummaryAuthoring')) {
+        foreach ($name in @('Update-ControllerSummaryLinks', 'Refresh-ControllerSummaries', 'Invoke-ControllerSummaryAuthoring', 'Get-ReselectionResumeTurn')) {
             $definition = $controllerAst.Find({
                 param($node)
                 $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -415,6 +415,21 @@ try {
         Update-ControllerSummaryLinks
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'Playback disables authoring'
         Assert-Equal $selectExchanges.IsEnabled $false 'Playback disables exchange selection'
+        $script:lastView = [pscustomobject]@{ action = 'resume'; originalIndex = 2 }
+        $script:actionTask = $null
+        $script:stopping = $script:switching = $false
+        Update-ControllerSummaryLinks
+        Assert-Equal $selectExchanges.IsEnabled $true 'Paused playback enables exchange selection'
+        Assert-Equal $generateOutputSummaries.IsEnabled $false 'Paused playback still disables AI authoring'
+        $script:actionTask = [object]::new()
+        Update-ControllerSummaryLinks
+        Assert-Equal $selectExchanges.IsEnabled $false 'An in-flight control request disables selection'
+        $script:actionTask = $null
+        $recording = [pscustomobject]@{ turns = @(0,1,2,3,4); playbackIncluded = @($true,$false,$true,$false,$true) }
+        Assert-Equal (Get-ReselectionResumeTurn $recording 2) 1 'Keeping current restarts it at its new filtered position'
+        Assert-Equal (Get-ReselectionResumeTurn $recording 3) 2 'Removing current selects the next included exchange'
+        Assert-Equal (Get-ReselectionResumeTurn $recording 5) 3 'No later selection resumes at the completed end'
+        $script:lastView = $null
         $script:ReplayProcessId = 0
         $script:summaryRefreshing = $true
         Update-ControllerSummaryLinks

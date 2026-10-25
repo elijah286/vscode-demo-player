@@ -159,6 +159,7 @@ async function packageRecordings(file) {
     return includedTurnIndices(value).map(index => {
         const turn = value.turns[index];
         const recording = validateEditorRecording(extractRecording(file, turn.snapshot, 0));
+        recording.originalIndex = index;
         if (value.promptSummaries?.[index]) recording.promptSummary = value.promptSummaries[index];
         recording.outputSummary = value.outputSummaries?.[index] ?? null;
         return recording;

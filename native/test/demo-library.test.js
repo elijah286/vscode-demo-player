@@ -72,13 +72,19 @@ test('nonconsecutive inclusion preserves all originals and summary indices throu
     assert.deepEqual(playback.map(item => item.request.message.text), ['Input 1', 'Input 3', 'Input 7']);
     assert.deepEqual(playback.map(item => item.promptSummary), ['You 1', 'You 3', 'You 7']);
     assert.deepEqual(playback.map(item => item.outputSummary), ['AI 1', 'AI 3', 'AI 7']);
+    assert.deepEqual(playback.map(item => item.originalIndex), [0, 2, 6]);
     const { controlView } = require('../control-server');
     const complete = controlView({ phase: 'complete', turnIndex: 3, recordings: playback });
     assert.equal(complete.progress, '3/3');
     assert.equal(complete.overlay.elapsedMs, 11000);
     assert.deepEqual(complete.estimateProfile, {
-        count: 3, promptDwellMilliseconds: 4000, outputDwellMilliseconds: 4000, noSummaryDwellMilliseconds: 4000
+        count: 3, promptDwellMilliseconds: 0, outputDwellMilliseconds: 4000, noSummaryDwellMilliseconds: 0
     }, 'Excluded exchanges must not add playback phases or reading delays');
+    for (const [turnIndex, originalIndex] of [[0, 0], [1, 2], [2, 6]]) {
+        const paused = controlView({ phase: 'response', clock: { paused: true }, turnIndex, recordings: playback });
+        assert.equal(paused.action, 'resume');
+        assert.equal(paused.originalIndex, originalIndex);
+    }
     assert.deepEqual(complete.overlay.conversation.history.map(message => message.text), ['You 1', 'AI 1', 'You 3', 'AI 3', 'You 7', 'AI 7']);
     const after = await library.readEntry(root, saved.id);
     assert.deepEqual(after.recording.turns, before.recording.turns);

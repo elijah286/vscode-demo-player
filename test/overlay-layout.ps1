@@ -397,9 +397,9 @@ try {
         $script:lastView = [pscustomobject]@{ estimateProfile = $profile }
         foreach ($case in @(@(0,21000), @(50,12150), @(100,3300))) {
             Assert-Layout ((Get-EstimatedRunMilliseconds $profile $case[0] $false $false $false) -eq $case[1]) 'Full-run base estimate must match exact phase timing at endpoints and midpoint.'
-            Assert-Layout ((Get-EstimatedRunMilliseconds $profile $case[0] $true $true $false) -eq $case[1] + 12000) 'Auto estimate must include output reading dwell only between exchanges.'
+            Assert-Layout ((Get-EstimatedRunMilliseconds $profile $case[0] $true $true $false) -eq $case[1] + 12000 * (1 - 0.008 * $case[0])) 'Auto estimate must scale output reading dwell with speed only between exchanges.'
         }
-        Assert-Layout ((Get-EstimatedRunMilliseconds $profile 100 $true $false $true) -eq 7300) 'Prompt dwell selection must match auto continue.'
+        Assert-Layout ((Get-EstimatedRunMilliseconds $profile 100 $true $false $true) -eq 3300) 'Prompt-only playback must not insert another reading wait.'
         $single = [pscustomobject]@{ count = 1; outputDwellMilliseconds = 0; promptDwellMilliseconds = 0; noSummaryDwellMilliseconds = 0 }
         Assert-Layout ((Get-EstimatedRunMilliseconds $single 100 $true $true $true) -eq 1100) 'One fast exchange needs exactly 100ms user plus 1000ms reply and no final reading dwell.'
         Assert-Layout ((Get-EstimatedRunMilliseconds $single 0 $false $false $false) -eq 7000) 'One normal exchange retains the default seven-second phase total.'
@@ -413,7 +413,7 @@ try {
         $autoContinue.IsChecked = $true
         $showOutput.IsChecked = $true
         Update-PlaybackEstimate
-        Assert-Layout ($runEstimate.Text -eq 'Estimated total: 00:00:16 (auto)') 'Auto estimate must include the reading interval.'
+        Assert-Layout ($runEstimate.Text -eq 'Estimated total: 00:00:06 (auto)') 'Auto estimate must include the speed-scaled reading interval.'
         $autoContinue.IsChecked = $false
         $script:pairedVisible = $true
         $script:actionTask = $null
@@ -424,8 +424,11 @@ try {
         $now = [DateTime]::new(2026,1,1)
         Assert-Layout (-not (Test-AutoContinueDue $view $now)) 'Manual mode must never advance.'
         $autoContinue.IsChecked = $showOutput.IsChecked = $true
+        $playbackSpeed.Value = 0
         Assert-Layout (-not (Test-AutoContinueDue $view $now)) 'First completed poll must schedule, not skip newly revealed output.'
         $deadline = $script:autoDeadline
+        Update-PlaybackEstimate
+        Assert-Layout ($script:autoDeadline -eq $deadline) 'Presentation refresh must not restart an active reading deadline.'
         Assert-Layout (($deadline - $now).TotalSeconds -gt 9 -and ($deadline - $now).TotalSeconds -le 10) '300 characters need a measurable reading dwell.'
         Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(1)) -and $script:autoDeadline -eq $deadline) 'Repeated polls must not move deadline.'
         Assert-Layout (-not (Test-AutoContinueDue $view $deadline.AddTicks(-1))) 'May not advance before deadline.'
@@ -444,6 +447,21 @@ try {
         Test-AutoContinueDue $view $now | Out-Null
         Cancel-AutoContinue -BlockCurrent
         Assert-Layout (-not (Test-AutoContinueDue $view $now.AddSeconds(30))) 'Manual action must suppress pending current advance.'
+        Cancel-AutoContinue -ResetRun
+        $playbackSpeed.Value = 100
+        $view.overlay.conversation.key = 'fast-output'
+        Test-AutoContinueDue $view $now | Out-Null
+        Assert-Layout (($script:autoDeadline - $now).TotalSeconds -le 2) 'Fastest output reading wait must never exceed two seconds.'
+        Cancel-AutoContinue -ResetRun
+        $showOutput.IsChecked = $false
+        foreach ($promptOnly in @($false, $true)) {
+            $showPrompt.IsChecked = $promptOnly
+            $view.overlay.conversation.key = "no-output-$promptOnly"
+            Assert-Layout (Test-AutoContinueDue $view $now) 'With no new output summary, the next poll must advance without a reading delay.'
+        }
+        $showOutput.IsChecked = $true
+        $playbackSpeed.Value = 0
+        Cancel-AutoContinue -ResetRun
         $view.overlay.conversation.key = 'uncheck'
         Test-AutoContinueDue $view $now | Out-Null
         $autoContinue.IsChecked = $false

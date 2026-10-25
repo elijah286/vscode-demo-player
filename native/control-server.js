@@ -10,10 +10,10 @@ function playbackEstimateProfile(recordings) {
     const between = recordings.slice(0, -1);
     const profile = {
         count: recordings.length,
-        promptDwellMilliseconds: between.reduce((sum, item) => sum + dwell(item.promptSummary), 0),
+        promptDwellMilliseconds: 0,
         outputDwellMilliseconds: between.reduce((sum, item) => sum + dwell(item.outputSummary?.trim()
             ? item.outputSummary : 'Output summary missing. Generate or edit summaries before playback.'), 0),
-        noSummaryDwellMilliseconds: between.length * 2000
+        noSummaryDwellMilliseconds: 0
     };
     estimateProfiles.set(recordings, profile);
     return profile;
@@ -74,6 +74,7 @@ function controlView(state) {
         windowMode: state.windowMode,
         modeSwitchEnabled: ['ready', 'review', 'complete'].includes(state.phase),
         resumeTurn: state.turnIndex,
+        originalIndex: recording.originalIndex ?? null,
         selection: state.selection,
         overlay: {
             promptSummary: recording.promptSummary ?? null,
