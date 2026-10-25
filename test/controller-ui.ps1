@@ -5,6 +5,7 @@ param(
     [switch]$Installed,
     [switch]$PlaybackOnly,
     [switch]$SummaryOnly,
+    [switch]$TranslationOnly,
     [switch]$LargeSummarySources
 )
 
@@ -107,6 +108,23 @@ global.fetch = async (url, options) => {
     if (!['synthetic-openai-key-for-ui-tests', 'synthetic-replaced-openai-key-for-ui-tests'].some(key => options.headers.Authorization === 'Bearer ' + key)) throw new Error('Unexpected synthetic key');
     const body = JSON.parse(options.body);
     if (body.store !== false || body.tools || options.redirect !== 'error') throw new Error('Unsafe synthetic API request');
+    const languages = {
+        'Simplified Chinese': '\u6211\u9009\u62e9\u84dd\u8272\u3002\u8981\u7ee7\u7eed\u5417\uff1f',
+        French: 'Je choisis le bleu. Continuer ?',
+        German: 'Ich w\u00e4hle Blau. Fortfahren?',
+        Italian: 'Scelgo il blu. Continuare?',
+        English: 'I choose blue. Continue?'
+    };
+    if (body.input.startsWith('Translate this presentation summary into ')) {
+        const language = Object.keys(languages).find(name => body.input.startsWith('Translate this presentation summary into ' + name));
+        const marker = 'Source summary (JSON): ';
+        const source = JSON.parse(body.input.slice(body.input.lastIndexOf(marker) + marker.length));
+        if (!language || !/^Synthetic OpenAI (input|output) summary\.$/.test(source)) throw new Error('Translation leaked original exchanges or unexpected context');
+        const pattern = body.text?.format?.schema?.properties?.summary?.pattern;
+        if (typeof pattern !== 'string' || !new RegExp(pattern, 'u').test(languages[language])) throw new Error('Translation lost its strict length constraint');
+        fs.appendFileSync(path.join(__dirname, 'translation-requests.jsonl'), JSON.stringify({ language, source, pattern }) + '\n');
+        return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary: languages[language] }) }] }] });
+    }
     const kind = body.input.startsWith('Summarize what the recorded assistant') ? 'output' : 'input';
     const correcting = body.input.includes('AUTOMATIC LENGTH CORRECTION:');
     const pattern = body.text?.format?.schema?.properties?.summary?.pattern;
@@ -317,7 +335,7 @@ try {
     $launch = Start-TestPlayer
     $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'standalone controller'
-    if ($SummaryOnly) {
+    if ($SummaryOnly -or $TranslationOnly) {
         $entryPath = Join-Path $library ($saved.id + '.demo.json')
         $before = [IO.File]::ReadAllText($entryPath)
         Invoke-Button $window 'ChooseDemo'
@@ -362,6 +380,70 @@ try {
         if ($requests.Count -ne 8 -or @($requests | Where-Object correcting).Count) { throw 'Constrained valid drafts made extra rewrite requests.' }
         if ([IO.File]::ReadAllText($target) -cne $targetContent -or [IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Summary generation changed original sources.' }
         Write-Output 'SUMMARY UI ACCEPTANCE PASSED: one action, combined/input/output scopes, scope cancel without requests/writes, consent explains schema bound, strict pattern on all8 synthetic requests, complete bounded drafts, explicit combined cancel/input-save/output-save, originals unchanged. No live key/request. Live constrained decoder fidelity NOT certified by this synthetic check.'
+        if ($TranslationOnly) {
+            Invoke-Button $dialog 'SelectDemo'
+            Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'TranslateSummaries').Current.IsEnabled } 'selected English summaries ready for translation' | Out-Null
+            $english = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            $originalTurns = $english.recording.turns | ConvertTo-Json -Depth 60 -Compress
+            $chinese = [string][char]0x6211 + [char]0x9009 + [char]0x62E9 + [char]0x84DD + [char]0x8272 + [char]0x3002 + [char]0x8981 + [char]0x7EE7 + [char]0x7EED + [char]0x5417 + [char]0xFF1F
+            foreach ($language in @('Simplified Chinese (Mandarin)','French','German','Italian','English','Simplified Chinese (Mandarin)')) {
+                $beforeTranslation = [IO.File]::ReadAllText($entryPath)
+                Invoke-Button $window 'TranslateSummaries'
+                $translationDialog = Wait-Until { Get-AppWindow 'Translate Summaries' } 'translation source consent and language selector'
+                $languageBox = Find-Element $translationDialog 'Id' 'SummaryTranslationLanguage'
+                $selectedLanguage = ([System.Windows.Automation.SelectionPattern]$languageBox.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)).Current.GetSelection()[0].Current.Name
+                if ($selectedLanguage -ne 'Simplified Chinese (Mandarin)') { throw 'Simplified Chinese must default on every translation dialog.' }
+                if ((Find-Element $translationDialog 'Id' 'SummaryTranslationSources').Current.Name -match 'Show the first recorded interaction') { throw 'Translation consent includes original exchanges.' }
+                if ($language -ne 'Simplified Chinese (Mandarin)') {
+                    ([System.Windows.Automation.ExpandCollapsePattern]$languageBox.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+                    $languageItem = Wait-Until {
+                        $languageBox.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                            [System.Windows.Automation.AndCondition]::new(
+                                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $language),
+                                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty, $true)))
+                    } 'selectable translation language'
+                    ([System.Windows.Automation.SelectionItemPattern]$languageItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+                }
+                Invoke-Button $translationDialog 'ConfirmSummaryTranslation'
+                $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'translated summary draft review'
+                $draft = (Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+                if ($draft.Length -gt 600) { throw 'Translation exceeded the summary length limit.' }
+                $saveChinese = $language -eq 'Simplified Chinese (Mandarin)' -and (Test-Path (Join-Path $evidence 'translation-cancelled'))
+                if ($saveChinese) {
+                    if ($draft -cne $chinese) { throw 'Simplified Chinese draft lost Unicode text.' }
+                    Invoke-Button $review 'SaveSummaries'
+                } else {
+                    Invoke-Button $review 'Cancel'
+                    [IO.File]::WriteAllText((Join-Path $evidence 'translation-cancelled'), 'synthetic review cancelled')
+                }
+                Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'translation review explicit save/cancel' | Out-Null
+                if (-not $saveChinese -and [IO.File]::ReadAllText($entryPath) -cne $beforeTranslation) { throw 'Cancelled translation changed saved metadata.' }
+            }
+            $translatedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            if (($translatedEntry.recording.turns | ConvertTo-Json -Depth 60 -Compress) -cne $originalTurns) { throw 'Translation altered original English exchanges.' }
+            foreach ($summary in @($translatedEntry.recording.promptSummaries) + @($translatedEntry.recording.outputSummaries)) {
+                if ($summary -cne $chinese) { throw 'Explicit Chinese save did not preserve aligned Unicode summaries.' }
+            }
+            ([System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'ShowOutput').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+            $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'Chinese summary overlay'
+            Invoke-Button $window 'PlayPause'
+            $replay = Wait-Until {
+                Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+            } 'isolated English recording with Chinese summaries'
+            $replayId = [int]$replay.ProcessId
+            Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'translated recording prepares without autoplay' 50 | Out-Null
+            Invoke-Button $window 'PlayPause'
+            Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' } 'first original exchange completes with Chinese overlay' | Out-Null
+            if ((Find-Element $overlay 'Id' 'FirstText').Current.Name -cne $chinese -or
+                (Find-Element $overlay 'Id' 'SecondText').Current.Name -cne $chinese) { throw 'Completed prompt/reply overlay did not display saved Simplified Chinese.' }
+            Save-WindowImage $overlay 'simplified-chinese-pair.png'
+            Invoke-Button $window 'Stop'
+            Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -and (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Open' } 'only scoped translation-test playback stops' 20 | Out-Null
+            $translationRequests = @(Get-Content (Join-Path $evidence 'translation-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+            if ($translationRequests.Count -ne 24) { throw 'Unexpected translation request count or hidden retries.' }
+            if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture -or [IO.File]::ReadAllText($target) -cne $targetContent) { throw 'Translation/playback changed original source or edit target.' }
+            Write-Output 'TRANSLATION UI ACCEPTANCE PASSED: Simplified Chinese defaults, all5 languages, summary-only strict-schema requests, paid-request consent, review cancel byte preservation, explicit Chinese save/reload, aligned Unicode input+output overlay through real isolated Editor playback, unchanged original English exchanges/source/edit target and scoped Stop. All24 translation responses synthetic; no live paid-provider fidelity claim.'
+        }
         return
     }
     $play = Find-Element $window 'Id' 'PlayPause'

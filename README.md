@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.27](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.27/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.28](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.28/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -714,6 +714,12 @@ There is no separate English-summary backup or per-language cache: translate
 again with **English**, or edit/regenerate summaries, to return to English.
 Canceling review leaves saved summaries unchanged. Saved translations work
 offline during playback; translation itself requires access to OpenAI.
+
+For focused synthetic desktop acceptance, run `test\controller-ui.ps1` with
+`-TranslationOnly`, `-NodePath` and `-EvidenceRoot`. It checks all five language
+choices, review cancellation and explicit saving, unchanged English exchanges,
+and Chinese prompt/reply summaries through isolated native playback.
+The mocked responses do not certify live-provider translation fidelity.
 
 **Settings**, immediately left of **Check for updates**, lets you save, replace
 or delete an OpenAI API key and change the model ID. AI generation prompts for
