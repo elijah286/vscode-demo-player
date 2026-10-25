@@ -36,6 +36,14 @@ function New-DemoDialog([string]$Xaml, $Owner) {
     $dialog = [pscustomobject]@{ Native = $native; DialogResult = $null }
     $dialog | Add-Member ScriptMethod FindName { param($Name) return $this.Native.FindName($Name) }
     $dialog | Add-Member ScriptMethod ShowDialog {
+        if ($this.FindName('Both')) {
+            Assert-Selection ($this.FindName('Both').IsChecked -eq $true) 'Combined scope must be the default.'
+            if ($script:scopeChoice -eq 'cancel') { return $false }
+            if ($script:scopeChoice -ne 'Both') { $this.FindName($script:scopeChoice).IsChecked = $true }
+            $this.FindName('Continue').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            Assert-Selection ($this.DialogResult -eq $true) 'Continue accepts an explicit summary scope.'
+            return $this.DialogResult
+        }
         $checks = $this.FindName('Exchanges').Children
         Assert-Selection ($checks.Count -eq 3) 'All exchanges must be shown, including excluded ones.'
         Assert-Selection ($checks[0].IsChecked -and $checks[1].IsChecked -eq $script:legacy -and $checks[2].IsChecked) 'Saved inclusion must initialize each checkbox; legacy recordings include all.'
@@ -63,6 +71,12 @@ function New-DemoDialog([string]$Xaml, $Owner) {
         return $this.DialogResult
     }
     return $dialog
+}
+
+foreach ($case in @(@('Both','both'), @('Input','input'), @('Output','output'), @('cancel',$null))) {
+    $script:scopeChoice = $case[0]
+    $result = Show-DemoSummaryScope $null
+    Assert-Selection ($result -eq $case[1]) 'Scope picker must route combined/input/output and cancel without generation.'
 }
 
 Show-DemoExchangeSelection $null 'synthetic' | Out-Null

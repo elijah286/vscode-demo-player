@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const library = require('../demo-library');
-const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
+const { ENDPOINT, DEFAULT_MODEL, SUMMARY_PATTERN, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
 const { summaryQuestionContext, QUESTION_CONTEXT_LENGTH, previousExchangeContext, summaryPrompt } = require('../prompt-summary-authoring');
 
 test('both providers reject the reported fragment near the old cap and preserve complete longer questions without clipping', async () => {
@@ -83,13 +83,54 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
         assert.equal(body.text.format.strict, true);
         assert.deepEqual(body.text.format.schema.required, ['summary']);
         assert.equal(body.text.format.schema.additionalProperties, false);
-        assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string' },
-            'Constrained decoding must not force punctuation onto a fragment at the character boundary');
+        assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string', pattern: SUMMARY_PATTERN },
+            'Constrain length during decoding, not by cutting text or forcing terminal punctuation');
         assert.ok(body.input.endsWith(JSON.stringify(request.source)));
         assert.ok(!options.body.includes(key));
         return Response.json(completed('Name three colors.'));
     } });
     assert.equal(text, 'Name three colors.');
+    assert.equal(calls, 1);
+});
+
+test('strict summary schema bounds Unicode output before review for generation and legacy repair', async () => {
+    const constraint = new RegExp(SUMMARY_PATTERN, 'u');
+    for (const value of ['I checked the result. What should I use it for?', 'x'.repeat(300), '\u{1f642}'.repeat(300)]) {
+        assert.ok(constraint.test(value));
+        assert.ok(value.length <= 600, 'Every allowed scalar uses at most two UTF-16 units');
+    }
+    for (const value of ['', 'x'.repeat(301), '\u{1f642}'.repeat(301), 'First.\nSecond.', 'First.\rSecond.']) {
+        assert.equal(constraint.test(value), false);
+    }
+    for (const kind of ['input', 'output']) {
+        for (const rewrite of ['', 'I checked '.repeat(73) + 'Ready.']) {
+            let calls = 0;
+            const summary = await generateOpenAISummary({ ...request, kind, rewrite }, {
+                fetchImpl: async (_url, options) => {
+                    calls++;
+                    const schema = JSON.parse(options.body).text.format.schema.properties.summary;
+                    const decoder = new RegExp(schema.pattern, 'u');
+                    const overlong = 'I checked '.repeat(73) + 'Ready.';
+                    assert.equal(decoder.test(overlong), false, 'The reported overlong draft is not a permitted API output');
+                    const allowed = 'I checked the result. Should I use blue or green?';
+                    assert.ok(decoder.test(allowed));
+                    assert.ok(!decoder.test('A'.repeat(300) + '!'), 'The schema must not add punctuation onto a capped fragment');
+                    return Response.json(completed(allowed));
+                }
+            });
+            assert.equal(calls, 1, 'A schema-compliant result needs no length repair requests');
+            assert.ok(summary.length <= 600);
+            assert.match(summary, /blue or green\?$/);
+        }
+    }
+});
+
+test('unsupported constrained schemas fail explicitly without a weaker-schema retry', async () => {
+    let calls = 0;
+    await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => {
+        calls++;
+        return Response.json({ error: { message: 'Unsupported pattern' } }, { status: 400 });
+    } }), /required constrained summary schema.*length constraint will not be disabled/);
     assert.equal(calls, 1);
 });
 

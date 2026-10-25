@@ -311,6 +311,7 @@ function Show-DemoSummaryDialog($Owner, $Id) {
     Assert-Equal $Id 'picker-entry' 'Inline summary editor receives the prepared selection'
     return $true
 }
+function Show-DemoSummaryScope($Owner) { return $script:pickerRequestedScope }
 function Show-DemoSummaryAuthoringNotice($Owner, $Id, $Scope = 'both') { $script:pickerAiId = $Id; $script:pickerAiScope = $Scope }
 function Show-DemoClearSummariesNotice($Owner, $Id) { $script:pickerClearId = $Id; return $true }
 $script:exercisePicker = {
@@ -326,13 +327,21 @@ $script:exercisePicker = {
         $dialog.FindName('SelectionSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         Assert-Equal $script:pickerCaptures 1 'Inline summary preparation saves once'
         Assert-Equal $dialog.FindName('Demos').Items.Count 1 'Prepared selection appears in the other tab immediately'
+        $script:pickerRequestedScope = 'both'
         $dialog.FindName('SelectionAiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
         Assert-Equal $script:pickerAiId 'picker-entry' 'Inline AI authoring targets the same selection'
         Assert-Equal $script:pickerAiScope 'both' 'Existing combined generation retains its scope'
-        Assert-Equal $dialog.FindName('SelectionAiResponses').Content 'Generate AI summaries of responses' 'Explicit response button label'
-        Assert-Equal $dialog.FindName('SelectionAiResponses').IsEnabled $true 'Reviewed source enables response generation'
-        $dialog.FindName('SelectionAiResponses').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-        Assert-Equal $script:pickerAiScope 'output' 'Response button selects output-only generation'
+        Assert-Equal $dialog.FindName('SelectionAiSummaries').Content 'Generate AI summaries...' 'One unambiguous generation action'
+        Assert-Equal ($null -eq $dialog.FindName('SelectionAiResponses')) $true 'Duplicate response action removed'
+        foreach ($scope in @('output','input')) {
+            $script:pickerRequestedScope = $scope
+            $dialog.FindName('SelectionAiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            Assert-Equal $script:pickerAiScope $scope 'Single action dispatches the selected scope'
+        }
+        $script:pickerRequestedScope = $null
+        $script:pickerAiScope = 'unchanged-on-cancel'
+        $dialog.FindName('SelectionAiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        Assert-Equal $script:pickerAiScope 'unchanged-on-cancel' 'Scope cancellation does not start generation'
         Assert-Equal $script:pickerAiId 'picker-entry' 'Response generation reuses the prepared selection'
         Assert-Equal $script:pickerCaptures 1 'AI preparation reuses the saved selection'
         Assert-Equal $dialog.FindName('SelectionClearSummaries').IsEnabled $true 'Reviewed selection enables clearing summaries'
@@ -346,10 +355,14 @@ $script:exercisePicker = {
         Assert-Equal $dialog.FindName('SavedTitle').Text 'Synthetic agent conversation' 'Saved selection has an automatic title'
         Assert-Equal $dialog.FindName('Title').Text 'Synthetic agent conversation' 'Saved-tab selection does not overwrite the conversation draft'
         Assert-Equal $dialog.FindName('Select').IsEnabled $true 'Saved selection can be used without a management step'
-        Assert-Equal $dialog.FindName('AiResponses').IsEnabled $true 'Saved selection enables response generation'
-        $dialog.FindName('AiResponses').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-        Assert-Equal $script:pickerAiScope 'output' 'Saved response button selects output-only generation'
-        Assert-Equal $script:pickerAiId 'picker-entry' 'Saved response button targets selected entry'
+        Assert-Equal $dialog.FindName('AiSummaries').IsEnabled $true 'Saved selection enables the single generator'
+        Assert-Equal ($null -eq $dialog.FindName('AiResponses')) $true 'Saved selection has no duplicate generator'
+        foreach ($scope in @('both','input','output')) {
+            $script:pickerRequestedScope = $scope
+            $dialog.FindName('AiSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            Assert-Equal $script:pickerAiScope $scope 'Saved single action selects requested scope'
+            Assert-Equal $script:pickerAiId 'picker-entry' 'Saved single action targets selected entry'
+        }
         Assert-Equal $dialog.FindName('ClearSummaries').IsEnabled $true 'Saved selection enables clearing summaries'
         $script:pickerClearId = $null
         $dialog.FindName('ClearSummaries').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
@@ -357,12 +370,12 @@ $script:exercisePicker = {
         $dialog.FindName('SavedSearch').Text = 'No matching selection'
         Assert-Equal $dialog.FindName('Demos').Items.Count 0 'Saved search uses its own list'
         Assert-Equal $dialog.FindName('Select').IsEnabled $false 'No-match search disables the saved selection action'
-        Assert-Equal $dialog.FindName('AiResponses').IsEnabled $false 'No-match search disables response generation'
+        Assert-Equal $dialog.FindName('AiSummaries').IsEnabled $false 'No-match search disables generation'
         Assert-Equal $dialog.FindName('ClearSummaries').IsEnabled $false 'No-match search disables clearing'
         $dialog.FindName('Source').Text = 'different.jsonl'
         Assert-Equal $dialog.FindName('Save').IsEnabled $false 'Changing source disables playback preparation'
         Assert-Equal $dialog.FindName('SelectionAiSummaries').IsEnabled $false 'Changing source also disables AI preparation'
-        Assert-Equal $dialog.FindName('SelectionAiResponses').IsEnabled $false 'Changing source disables response generation'
+        Assert-Equal ($null -eq $dialog.FindName('SelectionAiResponses')) $true 'Source change cannot expose a second generator'
         Assert-Equal $dialog.FindName('SelectionClearSummaries').IsEnabled $false 'Changing source also disables clearing'
     } finally { $dialog.Close() }
 }

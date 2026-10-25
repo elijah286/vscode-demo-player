@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.26](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.26/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.27](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.27/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -651,8 +651,10 @@ clears the drafts for every exchange; **Save summaries** applies that change,
 while **Cancel** discards it. **Delete this summary** clears only the current
 exchange's summary draft, never its original prompt.
 
-**Generate AI summaries of responses** is an explicit response-only action beside
-the conversation selection actions and on **Saved selections**. It generates
+**Generate AI summaries...** is the single generation action on both picker tabs.
+It offers **Inputs and outputs** (default), **Inputs only**, and **Outputs only**;
+canceling this scope picker makes no request or saved-selection change.
+**Outputs only** generates
 only missing output summaries, never generates prompt summaries, and keeps
 existing input/output summaries. It sends the paired user question/request as
 explicitly previewed context (up to 4,000 characters). Longer context keeps its
@@ -714,15 +716,22 @@ as your Windows user. Deleting the saved key removes its local ciphertext; revok
 the key at OpenAI if it may have been exposed. Older VS Code authoring profiles
 are left untouched and are no longer used by application AI actions.
 
-**Summarize inputs / outputs with AI...** on either picker tab generates the
+**Generate AI summaries...** with **Inputs and outputs** on either picker tab generates the
 missing prompts and supported outputs in the current selection. Each short source
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
-The response uses a strict JSON schema with a required string summary field,
-then local one-line, length and completeness validation before review. The
-schema deliberately does not force a character count plus terminal punctuation:
-constrained decoding can otherwise append punctuation to a clipped fragment.
-Incomplete model responses are rejected, not repaired with fake punctuation.
+The response uses a strict JSON schema with a required string summary and a
+server-enforced [Structured Outputs string pattern](https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas)
+limiting it to 300 Unicode characters on one line.
+Even 300 supplementary characters fit the existing 600 UTF-16-unit AI limit.
+The same constraint applies to inputs, outputs, source chunks, combination and
+legacy shortening. Length is constrained during generation, not just requested
+in a prompt. The schema does **not** force terminal punctuation, append anything,
+or cut text; local one-line, length, voice and complete-statement validation still
+reject malformed or incomplete content before review. A model that rejects the
+required pattern fails explicitly with model-selection guidance; there is no
+retry with a weaker schema. The optional VS Code language-model authoring path
+does not expose this API constraint and retains its bounded correction safeguards.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
 sent and selected model before any request. Review it for secrets: displayed
 answer text may contain private content even after filtering. Raw tool
