@@ -98,6 +98,91 @@ try {
         Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'input'; source = 'Short prompt.' }) $progress $key 'gpt-4.1-mini' | Out-Null
         Assert-True ($summaryCalls.Count -eq 1 -and -not $summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Short sources still use exactly one request without reduction.'
     } finally { ${function:Invoke-DemoLibrary} = $originalInvoke }
+    function Test-TranslationWorkflow {
+        function Get-PlayerAISettings { return @{ encryptedKey = 'synthetic'; model = 'gpt-4.1-mini' } }
+        function Get-PlayerOpenAIKey { return 'synthetic-translation-key-only' }
+        function Show-DemoError($Owner, $Failure) { $script:translationFailure = $Failure.Exception.Message }
+        function Invoke-DemoLibrary($Request, $Owner, $Helper, [ValidateRange(1,95)][int]$TimeoutSeconds = 30) {
+            Assert-True ($Helper -eq 'openai-summaries.js') 'Translations reuse the trusted OpenAI helper.'
+            if ($Request.command -eq 'prepareTranslations') {
+                return [pscustomobject]@{ entry = @{ id = 'synthetic' }; outputs = @('Original English reply'); candidates = @(
+                    @{ index = 0; kind = 'input'; source = 'I want blue.' },
+                    @{ index = 0; kind = 'output'; source = 'I selected blue. Continue?' }
+                ) }
+            }
+            Assert-True ($Request.command -eq 'generateSummary' -and $TimeoutSeconds -eq 95) 'Translation uses the bounded generation helper timeout.'
+            Assert-True ($Request.language -ceq $script:translationLanguage) 'The selected translation language reaches every request.'
+            Assert-True ($Request.apiKey -ceq 'synthetic-translation-key-only') 'Translation uses the saved key.'
+            Assert-True (($Request.Keys | Sort-Object) -join ',' -eq 'apiKey,command,kind,language,model,source') 'Only summaries and required provider options are sent; no originals or context.'
+            $script:translationCalls++
+            if ($script:translationMode -eq 'failure') { throw 'Synthetic translation failure.' }
+            return ([string][char]0x6211 + [char]0x9009 + [char]0x62E9 + [char]0x84DD + [char]0x8272 + [char]0x3002)
+        }
+        function New-DemoDialog($Xaml, $Owner) {
+            $parsed = [Windows.Markup.XamlReader]::Parse($Xaml)
+            Assert-True ($parsed.FindName('Language').SelectedItem.Tag -ceq 'zh-CN') 'Simplified Chinese is the UI default.'
+            $fake = [pscustomobject]@{ Window = $parsed; Tag = $null; DialogResult = $false }
+            $fake | Add-Member ScriptMethod FindName { param($Name) return $this.Window.FindName($Name) }
+            $fake | Add-Member ScriptMethod ShowDialog {
+                Assert-True ($this.FindName('Sources').Text.Contains('I want blue.')) 'Consent displays the exact saved summary.'
+                Assert-True (-not $this.FindName('Sources').Text.Contains('Original English reply')) 'Consent/request sources exclude original replies.'
+                if ($script:translationMode -eq 'cancel') { return $false }
+                foreach ($item in $this.FindName('Language').Items) {
+                    if ($item.Tag -ceq $script:translationLanguage) { $this.FindName('Language').SelectedItem = $item; break }
+                }
+                $this.FindName('Translate').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                return $this.DialogResult
+            }
+            return $fake
+        }
+        function Show-DemoSummaryDialog($Owner, $Id, $Generated) {
+            $script:translationReviews++
+            Assert-True ($Generated.Drafts.Count -eq 2) 'Successful translation opens editable review with both drafts.'
+            Assert-True ($Generated.Drafts[0].kind -eq 'input' -and $Generated.Drafts[1].kind -eq 'output') 'Review retains aligned input/output kinds.'
+            Assert-True ($Generated.Outputs[0] -ceq 'Original English reply') 'Review retains the English original for comparison.'
+            Assert-True ($Generated.Entry.id -eq 'synthetic') 'Review retains the optimistic save snapshot.'
+        }
+        foreach ($mode in @('confirm', 'cancel', 'failure')) {
+            foreach ($language in @('zh-CN', 'fr', 'de', 'it', 'en')) {
+                $script:translationMode = $mode
+                $script:translationLanguage = $language
+                $script:translationCalls = 0
+                $script:translationReviews = 0
+                $script:translationFailure = $null
+                Invoke-DemoSummaryTranslation $null 'synthetic'
+                Assert-True (-not $script:openAISummaryBusy) 'Translation releases its busy guard on every exit.'
+                Assert-True ($translationReviews -eq [int]($mode -eq 'confirm')) 'Canceled or failed generation never opens review or saves partial drafts.'
+                Assert-True ($translationCalls -eq $(if ($mode -eq 'confirm') { 2 } elseif ($mode -eq 'failure') { 1 } else { 0 })) 'Cancel sends nothing; failure stops without retries.'
+                Assert-True (($translationFailure -eq 'Synthetic translation failure.') -eq ($mode -eq 'failure')) 'Translation failures are surfaced explicitly.'
+            }
+        }
+        $controller = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Show-ReplayController.ps1'), [ref]$null, [ref]$null)
+        $xamlNode = $controller.Find({ param($node)
+            $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value.Contains('x:Name="TranslateSummaries"')
+        }, $true)
+        $window = [Windows.Markup.XamlReader]::Parse($xamlNode.Value)
+        $translateSummaries = $window.FindName('TranslateSummaries')
+        $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
+        $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
+        $selectExchanges = $window.FindName('SelectExchanges')
+        $links = $controller.Find({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Update-ControllerSummaryLinks'
+        }, $true).Body.GetScriptBlock()
+        $script:selectedDemo = @{ count = 1; summaryCounts = @{ input = 1; output = 1 } }
+        & $links
+        Assert-True $translateSummaries.IsEnabled 'Translation is enabled for a selected interaction with saved summaries.'
+        $script:ReplayProcessId = 123
+        & $links
+        Assert-True (-not $translateSummaries.IsEnabled) 'Translation is disabled during playback.'
+        $script:ReplayProcessId = $null
+        $script:selectedDemo = $null
+        & $links
+        Assert-True (-not $translateSummaries.IsEnabled) 'Translation is disabled with no interaction.'
+        $script:selectedDemo = @{ count = 1; summaryCounts = @{ input = 0; output = 0 } }
+        & $links
+        Assert-True (-not $translateSummaries.IsEnabled) 'Generate or save summaries before translating.'
+    }
+    Test-TranslationWorkflow
     $script:NodePath = if ($NodePath) { $NodePath } else { (Get-Command node.exe -ErrorAction Stop).Source }
     $script:LibraryRoot = Join-Path $scratch 'library'
     foreach ($helper in @('openai-summaries.js', 'library-cli.js')) {
@@ -108,7 +193,7 @@ try {
             Assert-True (-not $arguments.Contains('reject-unauthorized') -and -not $arguments.Contains('insecure')) 'Certificate verification must never be disabled.'
         } finally { Stop-DemoLibraryProcess $state }
     }
-    Write-Output ('OPENAI SETTINGS/SOURCE CHUNKING PASSED: ' + $assertions + ' assertions; DPAPI, key controls, exact source coverage, reduction/failures and production OpenAI-only Windows trust arguments. No real key or network request.')
+    Write-Output ('OPENAI SETTINGS/SOURCE CHUNKING/TRANSLATION PASSED: ' + $assertions + ' assertions; DPAPI, key controls, exact source coverage, reduction/failures, hidden translation UI/consent/review/cancel/failure in all five languages, controller gating and production OpenAI-only Windows trust arguments. No real key or network request.')
 } finally {
     $env:LOCALAPPDATA = $original
     Remove-Item -LiteralPath $scratch -Recurse -Force
