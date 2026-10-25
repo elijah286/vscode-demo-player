@@ -621,7 +621,9 @@ try {
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '3 of 3 exchanges selected' } 'Select all includes unavailable entries for inspection' | Out-Null
     Wait-Until { $reviewed.Current.IsEnabled } 'unavailable selection preview is ready' | Out-Null
     ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
-    if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Acknowledging an unavailable selection must not enable Save.' }
+    if (-not (Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Reviewing a mixed selection must enable its available exchanges.' }
+    if ((Find-Element $capture 'Id' 'SaveDemo').Current.Name -ne 'Use 2 available exchanges') { throw 'Mixed selection must explicitly identify the usable subset.' }
+    if ((Find-Element $capture 'Id' 'CaptureStatus').Current.Name -notmatch '1 unavailable selected exchanges will be skipped') { throw 'Mixed selection must explain which content is skipped.' }
     Invoke-Button $capture 'CaptureSelectAvailable'
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 3 exchanges selected' -and $reviewed.Current.IsEnabled } 'Select available restores the valid preview' | Out-Null
     if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Selection changes must invalidate the prior review.' }

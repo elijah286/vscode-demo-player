@@ -47,6 +47,40 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('six recorded exchanges retain four read-only event turns without inventing missing prompts', async context => {
+    const { source, root } = await fixture(context);
+    const requests = Array.from({ length: 6 }, (_, index) => ({
+        result: {}, message: { text: [2, 5].includes(index) ? '' : 'Recorded prompt ' + (index + 1) },
+        response: [{ kind: 'recordedSdkEvent', events: [{ type: 'synthetic.saved.event', data: { index } }] }]
+    }));
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests } }));
+    const before = await fs.readFile(source);
+    const inspection = await library.inspectTranscript(source);
+    assert.deepEqual(inspection.turns.map(turn => turn.status), [
+        'archived-events', 'archived-events', 'unavailable', 'archived-events', 'archived-events', 'unavailable'
+    ]);
+    for (const index of [2, 5]) {
+        assert.equal(inspection.turns[index].error, 'Editor playback requires a nonempty recorded prompt.');
+        assert.equal(inspection.turns[index].prompt, '');
+    }
+    const indices = inspection.turns.filter(turn => !turn.error).map(turn => turn.index);
+    assert.deepEqual(indices, [0, 1, 3, 4]);
+    const recording = await library.createPackage(source, indices, 'Four usable read-only exchanges', inspection.sha256);
+    assert.deepEqual(recording.turns.map(turn => turn.sourceIndex), indices);
+    assert.deepEqual(recording.turns.map(turn => turn.snapshot.requests[0]), indices.map(index => requests[index]));
+    const saved = await library.addPackage(root, recording);
+    assert.equal((await library.packageRecordings(path.join(root, saved.id + '.demo.json'))).length, 4);
+    await assert.rejects(library.createPackage(source, [0, 1, 2, 3, 4, 5], 'Invalid selection', inspection.sha256), /nonempty recorded prompt/);
+    assert.deepEqual(await fs.readFile(source), before);
+
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests: [requests[2], requests[5]] } }));
+    const unavailable = await library.inspectTranscript(source);
+    assert.equal(unavailable.turns.length, 2);
+    assert.ok(unavailable.turns.every(turn => turn.status === 'unavailable' && turn.prompt === '' && /nonempty recorded prompt/.test(turn.error)));
+    await assert.rejects(library.createPackage(source, [0, 1], 'No usable exchanges', unavailable.sha256), /nonempty recorded prompt/);
+    await assert.rejects(library.createPackage(source, [], 'Empty selection', unavailable.sha256), /1 to 100/);
+});
+
 test('reviewed translations persist only in overlay metadata, preserving English exchanges and excluded summaries', async context => {
     const { root, source, inspection, directory } = await fixture(context);
     const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Translation', inspection.sha256));

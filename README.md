@@ -354,9 +354,15 @@ remain visible for inspection; the status reports how many were excluded and
 the first reason. Use **Select all** or
 **Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
 to adjust the selection. **Select available** excludes genuinely unreadable
-exchanges, including after using Select all. Use selected exchanges stays disabled for empty,
-unavailable, or oversized selections, until the current preview is ready and
-reviewed. The conversation title is used automatically; a custom selection name
+exchanges, including after using Select all. If unavailable entries are selected
+alongside usable exchanges, playback and summary actions use only the available
+subset. The primary button says **Use N available exchanges**, and the status
+explains the skipped count and first validation error. Read-only event exchanges
+with valid recorded prompts remain usable; missing prompts are never invented.
+Actions stay disabled when no available exchanges are selected, more than 100
+available exchanges are selected, or the current preview is not yet ready and
+reviewed. An all-unavailable conversation stays visible with its validation reason
+but cannot be used for playback. The conversation title is used automatically; a custom selection name
 is optional. A selection can contain up to 100 exchanges; larger
 selections show an explicit warning rather than being silently reduced.
 Review the readable prompt/response preview. Exchange rows use short labels and
