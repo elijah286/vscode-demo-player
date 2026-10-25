@@ -181,8 +181,9 @@ try {
     & $updatePreview
     & $previewTick
     $reviewed.IsChecked = $true
-    Assert-Equal $save.IsEnabled $false 'Review cannot enable Save with unavailable selections'
-    Assert-Equal ($captureStatus.Text -match 'Use Select available') $true 'Invalid selection explains recovery'
+    Assert-Equal $save.IsEnabled $true 'Mixed reviewed selection can use its available exchanges'
+    Assert-Equal $save.Content 'Use 2 available exchanges' 'Mixed selection action explicitly names its available subset'
+    Assert-Equal ($captureStatus.Text -match '1 unavailable selected exchanges will be skipped.*Use Select available') $true 'Mixed selection explains skipped entries and optional selection recovery'
     & ($selectAvailable.Arguments[0].ScriptBlock.GetScriptBlock())
     Assert-Equal $reviewed.IsChecked $false 'Changing selection invalidates prior review'
     Assert-Equal $save.IsEnabled $false 'Selection changes disable Save while preview is pending'
@@ -219,6 +220,19 @@ try {
     Assert-Equal $save.IsEnabled $true 'Naming is optional'
     Assert-Equal $dialog.FindName('SelectionAiSummaries').IsEnabled $true 'AI summaries are available before leaving selection'
     Assert-Equal $dialog.FindName('SelectionSummaries').IsEnabled $true 'Manual review is available before leaving selection'
+    $boundaryItems = @($turns.SelectedItems) + @(
+        [pscustomobject]@{ Turn = [pscustomobject]@{ index = 100; error = 'Editor playback requires a nonempty recorded prompt.' } },
+        [pscustomobject]@{ Turn = [pscustomobject]@{ index = 101; error = 'Editor playback requires a nonempty recorded prompt.' } }
+    )
+    $turns.ItemsSource = $boundaryItems
+    $turns.SelectAll()
+    & $updatePreview
+    & $previewTick
+    $reviewed.IsChecked = $true
+    Assert-Equal $turns.SelectedItems.Count 102 'Mixed boundary preserves all inspected rows'
+    Assert-Equal $save.IsEnabled $true 'Exactly 100 usable exchanges remain actionable alongside unavailable entries'
+    Assert-Equal $save.Content 'Use 100 available exchanges' 'Mixed boundary action counts available exchanges only'
+    Assert-Equal ($captureStatus.Text -match 'at most 100') $false 'Unavailable rows do not cause an oversized playback warning'
     $prepareSelection = Get-CaptureBlock 'prepareSelection'
     $dialog.Tag.Inspection | Add-Member -NotePropertyName sha256 -NotePropertyValue 'reviewed-source-hash'
     $script:preparedRequests = [System.Collections.Generic.List[object]]::new()
@@ -251,6 +265,78 @@ try {
     $failure = $null
     try { & $prepareSelection | Out-Null } catch { $failure = $_.Exception.Message }
     Assert-Equal ($failure -match 'Review the selected content') $true 'Preparing summaries cannot bypass review'
+    $script:testInspection = [pscustomobject]@{
+        title = 'Six recorded exchanges'; sha256 = 'six-exchange-source-hash'
+        turns = @(0..5 | ForEach-Object {
+            $unavailable = $_ -in @(2, 5)
+            [pscustomobject]@{
+                index = $_; prompt = $(if ($unavailable) { '' } else { 'Recorded prompt ' + ($_ + 1) })
+                status = $(if ($unavailable) { 'unavailable' } else { 'archived-events' })
+                content = 'Saved read-only event archive'; details = 'Original saved payload'
+                error = $(if ($unavailable) { 'Editor playback requires a nonempty recorded prompt.' } else { $null })
+            }
+        })
+    }
+    function Invoke-DemoLibrary {
+        param($Request, $Owner)
+        $script:preparedRequests.Add($Request)
+        switch ($Request.command) {
+            'inspect' { return $script:testInspection }
+            'capture' { return $script:savedSelection }
+            default { throw ('Unexpected six-exchange request: ' + $Request.command) }
+        }
+    }
+    & $loadSource 'six-exchanges.jsonl'
+    Assert-Equal $turns.Items.Count 6 'Reported conversation keeps all six exchanges visible'
+    Assert-Equal ($turns.SelectedItems.Turn.index -join ',') '0,1,3,4' 'Default selects all four read-only event exchanges in source order'
+    Assert-Equal $dialog.FindName('SelectionCount').Text '4 of 6 exchanges selected' 'Default count reflects usable exchanges'
+    Assert-Equal (@($turns.Items | Where-Object Label -like '[[]Read-only events[]]*').Count) 4 'Valid read-only event rows are not unavailable'
+    Assert-Equal (@($turns.Items | Where-Object Label -like '[[]Unavailable[]]*').Count) 2 'Missing-prompt rows remain explicitly unavailable'
+    Assert-Equal ($captureStatus.Text -match '2 unavailable exchanges excluded.*Exchange 3: Editor playback requires a nonempty recorded prompt') $true 'Default explains exact excluded count and first missing prompt'
+    Assert-Equal $save.IsEnabled $false 'Six-exchange replacement requires a fresh review'
+    & $previewTick
+    $reviewed.IsChecked = $true
+    foreach ($name in @('Save', 'SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
+        Assert-Equal $dialog.FindName($name).IsEnabled $true ('Four reviewed read-only exchanges enable ' + $name)
+    }
+    $turns.SelectAll()
+    & $updatePreview
+    Assert-Equal $dialog.FindName('SelectionCount').Text '6 of 6 exchanges selected' 'Manual select-all keeps every row inspectable'
+    Assert-Equal $save.IsEnabled $false 'Select-all invalidates prior privacy review'
+    Assert-Equal ($captureStatus.Text -match 'Only the 4 available selected exchanges.*2 unavailable selected exchanges will be skipped.*Exchange 3: Editor playback requires a nonempty recorded prompt') $true 'Reported six-of-six selection explicitly explains available subset and skipped reason'
+    & $previewTick
+    $reviewed.IsChecked = $true
+    foreach ($name in @('Save', 'SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
+        Assert-Equal $dialog.FindName($name).IsEnabled $true ('Reported six-of-six reviewed selection enables ' + $name)
+    }
+    Assert-Equal $save.Content 'Use 4 available exchanges' 'Reported selection primary action is explicit and usable'
+    $script:preparedRequests.Clear()
+    & $prepareSelection | Out-Null
+    Assert-Equal $script:preparedRequests.Count 1 'Mixed selection issues one capture request'
+    Assert-Equal ($script:preparedRequests[0].indices -join ',') '0,1,3,4' 'Capture never submits missing-prompt exchanges to playback validation'
+    Assert-Equal $script:preparedRequests[0].sha256 'six-exchange-source-hash' 'Mixed capture retains reviewed source hash guard'
+    & ($selectAvailable.Arguments[0].ScriptBlock.GetScriptBlock())
+    Assert-Equal ($turns.SelectedItems.Turn.index -join ',') '0,1,3,4' 'Select available recovers the exact four usable exchanges'
+    Assert-Equal $reviewed.IsChecked $false 'Select available still requires a fresh review'
+    Assert-Equal $save.Content 'Use selected exchanges' 'Available-only selection restores ordinary action label'
+    $script:testInspection.turns = @($script:testInspection.turns | Where-Object error)
+    & $loadSource 'all-unavailable.jsonl'
+    Assert-Equal $turns.Items.Count 2 'All-unavailable conversation remains inspectable'
+    Assert-Equal $turns.SelectedItems.Count 0 'All-unavailable conversation selects nothing by default'
+    Assert-Equal ($captureStatus.Text -match 'No available exchanges.*2 unavailable exchanges excluded.*nonempty recorded prompt') $true 'All-unavailable default explains why nothing can be used'
+    $turns.SelectAll()
+    & $updatePreview
+    & $previewTick
+    $reviewed.IsChecked = $true
+    foreach ($name in @('Save', 'SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
+        Assert-Equal $dialog.FindName($name).IsEnabled $false ('All-unavailable review cannot enable ' + $name)
+    }
+    Assert-Equal ($captureStatus.Text -match 'No available selected exchanges.*Exchange 3: Editor playback requires a nonempty recorded prompt') $true 'All-unavailable manual selection explains exact validation failure'
+    $script:preparedRequests.Clear()
+    $failure = $null
+    try { & $prepareSelection | Out-Null } catch { $failure = $_.Exception.Message }
+    Assert-Equal ($failure -match 'Select 1 to 100 available exchanges') $true 'Capture guard refuses all-unavailable selection even after review'
+    Assert-Equal $script:preparedRequests.Count 0 'All-unavailable selection never invokes capture'
     $dialog.Tag.Inspection = $null
     & $updateSaveState
     Assert-Equal $save.IsEnabled $false 'Save requires a loaded inspection'
