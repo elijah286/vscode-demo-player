@@ -248,7 +248,7 @@ function Invoke-AISummaryAction($Parent, [string]$Scope = 'Both') {
     Invoke-Button $scopeDialog 'ContinueSummaryScope'
 }
 
-function Select-ComboItem($Combo, [string]$Name) {
+function Get-ComboItem($Combo, [string]$Name) {
     Wait-Until { $Combo.Current.IsEnabled } ('enabled combo: ' + $Name) | Out-Null
     ([System.Windows.Automation.ExpandCollapsePattern]$Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
     $item = Find-Element $Combo 'Name' $Name
@@ -259,6 +259,11 @@ function Select-ComboItem($Combo, [string]$Name) {
     if (-not $item -or -not $item.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) {
         throw ('Selectable combo item unavailable: ' + $Name)
     }
+    return $item
+}
+
+function Select-ComboItem($Combo, [string]$Name) {
+    $item = Get-ComboItem $Combo $Name
     ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Wait-Until { $Combo.Current.IsEnabled } ('selected combo ready: ' + $Name) | Out-Null
     ([System.Windows.Automation.ExpandCollapsePattern]$Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Collapse()
@@ -546,8 +551,11 @@ try {
             Invoke-Button $dialog 'SelectDemo'
             Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'SummaryDisplayLanguage').Current.IsEnabled } 'saved language restored after restart' | Out-Null
             $persistedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
-            $persistedLabel = Find-Element (Find-Element $window 'Id' 'SummaryDisplayLanguage') 'Name' 'Simplified Chinese (Mandarin)'
-            if ($persistedEntry.recording.summaryLanguage -cne 'zh-CN' -or $persistedLabel.Current.IsOffscreen) { throw 'Restart lost the saved display language or its visible label.' }
+            $restartedCombo = Find-Element $window 'Id' 'SummaryDisplayLanguage'
+            $persistedItem = Get-ComboItem $restartedCombo 'Simplified Chinese (Mandarin)'
+            $isSelected = ([System.Windows.Automation.SelectionItemPattern]$persistedItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Current.IsSelected
+            if ($persistedEntry.recording.summaryLanguage -cne 'zh-CN' -or -not $isSelected) { throw 'Restart lost the saved display language or its selected visible item.' }
+            ([System.Windows.Automation.ExpandCollapsePattern]$restartedCombo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Collapse()
             $translationRequests = @(Get-Content (Join-Path $evidence 'translation-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
             if ($translationRequests.Count -ne 24) { throw 'Unexpected translation request count or hidden retries.' }
             if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture -or [IO.File]::ReadAllText($target) -cne $targetContent) { throw 'Translation/playback changed original source or edit target.' }
