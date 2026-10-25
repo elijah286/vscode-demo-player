@@ -736,7 +736,7 @@ $timer.Add_Tick({
             $script:lastView = $view
             if ($script:selectionResumePending) {
                 if ($view.phase -in @('ready', 'review')) {
-                    $script:action = 'play'
+                    $script:action = if ($view.phase -eq 'ready') { 'play' } else { 'next' }
                     $primaryLabel.Text = 'Resume'
                     $playPause.ToolTip = 'Resume at the selected exchange'
                     [System.Windows.Automation.AutomationProperties]::SetName($playPause, 'Resume')

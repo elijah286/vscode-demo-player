@@ -884,6 +884,27 @@ try {
         $pairInput.Height -le 0 -or $pairOutput.Height -le 0) { throw 'Both complete summaries must be visible together between the fixed timer and overlay bottom.' }
     Save-WindowImage $overlay 'conversation-input1-output1.png'
     Invoke-Button $window 'NextStep'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'second exchange starts before reselection' | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'SelectExchanges').Current.IsEnabled } 'pause a later exchange with completed history' | Out-Null
+    $pausedAuto = [System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'AutoContinue').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $pausedAuto.Toggle()
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'keep second exchange and earlier history'
+    Invoke-Button $exchangeDialog 'SaveExchangeSelection'
+    Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'later reselection closes old scoped target' 20 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' -and
+        (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'later exchange waits for Resume despite Auto continue' 50 | Out-Null
+    Start-Sleep -Milliseconds 2500
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume' -or
+        (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'A later paused reselection autoplayed from reconstructed review history.' }
+    $pausedAuto.Toggle()
+    $replay = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    } 'later reselection target'
+    $replayId = [int]$replay.ProcessId
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Resume uses the guarded next command for a later exchange' | Out-Null
     Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary -and
         (Find-Element $overlay 'Id' 'Message2Text').Current.Name -ceq 'Show the next recorded interaction.' } 'Input2 appends below retained Input1 and Output1' | Out-Null
     if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or
