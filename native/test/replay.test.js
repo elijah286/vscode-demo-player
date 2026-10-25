@@ -22,10 +22,10 @@ test('full-run estimate profile caches included phases and exact reading dwell w
     const recordings = [item('short', 'y'.repeat(315)), item('x'.repeat(70), null), ...single];
     const profile = profileFor(recordings);
     assert.equal(profile.count, 3);
-    assert.equal(profile.promptDwellMilliseconds, 5000);
+    assert.equal(profile.promptDwellMilliseconds, 0, 'An input already visible during playback needs no additional wait');
     assert.equal(profile.outputDwellMilliseconds, 10000 + 1000 +
         'Output summary missing. Generate or edit summaries before playback.'.length * 1000 / 35);
-    assert.equal(profile.noSummaryDwellMilliseconds, 4000);
+    assert.equal(profile.noSummaryDwellMilliseconds, 0, 'No output summary means no reading delay');
     assert.equal(profileFor(recordings), profile, 'Polling must not rescan summaries for the estimate');
     assert.equal(controlView({ phase: 'idle', recordings: [] }).estimateProfile, undefined);
 });

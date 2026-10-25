@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$EvidenceRoot,
     [string]$ApplicationRoot,
     [switch]$Installed,
+    [switch]$PlaybackOnly,
     [switch]$LargeSummarySources
 )
 
@@ -315,6 +316,23 @@ try {
     Save-WindowImage $window 'controller-empty.png'
     Invoke-Button $window 'ChooseDemo'
     $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'unified interaction picker'
+    if ($PlaybackOnly) {
+        $overlaySummary = 'Explain the recorded interaction and its saved reference and code edits, preserving the original query for playback while showing this shorter, reviewed description to the presentation audience.'
+        $outputSummary = 'The recorded assistant showed an answer, a saved reference and archived code edits.'
+        $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+        Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $saved.id
+            summaries = @{ promptSummaries = @($overlaySummary,$null); outputSummaries = @($outputSummary,$null) }
+            expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+        } | Out-Null
+        ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        $list = Find-Element $dialog 'Id' 'DemoList'
+        $item = Wait-Until {
+            $items = $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+            if ($items.Count -eq 1) { return $items[0] }
+        } 'focused playback fixture'
+        ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        Write-Output 'PLAYBACK-ONLY SCOPE: configuration/authoring acceptance not run; playback timing, rendering, pause, reselection and scoped lifecycle are tested.'
+    } else {
     ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
     Wait-Until {
         (Find-Element $dialog 'Id' 'DemoList').FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 1 -and
@@ -679,6 +697,7 @@ try {
     if ([IO.File]::ReadAllText((Join-Path $library ($summaryEntry.id + '.demo.json'))) -cne $beforeLegacy) { throw 'Cancel repaired legacy batch changed bytes.' }
     Write-Output 'AUTOMATIC FIT UI PASSED: 601/1201/1457/4096 -> complete <=600 drafts, exact bounded requests, Save enabled without typing, mixed batch atomic save/cancel, legacy 1457 repair preserves valid drafts/inclusion/bytes.'
     Save-WindowImage $dialog 'library-captured.png'
+    }
     Invoke-Button $dialog 'SelectDemo'
     $selectedControls = Wait-Until {
         $controls = @{}
@@ -699,6 +718,7 @@ try {
         Wait-Until { (Find-Element $window 'Id' 'RunEstimate').Current.Name -eq ('Estimated total: ' + $setting.Total + ' + manual waits') } 'full selected run estimate follows slider without opening native playback' | Out-Null
         if ((Find-Element $window 'Id' 'SpeedLabel').Current.Name -notlike ('*' + $setting.Label)) { throw 'Speed label does not match phase timing.' }
     }
+    if (-not $PlaybackOnly) {
     foreach ($action in @(
         @{ Id = 'GeneratePromptSummaries' },
         @{ Id = 'GenerateOutputSummaries' }
@@ -767,6 +787,7 @@ try {
     if ((Find-Element $window 'Id' 'GeneratePromptSummaries').Current.Name -notmatch '\(1/2\)$') { throw 'Output saves changed prompt count.' }
     Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id; summaries = @($outputSummary, $null); expected = @($outputSummary, 'Manually saved second reply') } | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(1/2\)$' } 'controller observes summary clear without reselecting' | Out-Null
+    }
     foreach ($id in @('ShowPrompt','ShowElapsed','ShowOutput')) { $selectedControls[$id] = Find-Element $window 'Id' $id }
     Save-WindowImage $window 'controller-summary-links.png'
     $showPrompt = $selectedControls.ShowPrompt
@@ -828,6 +849,27 @@ try {
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' } 'paused playback' | Out-Null
     Save-WindowImage $window 'controller-paused.png'
+    Wait-Until { (Find-Element $window 'Id' 'SelectExchanges').Current.IsEnabled } 'selection enabled while paused' | Out-Null
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'paused exchange checklist'
+    ([System.Windows.Automation.InvokePattern](Find-Element $exchangeDialog 'Name' 'Cancel').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Wait-Until { -not (Get-AppWindow 'Select exchanges') } 'cancel returns to paused playback' | Out-Null
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume' -or
+        -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue)) { throw 'Cancel must preserve the paused process.' }
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'save paused checklist'
+    Invoke-Button $exchangeDialog 'SaveExchangeSelection'
+    Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'old scoped target closes for reselection' 20 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' -and
+        (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'saved selection waits for explicit Resume' 50 | Out-Null
+    $replay = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    } 'reselection target'
+    $replayId = [int]$replay.ProcessId
+    Start-Sleep -Milliseconds 800
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume' -or
+        (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Saving a paused selection must not autoplay.' }
+    Save-WindowImage $window 'controller-reselection-waiting.png'
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' -and (Find-Element $window 'Id' 'NextStep').Current.IsEnabled } 'first answer review offers restart and next exchange' | Out-Null
     Wait-Until { (Find-Element $overlay 'Id' 'SecondText').Current.Name -ceq $outputSummary } 'completed Input1 and Output1' | Out-Null
@@ -881,11 +923,60 @@ try {
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'manual restart after auto run' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Wait-Until { (Find-Element $overlay 'Id' 'PromptText').Current.Name -ceq $overlaySummary -and $showElapsed.Current.IsEnabled } 'output off restores legacy input-only mode and elapsed choice' | Out-Null
+    $advance = [Diagnostics.Stopwatch]::StartNew()
+    $autoPattern.Toggle()
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'prompt-only auto-continue starts the next exchange immediately' | Out-Null
+    $advance.Stop()
+    if ($advance.ElapsedMilliseconds -ge 1500) { throw ('Prompt-only auto-continue retained an artificial wait: ' + $advance.ElapsedMilliseconds + 'ms') }
+    $autoPattern.Toggle()
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Replay' } 'prompt-only final exchange completes' | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'restart first exchange for changed selection' | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'SelectExchanges').Current.IsEnabled } 'pause first exchange before excluding it' | Out-Null
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'exclude current exchange checklist'
+    ([System.Windows.Automation.TogglePattern](Find-Element $exchangeDialog 'Id' 'ExchangeSelection0').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Invoke-Button $exchangeDialog 'SaveExchangeSelection'
+    Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'old target closes after excluding current' 20 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Resume' -and
+        (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'next selected exchange waits for Resume' 50 | Out-Null
+    Start-Sleep -Milliseconds 800
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume') { throw 'Excluding current exchange caused autoplay.' }
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $overlay 'Id' 'PromptText').Current.Name -eq 'Show the next recorded interaction.' } 'Resume starts next original exchange, not the excluded first one' | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Replay' } 'selected second exchange finishes' | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'restart selected second exchange' | Out-Null
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'SelectExchanges').Current.IsEnabled } 'pause last original exchange' | Out-Null
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'select only an earlier original exchange'
+    foreach ($index in @(0,1)) {
+        ([System.Windows.Automation.TogglePattern](Find-Element $exchangeDialog 'Id' "ExchangeSelection$index").GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    }
+    Invoke-Button $exchangeDialog 'SaveExchangeSelection'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Replay' -and
+        (Find-Element $window 'Id' 'PlayPause').Current.IsEnabled } 'no following included exchange finishes without looping backwards' 50 | Out-Null
+    Start-Sleep -Milliseconds 800
+    if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Replay') { throw 'End-of-selection looped backwards automatically.' }
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'restart earlier exchange explicitly before Stop' | Out-Null
+    $replay = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    } 'final reselection target'
+    $replayId = [int]$replay.ProcessId
+    Write-Output ('PAUSED SELECTION AND DELAY PASSED: cancel preserves process; keep-current restarts; remove-current resumes next original; no following exchange finishes; saves do not autoplay; prompt-only next transition ' + $advance.ElapsedMilliseconds + 'ms (<1500ms).')
     Invoke-Button $window 'Stop'
     Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'scoped replay closes' 20 | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'controller remains available after stop' | Out-Null
     if (-not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue)) { throw 'Stop closed the standalone controller.' }
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Open') { throw 'Stopped targets must return the primary control to Open.' }
+    Invoke-Button $window 'SelectExchanges'
+    $exchangeDialog = Wait-Until { Get-AppWindow 'Select exchanges' } 'restore complete synthetic selection'
+    ([System.Windows.Automation.TogglePattern](Find-Element $exchangeDialog 'Id' 'ExchangeSelection1').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    Invoke-Button $exchangeDialog 'SaveExchangeSelection'
+    Wait-Until { -not (Get-AppWindow 'Select exchanges') } 'idle selection restored' | Out-Null
     if (-not $showPrompt.Current.IsEnabled -or -not $showElapsed.Current.IsEnabled) { throw 'Presentation options must remain available after Stop.' }
     $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'selected demo overlay after Stop'
     if ((Find-Element $overlay 'Id' 'PromptText').Current.Name -cne $overlaySummary -or
@@ -923,13 +1014,17 @@ try {
     $list = Find-Element $dialog 'Id' 'DemoList'
     Wait-Until {
         $list = Find-Element $dialog 'Id' 'DemoList'
-        $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq 2
-    } 'both saved selections finish loading after application restart' | Out-Null
+        $list.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition).Count -eq $(if ($PlaybackOnly) { 1 } else { 2 })
+    } 'expected saved selections finish loading after application restart' | Out-Null
     ([System.Windows.Automation.WindowPattern]$dialog.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
     Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'reopened controller closes when idle' | Out-Null
     if ([IO.File]::ReadAllText($target) -ne $targetContent) { throw 'Playback modified the saved edit target.' }
-    Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, capture/save, rename/select, manual input/output save/reopen/cancel/clear, inclusion cancel/exclude/reinclude with stable summaries/counts, direct synthetic OpenAI settings/consent/review/recovery, retained resize/wrapping, default-off output and Auto continue, Input1 then Input1+Output1 then retained history+Input2 then four bubbles with explicit missing Output2, labeled You/AI, fixed cumulative 00:01:01/00:03:03 timer, Auto continue reading dwell and final-step refusal without Next, manual restart, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, scoped Stop/close, persistence, unchanged edit target. No paid requests or real library/settings changes.'
+    if ($PlaybackOnly) {
+        Write-Output 'PLAYBACK UI ACCEPTANCE PASSED: exact live speed estimates, retained resize/wrapping, full-pair visibility/history/timer, output reading dwell, prompt-only immediate next, pause/cancel/reselection/current/next/end, explicit Resume without autoplay, scoped Stop/close, persisted selections and unchanged edit target. Configuration/authoring acceptance NOT RUN in this focused command.'
+    } else {
+        Write-Output 'UI ACCEPTANCE PASSED: automatic native/SDK table, filters, capture/save, rename/select, manual input/output save/reopen/cancel/clear, inclusion cancel/exclude/reinclude with stable summaries/counts, direct synthetic OpenAI settings/consent/review/recovery, retained resize/wrapping, default-off output and Auto continue, Input1 then Input1+Output1 then retained history+Input2 then four bubbles with explicit missing Output2, labeled You/AI, fixed cumulative 00:01:01/00:03:03 timer, Auto continue reading dwell and final-step refusal without Next, manual restart, output-off legacy restoration, Open without autoplay, Play/pause/resume, Next Step, scoped Stop/close, persistence, unchanged edit target. No paid requests or real library/settings changes.'
+    }
 } catch {
     $uiFailed = $true
     Write-Output $_.ScriptStackTrace

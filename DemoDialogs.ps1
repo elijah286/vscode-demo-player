@@ -1021,7 +1021,7 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
  Width="820" Height="620" MinWidth="520" MinHeight="360" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <DockPanel Margin="16">
   <StackPanel DockPanel.Dock="Top">
-   <TextBlock Text="Choose exchanges for the next replay. Originals and summaries are retained." TextWrapping="Wrap"/>
+   <TextBlock Text="Choose exchanges for playback. When paused, saving prepares the current included exchange or the next included exchange, without autoplay. Originals and summaries are retained." TextWrapping="Wrap"/>
    <WrapPanel Margin="0,10">
     <Button x:Name="All" Content="Select all" Padding="12,4"/>
     <Button x:Name="None" Content="Deselect all" Padding="12,4" Margin="8,0"/>

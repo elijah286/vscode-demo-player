@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.24](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.24/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.25](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.25/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -442,10 +442,11 @@ The label shows both durations. A change preserves progress within the current
 phase and applies to the remaining typing/output in both Editor and Agents modes.
 The speed choice lasts for this controller session, including replay and mode switches.
 Recorded working-time totals do not change with presentation speed. Auto-continue's
-separate reading dwell is unchanged. **Estimated total** updates immediately as
+output-summary reading dwell also decreases with speed. **Estimated total** updates immediately as
 the slider moves and covers the full included selection, not just the remaining
-exchanges. With Auto continue on it includes the 2-10 second reading delay for
-the visible summary between exchanges (never after the final reply). Without
+exchanges. With Auto continue on it includes output-summary reading time between
+exchanges (2-10 seconds at normal speed, 0.4-2 seconds at fastest speed, never
+after the final reply). Without
 Auto continue it shows playback time **+ manual waits**, not an invented duration
 for those waits. Startup, rendering/transport overhead and pauses are excluded,
 so this is an estimate, distinct from the original cumulative working-time timer.
@@ -455,9 +456,14 @@ recordings or call a helper on the UI dispatcher.
 Once a saved interaction is loaded, **Select exchanges...** opens a scrollable
 checklist with input/output summaries (source excerpts when no summary is saved),
 individual checkboxes, **Select all**, **Deselect all**, and an included count.
-**Use selected exchanges** saves the next-run selection in original order;
-at least one exchange must be included. Cancel writes nothing. Stop active playback
-before changing the selection. Originals and reviewed summaries are preserved,
+**Use selected exchanges** saves the selection in original order;
+at least one exchange must be included. Cancel writes nothing. You can also change
+the selection while playback is paused. Saving prepares the current exchange from
+its beginning if it remains included, otherwise the next included exchange.
+Playback stays waiting for **Resume**; if none follows, it finishes without
+looping to earlier exchanges. Cancel leaves the paused exchange untouched.
+The isolated playback window reopens to reload the saved selection.
+Originals and reviewed summaries are preserved,
 and concurrent summary/inclusion changes are rejected rather than overwritten.
 
 After the final reply, the playback window and summary overlay stay open on the
@@ -529,8 +535,10 @@ invented success or a paraphrase of the user request.
 
 **Auto continue** defaults off. When enabled, a completed exchange waits for a
 nonblocking reading dwell before advancing: one second plus one second per 35
-visible-summary characters, bounded to 2-10 seconds. Output mode uses the newly
-revealed output summary; prompt-only mode uses the visible input. Unchecking,
+output-summary characters, bounded to 2-10 seconds at normal speed and scaled
+down linearly to 20% at the fastest speed. Only the newly revealed output needs
+this dwell: with output summaries off, auto-continue advances on the next control
+poll without an artificial reading wait, including in prompt-only mode. Unchecking,
 manual Next Step, Pause/Start Over, Stop, selection/mode changes, or connection
 failure cancel pending advancement. It never advances from preparation, ready,
 paused or faulted states, and the last exchange finishes without looping.
