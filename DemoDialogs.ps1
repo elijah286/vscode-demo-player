@@ -790,10 +790,14 @@ function Show-InteractionPicker($Owner) {
     })
     $updateSaveState = {
         $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
+        $availableCount = $turns.SelectedItems.Count - $unavailable.Count
+        $dialog.FindName('Save').Content = if ($unavailable.Count -and $availableCount) {
+            'Use ' + $availableCount + ' available exchanges'
+        } else { 'Use selected exchanges' }
         $dialog.FindName('Save').IsEnabled = (
             $null -ne $dialog.Tag.Inspection -and
-            $turns.SelectedItems.Count -ge 1 -and $turns.SelectedItems.Count -le 100 -and
-            $unavailable.Count -eq 0 -and $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true
+            $availableCount -ge 1 -and $availableCount -le 100 -and
+            $reviewed.IsEnabled -and $reviewed.IsChecked -eq $true
         )
         foreach ($name in @('SelectionSummaries', 'SelectionAiSummaries', 'SelectionClearSummaries')) {
             $dialog.FindName($name).IsEnabled = $dialog.FindName('Save').IsEnabled
@@ -821,11 +825,15 @@ function Show-InteractionPicker($Owner) {
         $dialog.FindName('SelectionCount').Text = $turns.SelectedItems.Count.ToString() + ' of ' + $turns.Items.Count + ' exchanges selected'
         $unavailable = @($turns.SelectedItems | Where-Object { $_.Turn.error })
         $sourceUnavailable = @($turns.Items | Where-Object { $_.Turn.error })
-        $captureStatus.Text = if ($turns.SelectedItems.Count -gt 100) {
-            'Playback supports at most 100 exchanges. Reduce the selection.'
+        $availableCount = $turns.SelectedItems.Count - $unavailable.Count
+        $captureStatus.Text = if ($availableCount -gt 100) {
+            'Playback supports at most 100 available exchanges. Reduce the selection.'
         } elseif ($unavailable.Count) {
             $first = $unavailable[0].Turn
-            $unavailable.Count.ToString() + ' selected exchanges cannot be used for playback. Use Select available. Exchange ' + ($first.index + 1) + ': ' + $first.error
+            $selectionNotice = if ($availableCount) {
+                'Only the ' + $availableCount + ' available selected exchanges will be used for playback and summaries; ' + $unavailable.Count + ' unavailable selected exchanges will be skipped.'
+            } else { 'No available selected exchanges can be used for playback or summaries.' }
+            $selectionNotice + ' Use Select available to exclude unavailable entries from the selection. Exchange ' + ($first.index + 1) + ': ' + $first.error
         } elseif (-not $turns.SelectedItems.Count) {
             if (-not $turns.Items.Count) { 'This conversation has no saved exchanges.' }
             elseif ($sourceUnavailable.Count -eq $turns.Items.Count) { 'No available exchanges can be replayed from this saved conversation.' }
@@ -862,13 +870,8 @@ function Show-InteractionPicker($Owner) {
     $prepareSelection = {
         if (-not $dialog.Tag.Inspection) { throw 'Load a conversation first.' }
         if (-not $reviewed.IsChecked) { throw 'Review the selected content and acknowledge the privacy and asset notice.' }
-        $selected = @($turns.SelectedItems | Sort-Object { $_.Turn.index })
-        if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 exchanges.' }
-        $unavailable = @($selected | Where-Object { $_.Turn.error })
-        if ($unavailable.Count) {
-            $first = $unavailable[0].Turn
-            throw ('Use Select available to exclude ' + $unavailable.Count + ' unavailable exchanges. Exchange ' + ($first.index + 1) + ': ' + $first.error)
-        }
+        $selected = @($turns.SelectedItems | Where-Object { -not $_.Turn.error } | Sort-Object { $_.Turn.index })
+        if ($selected.Count -lt 1 -or $selected.Count -gt 100) { throw 'Select 1 to 100 available exchanges. Unavailable exchanges cannot be used for playback or summaries.' }
         $indices = @($selected | ForEach-Object { [int]$_.Turn.index })
         $selectionTitle = if ([string]::IsNullOrWhiteSpace($title.Text)) { $dialog.Tag.DefaultTitle } else { $title.Text }
         if ($selectionTitle.Length -gt 160) { $selectionTitle = $selectionTitle.Substring(0,160) }
@@ -1031,6 +1034,14 @@ function Show-DemoSummaryScope($Owner) {
     }
 }
 
+function Get-DemoSummaryExpected($Recording) {
+    return @{
+        promptSummaries = $Recording.promptSummaries; outputSummaries = $Recording.outputSummaries
+        playbackIncluded = $Recording.playbackIncluded; summaryLanguage = $Recording.summaryLanguage
+        summaryRevision = $Recording.summaryRevision
+    }
+}
+
 function Show-DemoExchangeSelection($Owner, [string]$Id) {
     $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id } $Owner
     $outputs = @(Invoke-DemoLibrary @{ command = 'summarySources'; id = $Id } $Owner)
@@ -1096,7 +1107,7 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
             $replies = if ($null -ne $entry.recording.outputSummaries) { @($entry.recording.outputSummaries) } else { [object[]]::new($checks.Count) }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
                 summaries = @{ promptSummaries = @($inputs); outputSummaries = @($replies); playbackIncluded = @($checks | ForEach-Object { [bool]$_.IsChecked }) }
-                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
+                expected = Get-DemoSummaryExpected $entry.recording
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { $dialog.FindName('Error').Text = $_.Exception.Message }
@@ -1148,6 +1159,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     if ($null -ne $entry.recording.promptSummaries) { $drafts = [object[]]$entry.recording.promptSummaries.Clone() }
     $outputDrafts = [object[]]::new($entry.recording.turns.Count)
     if ($null -ne $entry.recording.outputSummaries) { $outputDrafts = [object[]]$entry.recording.outputSummaries.Clone() }
+    if ($Generated.Language) {
+        $variant = $entry.recording.summaryVariants.($Generated.Language)
+        $drafts = [object[]]::new($entry.recording.turns.Count)
+        $outputDrafts = [object[]]::new($entry.recording.turns.Count)
+        if ($null -ne $variant) {
+            $drafts = [object[]]$variant.promptSummaries.Clone()
+            $outputDrafts = [object[]]$variant.outputSummaries.Clone()
+        }
+    }
     $generatedOriginals = @{}
     if ($Generated) {
         $dialog.Title = 'Review AI Summaries'
@@ -1297,8 +1317,9 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             $issues = @(& $reviewIssues)
             if ($issues.Count) { throw ($issues -join "`n") }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
+                language = $Generated.Language
                 summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs); playbackIncluded = @($dialog.Tag.Included) }
-                expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries; playbackIncluded = $entry.recording.playbackIncluded }
+                expected = Get-DemoSummaryExpected $entry.recording
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }
@@ -1317,7 +1338,7 @@ function Show-DemoClearSummariesNotice($Owner, [string]$Id) {
     if ($answer -ne 'OK') { return $false }
     Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
         summaries = @{ promptSummaries = @([object[]]::new($entry.recording.turns.Count)); outputSummaries = @([object[]]::new($entry.recording.turns.Count)) }
-        expected = @{ promptSummaries = $entry.recording.promptSummaries; outputSummaries = $entry.recording.outputSummaries }
+        expected = Get-DemoSummaryExpected $entry.recording
     } $Owner | Out-Null
     return $true
 }

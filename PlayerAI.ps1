@@ -125,7 +125,7 @@ function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
  </DockPanel>
 </Window>
 '@ $Owner
-        $translationDialog.FindName('Notice').Text = 'Send only the saved summaries shown below to OpenAI (' + $settings.model + ') for translation? Original prompts, replies, tools and context are NOT sent or changed. Only included exchanges with saved summaries are translated; missing summaries stay missing. API charges apply: up to 4 requests and 90 seconds per summary for length correction; no retries for failed requests. Response storage is disabled; OpenAI retention policies apply. Review for secrets. Save summaries replaces the displayed summary text with your reviewed translations (also in exports); cancel leaves saved summaries unchanged. To return to English, translate again or edit summaries. Cancellation cannot undo API charges.'
+        $translationDialog.FindName('Notice').Text = 'Send only the saved summaries shown below to OpenAI (' + $settings.model + ') for translation? Original prompts, replies, tools and context are NOT sent or changed. Only included exchanges with saved summaries are translated; missing summaries stay missing. API charges apply: up to 4 requests and 90 seconds per summary for length correction; no retries for failed requests. Response storage is disabled; OpenAI retention policies apply. Review for secrets. Save summaries saves and displays this language version, retaining Original and other saved languages (also in exports). Use Summary language in the controller to switch offline. Cancel leaves saved summaries unchanged. Cancellation cannot undo API charges.'
         $translationDialog.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
             'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" + $_.source
         }) -join "`r`n`r`n---`r`n`r`n")
@@ -152,6 +152,7 @@ function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
         if ($translationDialog.ShowDialog()) {
             Show-DemoSummaryDialog $Owner $Id ([pscustomobject]@{
                 Entry = $prepared.entry; Outputs = $prepared.outputs; Drafts = @($translationDialog.Tag.Drafts.ToArray())
+                Language = [string]$translationDialog.FindName('Language').SelectedItem.Tag
             }) | Out-Null
         }
     } finally { $script:openAISummaryBusy = $false }

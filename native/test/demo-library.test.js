@@ -47,6 +47,127 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('six recorded exchanges retain four read-only event turns without inventing missing prompts', async context => {
+    const { source, root } = await fixture(context);
+    const requests = Array.from({ length: 6 }, (_, index) => ({
+        result: {}, message: { text: [2, 5].includes(index) ? '' : 'Recorded prompt ' + (index + 1) },
+        response: [{ kind: 'recordedSdkEvent', events: [{ type: 'synthetic.saved.event', data: { index } }] }]
+    }));
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests } }));
+    const before = await fs.readFile(source);
+    const inspection = await library.inspectTranscript(source);
+    assert.deepEqual(inspection.turns.map(turn => turn.status), [
+        'archived-events', 'archived-events', 'unavailable', 'archived-events', 'archived-events', 'unavailable'
+    ]);
+    for (const index of [2, 5]) {
+        assert.equal(inspection.turns[index].error, 'Editor playback requires a nonempty recorded prompt.');
+        assert.equal(inspection.turns[index].prompt, '');
+    }
+    const indices = inspection.turns.filter(turn => !turn.error).map(turn => turn.index);
+    assert.deepEqual(indices, [0, 1, 3, 4]);
+    const recording = await library.createPackage(source, indices, 'Four usable read-only exchanges', inspection.sha256);
+    assert.deepEqual(recording.turns.map(turn => turn.sourceIndex), indices);
+    assert.deepEqual(recording.turns.map(turn => turn.snapshot.requests[0]), indices.map(index => requests[index]));
+    const saved = await library.addPackage(root, recording);
+    assert.equal((await library.packageRecordings(path.join(root, saved.id + '.demo.json'))).length, 4);
+    await assert.rejects(library.createPackage(source, [0, 1, 2, 3, 4, 5], 'Invalid selection', inspection.sha256), /nonempty recorded prompt/);
+    assert.deepEqual(await fs.readFile(source), before);
+
+    await fs.writeFile(source, JSON.stringify({ kind: 0, v: { requests: [requests[2], requests[5]] } }));
+    const unavailable = await library.inspectTranscript(source);
+    assert.equal(unavailable.turns.length, 2);
+    assert.ok(unavailable.turns.every(turn => turn.status === 'unavailable' && turn.prompt === '' && /nonempty recorded prompt/.test(turn.error)));
+    await assert.rejects(library.createPackage(source, [0, 1], 'No usable exchanges', unavailable.sha256), /nonempty recorded prompt/);
+    await assert.rejects(library.createPackage(source, [], 'Empty selection', unavailable.sha256), /1 to 100/);
+});
+
+test('saved summary languages switch offline, retain originals and edits, and survive CLI, restart and export/import', async context => {
+    const { root, source, inspection, directory } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Languages', inspection.sha256));
+    const original = { promptSummaries: ['Original prompt.', 'Excluded prompt.'], outputSummaries: ['Original reply.', null] };
+    await library.saveSummaryBatch(root, saved.id, { ...original, playbackIncluded: [true, false] },
+        { promptSummaries: null, outputSummaries: null, playbackIncluded: null });
+    const before = await library.readEntry(root, saved.id);
+    const file = path.join(root, saved.id + '.demo.json');
+    const cli = request => {
+        const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'library-cli.js')], {
+            input: JSON.stringify({ root, id: saved.id, ...request }), encoding: 'utf8'
+        });
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        return JSON.parse(result.stdout).result;
+    };
+    for (const language of ['zh-CN', 'fr', 'de', 'it', 'en']) {
+        const entry = await library.readEntry(root, saved.id);
+        const pair = { promptSummaries: [language + ' prompt.', null], outputSummaries: [language + ' reply.', null] };
+        const metadata = cli({ command: 'summaryBatch', summaries: pair, expected: entry.recording, language });
+        assert.equal(metadata.summaryLanguage, language);
+        assert.equal(metadata.presentation.overlay.promptSummary, pair.promptSummaries[0]);
+        assert.deepEqual((await library.readEntry(root, saved.id)).recording.summaryVariants.original, original);
+    }
+    const all = await library.readEntry(root, saved.id);
+    assert.equal((await library.entryMetadata(root, saved.id)).summaryLanguages.length, 6);
+    for (const language of Object.keys(library.SUMMARY_LANGUAGES)) {
+        const entry = await library.readEntry(root, saved.id);
+        const metadata = cli({ command: 'summaryLanguage', language, expected: entry.recording });
+        assert.equal(metadata.summaryLanguage, language);
+        const pair = all.recording.summaryVariants[language];
+        const playback = await library.packageRecordings(file);
+        assert.equal(playback.length, 1);
+        assert.equal(playback[0].promptSummary, pair.promptSummaries[0]);
+        assert.equal(playback[0].outputSummary, pair.outputSummaries[0]);
+        const view = require('../control-server').controlView({ phase: 'complete', turnIndex: 1, recordings: playback });
+        assert.deepEqual(view.overlay.conversation.history.map(message => message.text),
+            [pair.promptSummaries[0], pair.outputSummaries[0]]);
+    }
+    const selected = await library.readEntry(root, saved.id);
+    await assert.rejects(require('../openai-summaries').prepareSummaries(root, saved.id, 'both'), /Select Original/);
+    await library.savePromptSummaries(root, saved.id, [null, null], selected.recording.outputSummaries, 'output', selected.recording);
+    const edited = await library.readEntry(root, saved.id);
+    assert.deepEqual(edited.recording.summaryVariants.original, original);
+    assert.deepEqual(edited.recording.summaryVariants.en.outputSummaries, [null, null]);
+    assert.deepEqual(edited.recording.turns, before.recording.turns);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, original, selected.recording, 'fr'), /languages changed/);
+    await assert.rejects(library.selectSummaryLanguage(root, saved.id, 'fr', selected.recording), /languages changed/);
+    await assert.rejects(library.selectSummaryLanguage(root, saved.id, 'es', edited.recording), /supported/);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, original, edited.recording, 'es'), /supported/);
+    const exported = path.join(directory, 'languages.demo.json');
+    await library.exportDemo(root, saved.id, exported);
+    const importedRoot = path.join(directory, 'imported');
+    const imported = await library.addPackage(importedRoot, await library.readPackage(exported));
+    assert.equal(imported.summaryLanguage, 'en');
+    const importedEntry = await library.readEntry(importedRoot, imported.id);
+    assert.deepEqual(importedEntry.recording.summaryVariants, edited.recording.summaryVariants);
+    await library.selectSummaryLanguage(importedRoot, imported.id, 'original', importedEntry.recording);
+    assert.equal((await library.packageRecordings(path.join(importedRoot, imported.id + '.demo.json')))[0].promptSummary, original.promptSummaries[0]);
+    for (const corrupt of [
+        { ...edited.recording, summaryLanguage: 'es' },
+        { ...edited.recording, summaryVariants: [] },
+        { ...edited.recording, summaryVariants: { ...edited.recording.summaryVariants, fr: { promptSummaries: [] } } },
+        { ...edited.recording, outputSummaries: ['Not the saved language.', null] }
+    ]) assert.throws(() => library.validatePackage(corrupt), /language|summar/i);
+});
+
+test('language selection rejects unavailable translations and stale editors even when displayed text is identical', async context => {
+    const { root, source, inspection } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0], 'Same text', inspection.sha256));
+    const pair = { promptSummaries: ['Same.'], outputSummaries: [null] };
+    await library.saveSummaryBatch(root, saved.id, pair, { promptSummaries: null, outputSummaries: null });
+    const before = await library.readEntry(root, saved.id);
+    await assert.rejects(library.selectSummaryLanguage(root, saved.id, 'fr', before.recording), /Translate and save/);
+    await library.saveSummaryBatch(root, saved.id, pair, before.recording, 'fr');
+    await assert.rejects(library.savePromptSummaries(root, saved.id, ['Stale.'], pair.promptSummaries), /languages changed/);
+    const translated = await library.readEntry(root, saved.id);
+    await library.selectSummaryLanguage(root, saved.id, 'original', translated.recording);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, pair, translated.recording), /languages changed/);
+    const original = await library.readEntry(root, saved.id);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, { promptSummaries: ['Bad\nline'], outputSummaries: [null] }, original.recording, 'de'), /one line/);
+    assert.deepEqual(await library.readEntry(root, saved.id), original, 'A failed save changes neither selection nor variants');
+    await library.saveSummaryBatch(root, saved.id, { promptSummaries: ['Edited original.'], outputSummaries: [null] }, original.recording);
+    const edited = await library.readEntry(root, saved.id);
+    assert.equal(edited.recording.summaryVariants.original.promptSummaries[0], 'Edited original.');
+    assert.equal(edited.recording.summaryVariants.fr.promptSummaries[0], 'Same.');
+});
+
 test('reviewed translations persist only in overlay metadata, preserving English exchanges and excluded summaries', async context => {
     const { root, source, inspection, directory } = await fixture(context);
     const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Translation', inspection.sha256));

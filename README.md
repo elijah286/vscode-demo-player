@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.28](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.28/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.29](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.29/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -354,9 +354,15 @@ remain visible for inspection; the status reports how many were excluded and
 the first reason. Use **Select all** or
 **Ctrl+A** while the exchange list has focus, **Clear selection**, or Ctrl/Shift
 to adjust the selection. **Select available** excludes genuinely unreadable
-exchanges, including after using Select all. Use selected exchanges stays disabled for empty,
-unavailable, or oversized selections, until the current preview is ready and
-reviewed. The conversation title is used automatically; a custom selection name
+exchanges, including after using Select all. If unavailable entries are selected
+alongside usable exchanges, playback and summary actions use only the available
+subset. The primary button says **Use N available exchanges**, and the status
+explains the skipped count and first validation error. Read-only event exchanges
+with valid recorded prompts remain usable; missing prompts are never invented.
+Actions stay disabled when no available exchanges are selected, more than 100
+available exchanges are selected, or the current preview is not yet ready and
+reviewed. An all-unavailable conversation stays visible with its validation reason
+but cannot be used for playback. The conversation title is used automatically; a custom selection name
 is optional. A selection can contain up to 100 exchanges; larger
 selections show an explicit warning rather than being silently reduced.
 Review the readable prompt/response preview. Exchange rows use short labels and
@@ -706,12 +712,24 @@ Each summary permits up to four requests for length correction within 90 seconds
 failed/refused requests are not retried automatically.
 
 Choose **Translate and review**, check/edit the drafts against the originals,
-then **Save summaries**. Saving replaces only the saved overlay summaries,
-including their exported copies; it does not translate or modify the English
+then **Save summaries**. Saving retains a separate version for that language and
+selects it for display; it does not translate or modify the English
 chat, recordings, payload hashes or replayed prompts/replies. Both the prompt-only
 summary and input/output conversation window use the saved translation.
-There is no separate English-summary backup or per-language cache: translate
-again with **English**, or edit/regenerate summaries, to return to English.
+Use **Summary language** below the translation button to select **Original** or
+any saved translation. Stop playback before switching; the next playback uses
+that language in both overlay modes, counts and timing estimates. Switching is
+offline, makes no AI requests and persists for that recording across restarts
+and export/import. The dropdown is disabled until another language is saved.
+Manual edits/deletions affect only the selected language. To generate missing
+summaries from the recorded conversation, select **Original**, then translate
+again as needed; language versions are not automatically synchronized.
+Only included summaries are translated into a new version; missing/excluded
+summaries are not filled with another language. Existing versions remain intact.
+**Original** means the summaries saved before the first language-versioned
+translation, not necessarily English. Older translations that already overwrote
+English summaries have no recoverable English backup; translate them to
+**English** or edit them to create a new version.
 Canceling review leaves saved summaries unchanged. Saved translations work
 offline during playback; translation itself requires access to OpenAI.
 
@@ -720,6 +738,10 @@ For focused synthetic desktop acceptance, run `test\controller-ui.ps1` with
 choices, review cancellation and explicit saving, unchanged English exchanges,
 and Chinese prompt/reply summaries through isolated native playback.
 The mocked responses do not certify live-provider translation fidelity.
+It also verifies offline Original/Chinese switching in both overlay modes,
+native playback in both languages and selection persistence after restart.
+Use `-PickerOnly` instead for focused six-exchange/two-unavailable desktop
+acceptance, available-subset actions/capture and all-unavailable feedback.
 
 **Settings**, immediately left of **Check for updates**, lets you save, replace
 or delete an OpenAI API key and change the model ID. AI generation prompts for

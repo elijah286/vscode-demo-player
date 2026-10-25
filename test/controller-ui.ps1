@@ -6,6 +6,7 @@ param(
     [switch]$PlaybackOnly,
     [switch]$SummaryOnly,
     [switch]$TranslationOnly,
+    [switch]$PickerOnly,
     [switch]$LargeSummarySources
 )
 
@@ -247,6 +248,27 @@ function Invoke-AISummaryAction($Parent, [string]$Scope = 'Both') {
     Invoke-Button $scopeDialog 'ContinueSummaryScope'
 }
 
+function Get-ComboItem($Combo, [string]$Name) {
+    Wait-Until { $Combo.Current.IsEnabled } ('enabled combo: ' + $Name) | Out-Null
+    ([System.Windows.Automation.ExpandCollapsePattern]$Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
+    $item = Find-Element $Combo 'Name' $Name
+    for ($depth = 0; $item -and $depth -lt 8; $depth++) {
+        if ($item.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) { break }
+        $item = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($item)
+    }
+    if (-not $item -or -not $item.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) {
+        throw ('Selectable combo item unavailable: ' + $Name)
+    }
+    return $item
+}
+
+function Select-ComboItem($Combo, [string]$Name) {
+    $item = Get-ComboItem $Combo $Name
+    ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+    Wait-Until { $Combo.Current.IsEnabled } ('selected combo ready: ' + $Name) | Out-Null
+    ([System.Windows.Automation.ExpandCollapsePattern]$Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Collapse()
+}
+
 function Save-WindowImage($Element, [string]$Name) {
     $Element.SetFocus()
     $bounds = $Element.Current.BoundingRectangle
@@ -335,6 +357,59 @@ try {
     $launch = Start-TestPlayer
     $script:controllerId = $launch.ProcessId
     $window = Wait-Until { Get-AppWindow 'Demo Player' } 'standalone controller'
+    if ($PickerOnly) {
+        $mixedSource = Join-Path $evidence 'mixed-events.jsonl'
+        $eventRequests = @(0..5 | ForEach-Object {
+            @{ result = @{}; message = @{ text = $(if ($_ -in @(2,5)) { '' } else { 'Recorded event prompt ' + $_ }) }
+                response = @(@{ kind = 'recordedSdkEvent'; events = @(@{ type = 'synthetic.saved.event'; data = @{ index = $_ } }) }) }
+        })
+        [IO.File]::WriteAllText($mixedSource, (@{kind=0;v=@{requests=$eventRequests}} | ConvertTo-Json -Depth 20 -Compress), $utf8)
+        $mixedBefore = [IO.File]::ReadAllText($mixedSource)
+        Invoke-Button $window 'ChooseDemo'
+        $capture = Wait-Until { Get-AppWindow 'Find interaction' } 'mixed-availability picker'
+        ([System.Windows.Automation.SelectionItemPattern](Find-Element $capture 'Id' 'AgentConversationsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        $sourceBox = Wait-Until { $box = Find-Element $capture 'Id' 'CaptureSource'; if ($box.Current.IsEnabled) { $box } } 'discovery finishes before loading mixed source' 65
+        ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($mixedSource)
+        Invoke-Button $capture 'Load'
+        Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '4 of 6 exchanges selected' } 'four read-only event exchanges available by default' | Out-Null
+        if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Picker enabled capture before privacy review.' }
+        Invoke-Button $capture 'CaptureSelectAll'
+        $reviewed = Find-Element $capture 'Id' 'CaptureReviewed'
+        Wait-Until { $reviewed.Current.IsEnabled -and (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '6 of 6 exchanges selected' } 'mixed selection preview ready' | Out-Null
+        ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+        Wait-Until { (Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled } 'available subset actionable after review' | Out-Null
+        if ((Find-Element $capture 'Id' 'SaveDemo').Current.Name -ne 'Use 4 available exchanges' -or
+            (Find-Element $capture 'Id' 'CaptureStatus').Current.Name -notmatch '2 unavailable selected exchanges will be skipped') { throw 'Mixed selection did not explain the exact available subset.' }
+        foreach ($id in @('SelectionSummaries','SelectionAiSummaries','SelectionClearSummaries')) {
+            if (-not (Find-Element $capture 'Id' $id).Current.IsEnabled) { throw ('Mixed selection blocked summary action: ' + $id) }
+        }
+        Save-WindowImage $capture 'mixed-available-actions.png'
+        Invoke-Button $capture 'SaveDemo'
+        Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled } 'capture uses only four available exchanges' | Out-Null
+        $captured = @(Invoke-DemoLibrary @{command='list'}) | Where-Object id -ne $saved.id
+        if (@($captured).Count -ne 1 -or $captured.count -ne 4) { throw 'Mixed capture did not persist exactly four available exchanges.' }
+        $entry = Invoke-DemoLibrary @{command='read';id=$captured.id}
+        if ((@($entry.recording.turns | ForEach-Object sourceIndex) -join ',') -cne '0,1,3,4') { throw 'Mixed capture lost stable original indices.' }
+        $badSource = Join-Path $evidence 'unavailable-events.jsonl'
+        [IO.File]::WriteAllText($badSource, (@{kind=0;v=@{requests=@($eventRequests[2],$eventRequests[5])}} | ConvertTo-Json -Depth 20 -Compress), $utf8)
+        Invoke-Button $window 'ChooseDemo'
+        $capture = Wait-Until { Get-AppWindow 'Find interaction' } 'all-unavailable picker'
+        ([System.Windows.Automation.SelectionItemPattern](Find-Element $capture 'Id' 'AgentConversationsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+        $sourceBox = Wait-Until { $box = Find-Element $capture 'Id' 'CaptureSource'; if ($box.Current.IsEnabled) { $box } } 'discovery finishes before loading unavailable source' 65
+        ([System.Windows.Automation.ValuePattern]$sourceBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($badSource)
+        Invoke-Button $capture 'Load'
+        Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '0 of 2 exchanges selected' } 'all unavailable entries remain visible' | Out-Null
+        Invoke-Button $capture 'CaptureSelectAll'
+        Wait-Until { (Find-Element $capture 'Id' 'CaptureStatus').Current.Name -match 'No available selected exchanges' } 'explicit all-unavailable feedback' | Out-Null
+        foreach ($id in @('SaveDemo','SelectionSummaries','SelectionAiSummaries','SelectionClearSummaries')) {
+            if ((Find-Element $capture 'Id' $id).Current.IsEnabled) { throw ('All-unavailable selection enabled action: ' + $id) }
+        }
+        if ([IO.File]::ReadAllText($mixedSource) -cne $mixedBefore -or [IO.File]::ReadAllText($source) -cne $sourceBeforeCapture -or
+            (Test-Path (Join-Path $evidence 'openai-requests.jsonl'))) { throw 'Picker changed a source or sent an AI request.' }
+        ([System.Windows.Automation.WindowPattern]$capture.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
+        Write-Output 'PICKER UI ACCEPTANCE PASSED: six exchanges/two unavailable; default four read-only event exchanges, explicit mixed subset and enabled capture/summary actions after privacy review, exact stable indices0,1,3,4 persisted, all-unavailable entries visible with disabled actions and explicit feedback; no source changes or AI requests.'
+        return
+    }
     if ($SummaryOnly -or $TranslationOnly) {
         $entryPath = Join-Path $library ($saved.id + '.demo.json')
         $before = [IO.File]::ReadAllText($entryPath)
@@ -395,14 +470,7 @@ try {
                 if ($selectedLanguage -ne 'Simplified Chinese (Mandarin)') { throw 'Simplified Chinese must default on every translation dialog.' }
                 if ((Find-Element $translationDialog 'Id' 'SummaryTranslationSources').Current.Name -match 'Show the first recorded interaction') { throw 'Translation consent includes original exchanges.' }
                 if ($language -ne 'Simplified Chinese (Mandarin)') {
-                    ([System.Windows.Automation.ExpandCollapsePattern]$languageBox.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Expand()
-                    $languageItem = Wait-Until {
-                        $languageBox.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-                            [System.Windows.Automation.AndCondition]::new(
-                                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $language),
-                                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty, $true)))
-                    } 'selectable translation language'
-                    ([System.Windows.Automation.SelectionItemPattern]$languageItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+                    Select-ComboItem $languageBox $language
                 }
                 Invoke-Button $translationDialog 'ConfirmSummaryTranslation'
                 $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'translated summary draft review'
@@ -424,6 +492,17 @@ try {
             foreach ($summary in @($translatedEntry.recording.promptSummaries) + @($translatedEntry.recording.outputSummaries)) {
                 if ($summary -cne $chinese) { throw 'Explicit Chinese save did not preserve aligned Unicode summaries.' }
             }
+            if (($translatedEntry.recording.summaryVariants.original.promptSummaries | ConvertTo-Json -Compress) -cne
+                ($english.recording.promptSummaries | ConvertTo-Json -Compress)) { throw 'Original summary version was not retained.' }
+            ([System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'ShowPrompt').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+            $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'language-selectable prompt overlay'
+            foreach ($choice in @('Original','Simplified Chinese (Mandarin)')) {
+                $displayLanguage = Find-Element $window 'Id' 'SummaryDisplayLanguage'
+                Wait-Until { $displayLanguage.Current.IsEnabled } 'saved-language selector available' | Out-Null
+                Select-ComboItem $displayLanguage $choice
+                $expectedText = if ($choice -eq 'Original') { 'Synthetic OpenAI input summary.' } else { $chinese }
+                Wait-Until { (Find-Element $overlay 'Id' 'PromptText').Current.Name -ceq $expectedText -and $displayLanguage.Current.IsEnabled } 'offline prompt-only language switch' | Out-Null
+            }
             ([System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'ShowOutput').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
             $overlay = Wait-Until { Get-AppWindow 'Playback overlay' } 'Chinese summary overlay'
             Invoke-Button $window 'PlayPause'
@@ -432,6 +511,7 @@ try {
             } 'isolated English recording with Chinese summaries'
             $replayId = [int]$replay.ProcessId
             Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'translated recording prepares without autoplay' 50 | Out-Null
+            if ((Find-Element $window 'Id' 'SummaryDisplayLanguage').Current.IsEnabled) { throw 'Playback target allows a language change.' }
             Invoke-Button $window 'PlayPause'
             Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' } 'first original exchange completes with Chinese overlay' | Out-Null
             if ((Find-Element $overlay 'Id' 'FirstText').Current.Name -cne $chinese -or
@@ -439,10 +519,47 @@ try {
             Save-WindowImage $overlay 'simplified-chinese-pair.png'
             Invoke-Button $window 'Stop'
             Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -and (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Open' } 'only scoped translation-test playback stops' 20 | Out-Null
+            Select-ComboItem (Find-Element $window 'Id' 'SummaryDisplayLanguage') 'Original'
+            Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq 'Synthetic OpenAI input summary.' } 'Original conversation overlay restored offline' | Out-Null
+            Invoke-Button $window 'PlayPause'
+            $replay = Wait-Until {
+                Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+            } 'isolated Original-language playback'
+            $replayId = [int]$replay.ProcessId
+            Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'Original recording prepares' 50 | Out-Null
+            Invoke-Button $window 'PlayPause'
+            Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Start Over' } 'Original reply completes' | Out-Null
+            if ((Find-Element $overlay 'Id' 'FirstText').Current.Name -cne 'Synthetic OpenAI input summary.' -or
+                (Find-Element $overlay 'Id' 'SecondText').Current.Name -cne 'Synthetic OpenAI output summary.') { throw 'Original input/reply playback did not restore saved English summaries.' }
+            Invoke-Button $window 'Stop'
+            Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -and (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Open' } 'Original-language playback stops' 20 | Out-Null
+            Select-ComboItem (Find-Element $window 'Id' 'SummaryDisplayLanguage') 'Simplified Chinese (Mandarin)'
+            Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $chinese -and (Find-Element $window 'Id' 'SummaryDisplayLanguage').Current.IsEnabled } 'Chinese selection saved before restart' | Out-Null
+            ([System.Windows.Automation.WindowPattern]$window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)).Close()
+            Wait-Until { -not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue) } 'only synthetic controller closes for restart' | Out-Null
+            $launch = Start-TestPlayer
+            $script:controllerId = $launch.ProcessId
+            $window = Wait-Until { Get-AppWindow 'Demo Player' } 'restarted language-aware controller'
+            Invoke-Button $window 'ChooseDemo'
+            $dialog = Wait-Until { Get-AppWindow 'Find interaction' } 'persisted language selection'
+            ([System.Windows.Automation.SelectionItemPattern](Find-Element $dialog 'Id' 'SavedSelectionsTab').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+            $item = Wait-Until {
+                $items = (Find-Element $dialog 'Id' 'DemoList').FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+                if ($items.Count -eq 1) { return $items[0] }
+            } 'reloaded language-versioned recording'
+            ([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
+            Invoke-Button $dialog 'SelectDemo'
+            Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'SummaryDisplayLanguage').Current.IsEnabled } 'saved language restored after restart' | Out-Null
+            $persistedEntry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            $restartedCombo = Find-Element $window 'Id' 'SummaryDisplayLanguage'
+            $persistedItem = Get-ComboItem $restartedCombo 'Simplified Chinese (Mandarin)'
+            $isSelected = ([System.Windows.Automation.SelectionItemPattern]$persistedItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Current.IsSelected
+            if ($persistedEntry.recording.summaryLanguage -cne 'zh-CN' -or -not $isSelected) { throw 'Restart lost the saved display language or its selected visible item.' }
+            ([System.Windows.Automation.ExpandCollapsePattern]$restartedCombo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)).Collapse()
             $translationRequests = @(Get-Content (Join-Path $evidence 'translation-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
             if ($translationRequests.Count -ne 24) { throw 'Unexpected translation request count or hidden retries.' }
             if ([IO.File]::ReadAllText($source) -cne $sourceBeforeCapture -or [IO.File]::ReadAllText($target) -cne $targetContent) { throw 'Translation/playback changed original source or edit target.' }
-            Write-Output 'TRANSLATION UI ACCEPTANCE PASSED: Simplified Chinese defaults, all5 languages, summary-only strict-schema requests, paid-request consent, review cancel byte preservation, explicit Chinese save/reload, aligned Unicode input+output overlay through real isolated Editor playback, unchanged original English exchanges/source/edit target and scoped Stop. All24 translation responses synthetic; no live paid-provider fidelity claim.'
+            Write-Output 'TRANSLATION/LANGUAGE UI ACCEPTANCE PASSED: all5 translation choices, cancel preservation, separate Chinese and Original versions, offline switching both directions in prompt-only and conversation modes, real native playback in Chinese and Original, playback gating, controller restart persistence, unchanged English exchanges/source/edit target. Exactly24 synthetic translation requests: offline switches/restart make no additional calls. No live paid-provider fidelity claim.'
         }
         return
     }
@@ -621,7 +738,9 @@ try {
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '3 of 3 exchanges selected' } 'Select all includes unavailable entries for inspection' | Out-Null
     Wait-Until { $reviewed.Current.IsEnabled } 'unavailable selection preview is ready' | Out-Null
     ([System.Windows.Automation.TogglePattern]$reviewed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
-    if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Acknowledging an unavailable selection must not enable Save.' }
+    if (-not (Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Reviewing a mixed selection must enable its available exchanges.' }
+    if ((Find-Element $capture 'Id' 'SaveDemo').Current.Name -ne 'Use 2 available exchanges') { throw 'Mixed selection must explicitly identify the usable subset.' }
+    if ((Find-Element $capture 'Id' 'CaptureStatus').Current.Name -notmatch '1 unavailable selected exchanges will be skipped') { throw 'Mixed selection must explain which content is skipped.' }
     Invoke-Button $capture 'CaptureSelectAvailable'
     Wait-Until { (Find-Element $capture 'Id' 'CaptureSelectionCount').Current.Name -eq '2 of 3 exchanges selected' -and $reviewed.Current.IsEnabled } 'Select available restores the valid preview' | Out-Null
     if ((Find-Element $capture 'Id' 'SaveDemo').Current.IsEnabled) { throw 'Selection changes must invalidate the prior review.' }

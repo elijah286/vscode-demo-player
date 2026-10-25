@@ -45,6 +45,9 @@ class SummaryError extends Error {
 async function prepareSummaries(root, id, scope) {
     if (!['both', 'input', 'output'].includes(scope)) throw new SummaryError('Choose prompt, output, or combined summaries.');
     const entry = await readEntry(root, id);
+    if (entry.recording.summaryLanguage && entry.recording.summaryLanguage !== 'original') {
+        throw new SummaryError('Select Original in Summary language before generating missing summaries.');
+    }
     const candidates = [];
     const manualOutputs = [];
     const included = new Set(includedTurnIndices(entry.recording));
