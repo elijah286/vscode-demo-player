@@ -95,6 +95,68 @@ function Show-PlayerAISettings($Owner, [switch]$RequireKey, [switch]$Rejected) {
     finally { $dialog.FindName('Key').Clear() }
 }
 
+function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
+    if ($script:openAISummaryBusy) { throw 'An AI summary is already being generated or reviewed.' }
+    $script:openAISummaryBusy = $true
+    try {
+        $prepared = Invoke-DemoLibrary @{ command = 'prepareTranslations'; id = $Id } $Owner -Helper 'openai-summaries.js'
+        if (-not @($prepared.candidates).Count) { throw 'Generate or save summaries for included exchanges before translating them.' }
+        if (-not (Get-PlayerAISettings).encryptedKey -and -not (Show-PlayerAISettings $Owner -RequireKey)) { return }
+        $settings = Get-PlayerAISettings
+        $translationDialog = New-DemoDialog @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Translate Summaries" Width="720" Height="540" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ <DockPanel Margin="16">
+  <StackPanel DockPanel.Dock="Top">
+   <TextBlock x:Name="Notice" TextWrapping="Wrap" Margin="0,0,0,10"/>
+   <ComboBox x:Name="Language" SelectedIndex="0" Margin="0,0,0,12" AutomationProperties.AutomationId="SummaryTranslationLanguage">
+    <ComboBoxItem Tag="zh-CN" Content="Simplified Chinese (Mandarin)"/>
+    <ComboBoxItem Tag="fr" Content="French"/>
+    <ComboBoxItem Tag="de" Content="German"/>
+    <ComboBoxItem Tag="it" Content="Italian"/>
+    <ComboBoxItem Tag="en" Content="English"/>
+   </ComboBox>
+  </StackPanel>
+  <WrapPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,12,0,0">
+   <Button Content="Cancel" IsCancel="True" Padding="14,6" Margin="0,0,8,0"/>
+   <Button x:Name="Translate" Content="Translate and review" Padding="14,6" AutomationProperties.AutomationId="ConfirmSummaryTranslation"/>
+  </WrapPanel>
+  <TextBox x:Name="Sources" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="SummaryTranslationSources"/>
+ </DockPanel>
+</Window>
+'@ $Owner
+        $translationDialog.FindName('Notice').Text = 'Send only the saved summaries shown below to OpenAI (' + $settings.model + ') for translation? Original prompts, replies, tools and context are NOT sent or changed. Only included exchanges with saved summaries are translated; missing summaries stay missing. API charges apply: up to 4 requests and 90 seconds per summary for length correction; no retries for failed requests. Response storage is disabled; OpenAI retention policies apply. Review for secrets. Save summaries replaces the displayed summary text with your reviewed translations (also in exports); cancel leaves saved summaries unchanged. To return to English, translate again or edit summaries. Cancellation cannot undo API charges.'
+        $translationDialog.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
+            'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" + $_.source
+        }) -join "`r`n`r`n---`r`n`r`n")
+        $translationDialog.Tag = @{ Drafts = [Collections.Generic.List[object]]::new() }
+        $translationDialog.FindName('Translate').Add_Click({
+            $key = $null
+            try {
+                $key = Get-PlayerOpenAIKey
+                $language = [string]$translationDialog.FindName('Language').SelectedItem.Tag
+                $translationDialog.Tag.Drafts.Clear()
+                foreach ($candidate in $prepared.candidates) {
+                    $translated = Invoke-DemoLibrary @{
+                        command = 'generateSummary'; apiKey = $key; model = $settings.model; language = $language
+                        source = $candidate.source; kind = $candidate.kind
+                    } $translationDialog -Helper 'openai-summaries.js' -TimeoutSeconds 95
+                    $translationDialog.Tag.Drafts.Add([pscustomobject]@{ index = $candidate.index; kind = $candidate.kind; summary = $translated })
+                }
+                $translationDialog.DialogResult = $true
+            } catch {
+                if ($_.Exception.Data['OpenAIAuth']) { Show-PlayerAISettings $translationDialog -RequireKey -Rejected | Out-Null }
+                else { Show-DemoError $translationDialog $_ }
+            } finally { $key = $null }
+        })
+        if ($translationDialog.ShowDialog()) {
+            Show-DemoSummaryDialog $Owner $Id ([pscustomobject]@{
+                Entry = $prepared.entry; Outputs = $prepared.outputs; Drafts = @($translationDialog.Tag.Drafts.ToArray())
+            }) | Out-Null
+        }
+    } finally { $script:openAISummaryBusy = $false }
+}
+
 function Split-PlayerAISummarySource([string]$Source, [int]$MaxLength = 64000) {
     for ($offset = 0; $offset -lt $Source.Length;) {
         $length = [Math]::Min($MaxLength, $Source.Length - $offset)

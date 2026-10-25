@@ -43,11 +43,14 @@ if (-not $script:standalone) {
 [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Demo Player" Width="360" Height="602" Topmost="True"
+        Title="Demo Player" Width="360" Height="638" Topmost="True"
         ResizeMode="NoResize" WindowStartupLocation="Manual"
         ShowActivated="False" Background="#F5F5F5" FontFamily="Segoe UI">
   <Grid Margin="12,8,12,12">
-    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="92"/></Grid.RowDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="38"/><RowDefinition Height="32"/><RowDefinition Height="36"/><RowDefinition Height="12"/><RowDefinition Height="32"/><RowDefinition Height="8"/><RowDefinition Height="48"/><RowDefinition Height="24"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="36"/><RowDefinition Height="48"/><RowDefinition Height="36"/><RowDefinition Height="92"/><RowDefinition Height="36"/></Grid.RowDefinitions>
+    <Button x:Name="TranslateSummaries" Grid.Row="14" Content="Translate summaries..." IsEnabled="False"
+            Margin="0,6,0,0" AutomationProperties.AutomationId="TranslateSummaries"
+            ToolTip="Translate saved summaries only, using your OpenAI API key. Original prompts and replies stay unchanged."/>
     <Button x:Name="ChooseDemo" Content="Find interaction..." HorizontalContentAlignment="Left" Padding="8,0"
             AutomationProperties.AutomationId="ChooseDemo"/>
     <TextBlock x:Name="Status" Grid.Row="1" Text="Preparing" Foreground="#555555" FontSize="12"
@@ -165,6 +168,15 @@ $runEstimate = $window.FindName('RunEstimate')
 $playbackSpeed.Add_ValueChanged({ Cancel-AutoContinue; Update-PlaybackEstimate })
 $generatePromptSummaries = $window.FindName('GeneratePromptSummaries')
 $generateOutputSummaries = $window.FindName('GenerateOutputSummaries')
+$translateSummaries = $window.FindName('TranslateSummaries')
+$translateSummaries.Add_Click({
+    try {
+        if (-not $script:selectedDemo -or $script:ReplayProcessId -or $script:pickerOpen) { throw 'Select an interaction and stop playback before translating summaries.' }
+        Invoke-DemoSummaryTranslation $window $script:selectedDemo.id
+        $script:summaryStamp = $null
+        Refresh-ControllerSummaries
+    } catch { Show-DemoError $window $_ }
+})
 $frameColor = $window.FindName('FrameColor')
 $frameColorSwatch = $window.FindName('FrameColorSwatch')
 $windowMode = $window.FindName('WindowMode')
@@ -213,6 +225,7 @@ function Update-ControllerSummaryLinks {
     $enabled = [bool]$script:selectedDemo -and -not $script:ReplayProcessId -and -not $script:summaryRefreshing -and -not $script:pickerOpen -and -not $script:launching -and -not $window.Resources.Contains('DemoPlayerOperation')
     $generatePromptSummaries.IsEnabled = $enabled
     $generateOutputSummaries.IsEnabled = $enabled
+    $translateSummaries.IsEnabled = $enabled -and ($inputs -gt 0 -or $outputs -gt 0)
     $pausedSelection = $script:ReplayProcessId -and $script:lastView.action -eq 'resume' -and
         $null -ne $script:lastView.originalIndex -and -not $script:actionTask -and -not $script:stopping -and -not $script:switching
     $selectExchanges.IsEnabled = [bool]$script:selectedDemo -and ($enabled -or ($pausedSelection -and

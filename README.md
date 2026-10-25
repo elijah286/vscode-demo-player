@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.27](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.27/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.28](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.28/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -688,6 +688,38 @@ short prompts, plus supported missing output summaries.
 
 These output-summary controls require v0.2.12 or later; they are not present
 in v0.2.11.
+
+### Translate the summary window
+
+Select an interaction, generate or manually save its summaries, and stop playback.
+Choose **Translate summaries...** in the controller. **Simplified Chinese
+(Mandarin)** is selected by default; **French**, **German**, **Italian**, and
+**English** are also available. The action uses the same saved OpenAI API key
+and model as summary generation.
+
+The consent dialog shows exactly which saved summaries will be sent. Only
+included exchanges with saved input/output summaries are translated; excluded
+exchanges and missing summaries are left alone. Original English prompt/reply
+exchanges, tool payloads and neighboring context are not sent for translation.
+API charges and OpenAI retention policies apply, even if you later cancel.
+Each summary permits up to four requests for length correction within 90 seconds;
+failed/refused requests are not retried automatically.
+
+Choose **Translate and review**, check/edit the drafts against the originals,
+then **Save summaries**. Saving replaces only the saved overlay summaries,
+including their exported copies; it does not translate or modify the English
+chat, recordings, payload hashes or replayed prompts/replies. Both the prompt-only
+summary and input/output conversation window use the saved translation.
+There is no separate English-summary backup or per-language cache: translate
+again with **English**, or edit/regenerate summaries, to return to English.
+Canceling review leaves saved summaries unchanged. Saved translations work
+offline during playback; translation itself requires access to OpenAI.
+
+For focused synthetic desktop acceptance, run `test\controller-ui.ps1` with
+`-TranslationOnly`, `-NodePath` and `-EvidenceRoot`. It checks all five language
+choices, review cancellation and explicit saving, unchanged English exchanges,
+and Chinese prompt/reply summaries through isolated native playback.
+The mocked responses do not certify live-provider translation fidelity.
 
 **Settings**, immediately left of **Check for updates**, lets you save, replace
 or delete an OpenAI API key and change the model ID. AI generation prompts for

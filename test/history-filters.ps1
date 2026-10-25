@@ -396,6 +396,7 @@ try {
         $window = $controller
         $generatePromptSummaries = $controller.FindName('GeneratePromptSummaries')
         $generateOutputSummaries = $controller.FindName('GenerateOutputSummaries')
+        $translateSummaries = $controller.FindName('TranslateSummaries')
         $selectExchanges = $controller.FindName('SelectExchanges')
         foreach ($name in @('Update-ControllerSummaryLinks', 'Refresh-ControllerSummaries', 'Invoke-ControllerSummaryAuthoring', 'Get-ReselectionResumeTurn')) {
             $definition = $controllerAst.Find({
@@ -411,6 +412,7 @@ try {
         Update-ControllerSummaryLinks
         Assert-Equal $generatePromptSummaries.Content 'Generate AI prompt summaries (0/0)' 'No selected prompt count'
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'No selected output action'
+        Assert-Equal $translateSummaries.IsEnabled $false 'No selected translation action'
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'No selected prompt action'
         Assert-Equal $selectExchanges.IsEnabled $false 'Exchange selection requires a saved interaction'
         $script:selectedDemo = [pscustomobject]@{ id = 'synthetic'; count = 12; summaryCounts = @{ input = 3; output = 1 } }
@@ -419,6 +421,7 @@ try {
         Assert-Equal $generateOutputSummaries.Content 'Generate AI output summaries (1/12)' 'Outputs have independent count'
         Assert-Equal $generatePromptSummaries.IsEnabled $true 'Selected interaction enables generation'
         Assert-Equal $selectExchanges.IsEnabled $true 'Selected interaction enables exchange selection'
+        Assert-Equal $translateSummaries.IsEnabled $true 'Saved summaries enable translation'
         $script:pickerOpen = $true
         Update-ControllerSummaryLinks
         Assert-Equal $generatePromptSummaries.IsEnabled $false 'Modal picker disables authoring'
@@ -427,6 +430,7 @@ try {
         $script:ReplayProcessId = 123
         Update-ControllerSummaryLinks
         Assert-Equal $generateOutputSummaries.IsEnabled $false 'Playback disables authoring'
+        Assert-Equal $translateSummaries.IsEnabled $false 'Playback disables translation'
         Assert-Equal $selectExchanges.IsEnabled $false 'Playback disables exchange selection'
         $script:lastView = [pscustomobject]@{ action = 'resume'; originalIndex = 2 }
         $script:actionTask = $null

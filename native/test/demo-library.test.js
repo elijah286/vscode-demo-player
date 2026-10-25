@@ -47,6 +47,56 @@ async function fixture(context) {
     return { directory, source, root, inspection, requests, tool };
 }
 
+test('reviewed translations persist only in overlay metadata, preserving English exchanges and excluded summaries', async context => {
+    const { root, source, inspection, directory } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Translation', inspection.sha256));
+    const file = path.join(root, saved.id + '.demo.json');
+    const { prepareTranslations, generateOpenAISummary } = require('../openai-summaries');
+    assert.deepEqual((await prepareTranslations(root, saved.id)).candidates, [], 'Missing summaries are not replaced by original exchange excerpts');
+    await library.saveSummaryBatch(root, saved.id, {
+        promptSummaries: ['I want a blue frame.', 'Excluded English summary.'],
+        outputSummaries: ['I selected blue. Should I continue?', null], playbackIncluded: [true, false]
+    }, { promptSummaries: null, outputSummaries: null, playbackIncluded: null });
+    const before = await library.readEntry(root, saved.id);
+    const prepared = await prepareTranslations(root, saved.id);
+    assert.deepEqual(prepared.candidates, [
+        { index: 0, kind: 'input', source: 'I want a blue frame.' },
+        { index: 0, kind: 'output', source: 'I selected blue. Should I continue?' }
+    ]);
+    const input = '\u6211\u60f3\u8981\u84dd\u8272\u8fb9\u6846\u3002';
+    const output = '\u6211\u9009\u62e9\u4e86\u84dd\u8272\u3002\u9700\u8981\u7ee7\u7eed\u5417\uff1f';
+    const summaries = structuredClone(before.recording);
+    for (const candidate of prepared.candidates) {
+        const translation = candidate.kind === 'input' ? input : output;
+        const draft = await generateOpenAISummary({
+            apiKey: 'synthetic-key-not-a-real-openai-key', model: 'gpt-4.1-mini', language: 'zh-CN', ...candidate
+        }, { fetchImpl: async () => Response.json({ status: 'completed', output: [
+            { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary: translation }) }] }
+        ] }) });
+        summaries[candidate.kind === 'input' ? 'promptSummaries' : 'outputSummaries'][candidate.index] = draft;
+    }
+    assert.deepEqual(await library.readEntry(root, saved.id), before, 'Unapproved drafts do not change the saved entry');
+    const metadata = await library.saveSummaryBatch(root, saved.id, summaries, before.recording);
+    const after = await library.readEntry(root, saved.id);
+    assert.deepEqual(after.recording.turns, before.recording.turns, 'English snapshots and their hashes stay byte-for-byte equivalent');
+    assert.equal(after.recording.promptSummaries[1], 'Excluded English summary.');
+    assert.equal(metadata.presentation.overlay.promptSummary, input);
+    const playback = await library.packageRecordings(file);
+    assert.equal(playback[0].promptSummary, input);
+    assert.equal(playback[0].outputSummary, output);
+    assert.equal(playback[0].request.message.text, 'First original prompt\r\n\u03bb');
+    const view = require('../control-server').controlView({ phase: 'complete', turnIndex: 1, recordings: playback });
+    assert.deepEqual(view.overlay.conversation.history.map(message => message.text), [input, output]);
+    const exported = path.join(directory, 'translated.demo.json');
+    await library.exportDemo(root, saved.id, exported);
+    const imported = await library.addPackage(path.join(directory, 'imported'), await library.readPackage(exported));
+    assert.equal(imported.presentation.overlay.promptSummary, input);
+    await assert.rejects(library.saveSummaryBatch(root, saved.id, summaries, before.recording), /changed since/);
+    await library.savePromptSummaries(root, saved.id, [null, null], [output, null], 'output');
+    assert.deepEqual((await prepareTranslations(root, saved.id)).candidates, [{ index: 0, kind: 'input', source: input }],
+        'An included missing output stays missing; only its saved input is eligible');
+});
+
 test('nonconsecutive inclusion preserves all originals and summary indices through playback, generation and export/import', async context => {
     const { directory, root, source } = await fixture(context);
     const requests = Array.from({ length: 7 }, (_, index) => ({
