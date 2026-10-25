@@ -48,19 +48,19 @@ function previousExchangeContext(recording, index) {
     return summaryQuestionContext('Previous user input:\n' + request.message.text + '\nPrevious assistant output:\n' + recordedOutput(request).text);
 }
 
-function validateGeneratedSummary(summary) {
+function validateGeneratedSummary(summary, { english = true } = {}) {
     if (typeof summary !== 'string' || !summary.trim() || /[\r\n]/.test(summary)) {
         throw new Error('The generated summary must contain a nonempty statement on one line. No summary was saved.');
     }
     if (summary.length > 4096) {
         throw new Error('The model returned too much text (over 4096 characters). No summary was saved.');
     }
-    if (/^(?:the\s+)?(?:user|assistant)\b/i.test(summary)) {
+    if (english && /^(?:the\s+)?(?:user|assistant)\b/i.test(summary)) {
         throw new Error('The generated summary narrates the speaker in third person. No summary was saved; use the speaker\'s own voice, such as "I want..." or "Yes.".');
     }
     if (!/[.!?\u3002\uFF01\uFF1F]["'\u2019\u201D]?$/.test(summary) ||
         /(?:\.\.\.|\u2026)["'\u2019\u201D]?$/.test(summary) ||
-        /\b(?:a|an|the|and|or|but|my|your|our|their)\s*[.!?]["'\u2019\u201D]?$/i.test(summary)) {
+        (english && /\b(?:a|an|the|and|or|but|my|your|our|their)\s*[.!?]["'\u2019\u201D]?$/i.test(summary))) {
         throw new Error('The generated summary ends without a complete statement or question. No summary was saved; rewrite the whole thought instead of cutting it off or adding punctuation to a fragment.');
     }
 }
@@ -114,11 +114,11 @@ function summaryPrompt(prompt, kind = 'input', { partial = false, combine = fals
         'Do not invent details. Recorded query (JSON string):\n' + JSON.stringify(prompt);
 }
 
-async function fitGeneratedSummary(request, { initial = '', checkCancelled = () => {}, progress = () => {} } = {}) {
+async function fitGeneratedSummary(request, { initial = '', checkCancelled = () => {}, progress = () => {}, validate = validateGeneratedSummary } = {}) {
     checkCancelled();
     let rewrite = initial;
     if (rewrite) {
-        validateGeneratedSummary(rewrite);
+        validate(rewrite);
         if (rewrite.length <= GENERATED_SUMMARY_LENGTH) return rewrite;
     }
     for (let attempt = 1; attempt <= MAX_SUMMARY_REQUESTS; attempt++) {
@@ -126,7 +126,7 @@ async function fitGeneratedSummary(request, { initial = '', checkCancelled = () 
         progress({ attempt, maximum: MAX_SUMMARY_REQUESTS, correcting: Boolean(rewrite) });
         const summary = await request(rewrite);
         checkCancelled();
-        validateGeneratedSummary(summary);
+        validate(summary);
         if (summary.length <= GENERATED_SUMMARY_LENGTH) return summary;
         rewrite = summary;
     }

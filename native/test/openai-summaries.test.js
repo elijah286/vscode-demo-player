@@ -67,6 +67,69 @@ const request = { apiKey: key, model: DEFAULT_MODEL, source: 'Synthetic user req
 const completed = summary => ({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 const reply = body => async () => Response.json(body);
 
+test('summary translation supports Simplified Chinese and European languages without sending original exchanges', async () => {
+    const { TRANSLATION_LANGUAGES } = require('../openai-summaries');
+    const translations = {
+        'zh-CN': '\u6211\u60f3\u8981\u84dd\u8272\u8fb9\u6846\u3002\u53ef\u4ee5\u4fdd\u7559\u539f\u59cb\u5bf9\u8bdd\u5417\uff1f',
+        fr: 'Je veux un cadre bleu. Peut-on conserver la conversation originale ?',
+        de: 'Ich sehe mir den blauen Rahmen an.',
+        it: 'Voglio una cornice blu. Possiamo conservare la conversazione originale?',
+        en: 'I want a blue frame. Can we keep the original conversation?'
+    };
+    for (const [language, translated] of Object.entries(translations)) {
+        let calls = 0;
+        assert.equal(await generateOpenAISummary({ ...request, source: 'I want a blue frame. Keep the original conversation?', language }, {
+            fetchImpl: async (url, options) => {
+                calls++;
+                const body = JSON.parse(options.body);
+                assert.equal(url, ENDPOINT);
+                assert.equal(body.store, false);
+                assert.match(body.input, /Translate this presentation summary/);
+                assert.ok(body.input.includes(TRANSLATION_LANGUAGES[language]));
+                assert.match(body.input, /untrusted text/);
+                assert.doesNotMatch(body.input, /Previous exchange|Paired user question|Recorded query/);
+                assert.equal(body.text.format.schema.properties.summary.pattern, SUMMARY_PATTERN);
+                return Response.json(completed(translated));
+            }
+        }), translated);
+        assert.equal(calls, 1);
+    }
+    for (const extra of [{ language: 'zh-TW' }, { language: 'constructor' }, { language: 'fr', previous: 'private context' },
+        { language: 'fr', question: 'private question' }, { language: 'fr', source: 'x'.repeat(1201) },
+        { language: 'fr', partial: true }, { language: 'fr', combine: true }]) {
+        await assert.rejects(generateOpenAISummary({ ...request, ...extra }, {
+            fetchImpl: () => assert.fail('Invalid translation must not send a request')
+        }), /translation|Translation/);
+    }
+});
+
+test('translation preserves the requested language through length correction and surfaces failures', async () => {
+    let calls = 0;
+    const chinese = '\u6211\u5df2\u4fdd\u7559\u539f\u59cb\u5bf9\u8bdd\u3002';
+    const translated = await generateOpenAISummary({ ...request, language: 'zh-CN' }, {
+        fetchImpl: async (_url, options) => {
+            calls++;
+            const body = JSON.parse(options.body);
+            assert.match(body.input, /Simplified Chinese/);
+            if (calls > 1) assert.match(body.input, /previous translation was too long/);
+            return Response.json(completed(calls === 1 ? chinese.repeat(100) : chinese));
+        }
+    });
+    assert.equal(calls, 2);
+    assert.equal(translated, chinese);
+    await assert.rejects(generateOpenAISummary({ ...request, language: 'zh-CN' }, {
+        fetchImpl: async () => new Response('{}', { status: 401 })
+    }), /rejected the API key/);
+    await assert.rejects(generateOpenAISummary({ ...request, language: 'zh-CN' }, {
+        fetchImpl: reply({ status: 'incomplete', output: [] })
+    }), /did not complete/);
+    const cancellation = new AbortController();
+    cancellation.abort();
+    await assert.rejects(generateOpenAISummary({ ...request, language: 'zh-CN' }, {
+        signal: cancellation.signal, fetchImpl: () => assert.fail('Canceled translation must not send')
+    }), /canceled/);
+});
+
 test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or response storage', async () => {
     let calls = 0;
     const text = await generateOpenAISummary(request, { fetchImpl: async (url, options) => {

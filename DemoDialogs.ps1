@@ -37,7 +37,7 @@ function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli
     }
     $Request.root = $script:LibraryRoot
     $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(($Request | ConvertTo-Json -Depth 10 -Compress))
-    $operation = if ($Request.command -in @('list', 'metadata', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'generateSummary')) { $Request.command } else { 'unknown' }
+    $operation = if ($Request.command -in @('list', 'metadata', 'discover', 'history', 'inspect', 'capture', 'import', 'rename', 'summaries', 'delete', 'export', 'read', 'prepareSummaries', 'prepareTranslations', 'generateSummary')) { $Request.command } else { 'unknown' }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $script:NodePath
     $trust = if ($Helper -eq 'openai-summaries.js') { '--use-system-ca ' } else { '' }
@@ -105,7 +105,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
         $Owner.Resources.Add('DemoPlayerOperation', $state)
         if (-not $KeepOwnerEnabled) {
             foreach ($name in @('ChooseDemo', 'PlayPause', 'NextStep', 'Stop', 'WindowMode', 'AISettings',
-                'GeneratePromptSummaries', 'GenerateOutputSummaries', 'Load', 'Browse', 'Refresh', 'AddLocation',
+                'GeneratePromptSummaries', 'GenerateOutputSummaries', 'TranslateSummaries', 'Language', 'Translate', 'Load', 'Browse', 'Refresh', 'AddLocation',
                 'SavedRefresh', 'Select', 'Save', 'Import', 'Export', 'Delete', 'Rename', 'Summaries',
                 'AiSummaries', 'ClearSummaries', 'SelectionSummaries', 'SelectionAiSummaries',
                 'SelectionClearSummaries', 'Sessions', 'Demos', 'Turns',
@@ -221,6 +221,7 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
             'capture' { 'Saving selected exchanges' }
             'export' { 'Exporting the saved selection' }
             'prepareSummaries' { 'Preparing summary sources' }
+            'prepareTranslations' { 'Preparing saved summaries for translation' }
             'generateSummary' { 'Generating an AI summary' }
             default { 'Updating the demo library' }
         }

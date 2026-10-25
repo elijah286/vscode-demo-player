@@ -240,6 +240,7 @@ try {
     Assert-Layout ((Get-DemoPlaybackInput $recording 0) -ceq 'Original question') 'Deleted input summaries must validate their real playback excerpt.'
     $area = [System.Windows.Rect]::new(0, 0, 1920, 1080)
     foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300),
+        ([string][char]0x6211 + [char]0x60F3 + [char]0x8981 + [char]0x84DD + [char]0x8272 + [char]0x8FB9 + [char]0x6846 + [char]0x3002),
         ('I inspected the settings. ' * 10 + 'I set a !'),
         ('I inspected the settings. ' * 16 + 'Should I use blue or green?'),
         ('I inspected the settings. ' * 45 + 'Should I use blue or green?'),
