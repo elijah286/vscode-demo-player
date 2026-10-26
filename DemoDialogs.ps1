@@ -56,7 +56,7 @@ function Start-DemoLibraryProcess([hashtable]$Request, [ValidateSet('library-cli
     try {
         $state.Process = [System.Diagnostics.Process]::Start($start)
         if (-not $state.Process) { throw 'The demo library helper could not start.' }
-        # Do not block the dispatcher (or the watchdog) on a helper that is not reading stdin.
+        # Keep cancellation responsive even when the helper is not reading stdin.
         $state.Input = $state.Process.StandardInput.BaseStream.WriteAsync($bytes, 0, $bytes.Length)
         return $state
     } catch {
@@ -209,7 +209,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
 
 function Invoke-DemoLibrary([hashtable]$Request, $Owner,
     [ValidateSet('library-cli.js', 'openai-summaries.js')][string]$Helper = 'library-cli.js',
-    [ValidateRange(1,95)][int]$TimeoutSeconds = 30, [switch]$KeepOwnerEnabled,
+    [switch]$KeepOwnerEnabled,
     [Threading.CancellationToken]$CancellationToken = [Threading.CancellationToken]::None,
     [hashtable]$SummaryProgress) {
     if ($Owner) {
@@ -229,13 +229,13 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
             [hashtable]::Synchronized(@{ Prefix = $Owner.FindName('Progress').Text; Message = '' })
         } else { $null }
         return Invoke-DemoBackgroundOperation {
-            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout, $SummaryProgress)
+            param($Token, $Source, $Node, $Root, $Request, $Helper, $SummaryProgress)
             . $Source
             if (-not $Node) { . (Join-Path (Split-Path $Source -Parent) 'PlayerEnvironment.ps1'); $Node = Resolve-PlayerNode }
             $script:NodePath = $Node
             $script:LibraryRoot = $Root
-            Invoke-DemoLibrary $Request -Helper $Helper -TimeoutSeconds $Timeout -CancellationToken $Token -SummaryProgress $SummaryProgress
-        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds, $summaryProgress) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled -ProgressState $summaryProgress
+            Invoke-DemoLibrary $Request -Helper $Helper -CancellationToken $Token -SummaryProgress $SummaryProgress
+        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $summaryProgress) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled -ProgressState $summaryProgress
     }
     $state = Start-DemoLibraryProcess $Request $Helper
     $process = $state.Process
@@ -264,28 +264,18 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
             if ($CancellationToken.IsCancellationRequested) { break }
             Complete-DemoLibraryInput $state
             if ($SummaryProgress) { . $readProgress }
-            if ($process.HasExited) { break }
-            $process.WaitForExit(50) | Out-Null
-        } while ($state.Clock.ElapsedMilliseconds -lt ($TimeoutSeconds * 1000))
+            $streamsComplete = $output.IsCompleted -and $(if ($SummaryProgress) { -not $errorLine } else { $errors.IsCompleted })
+            if ($process.HasExited -and $streamsComplete) { break }
+            $CancellationToken.WaitHandle.WaitOne(50) | Out-Null
+        } while ($true)
         if ($CancellationToken.IsCancellationRequested) {
             $failure = [OperationCanceledException]::new('Operation cancelled. No success was confirmed. Refresh the library before retrying.')
             $failure.Data['DemoPlayerOperationCancelled'] = $true
             throw $failure
         }
-        if (-not $process.HasExited) {
-            $phase = if ($state.InputClosed) { 'waiting for helper exit' } else { 'sending the request' }
-            throw ("The demo library operation '" + $state.Operation + "' exceeded " + $TimeoutSeconds + ' seconds while ' + $phase + '. No success was confirmed. Refresh the library before retrying.')
-        }
         Complete-DemoLibraryInput $state
         if (-not $state.InputClosed) { throw 'The demo library helper exited before the request was sent. No success was confirmed.' }
-        if ($SummaryProgress) {
-            while ($errorLine) {
-                if (-not $errorLine.Wait(2000)) { throw 'Timed out reading AI summary progress.' }
-                . $readProgress
-            }
-            $pending = @($output)
-        } else { $pending = @($output, $errors) }
-        if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$pending, 2000)) { throw 'Timed out reading the library helper output.' }
+        if (-not $SummaryProgress) { $null = $errors.GetAwaiter().GetResult() }
         $text = $output.GetAwaiter().GetResult()
         if (-not $text) {
             $diagnostic = if ($SummaryProgress) { $errorText.ToString() } else { $errors.GetAwaiter().GetResult() }
@@ -677,7 +667,6 @@ function Show-InteractionPicker($Owner) {
         try {
             $scan = $dialog.Tag.Scan
             if (-not $scan) { return }
-            if ($scan.Clock.Elapsed.TotalSeconds -ge 60) { throw 'History discovery exceeded 60 seconds. Partial rows remain visible; refresh to retry.' }
             Complete-DemoLibraryInput $scan
             for ($read = 0; $read -lt 50 -and -not $scan.End -and $scan.Line.IsCompleted; $read++) {
                 $line = $scan.Line.GetAwaiter().GetResult()

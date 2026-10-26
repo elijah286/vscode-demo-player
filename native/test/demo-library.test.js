@@ -1139,7 +1139,7 @@ test('persistent authoring inbox processes new selections in the running window 
     assert.deepEqual(await Promise.all(files.map(file => fs.readFile(file))), before);
 });
 
-test('stalled provider discovery times out visibly without content consent, requests or persistence', async context => {
+test('provider discovery waits past the former cutoff and supports explicit cancellation without persistence', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
     const { source, root, inspection } = await authoringFixture(context);
     const added = await library.addPackage(root, await library.createPackage(source, [0], 'Stalled discovery', inspection.sha256));
@@ -1148,12 +1148,15 @@ test('stalled provider discovery times out visibly without content consent, requ
     context.mock.timers.enable({ apis: ['setTimeout'] });
     let started;
     const discovering = new Promise(resolve => { started = resolve; });
-    const { api, calls } = authoringAPI({ discoveryStall: true, onDiscovery: started });
+    const options = { discoveryStall: true, onDiscovery: started };
+    const { api, calls } = authoringAPI(options);
     const running = activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
     await discovering;
-    context.mock.timers.tick(15000);
+    context.mock.timers.tick(120000);
+    assert.equal(calls.errors.length, 0);
+    options.cancelSource.cancel();
     await running;
-    assert.match(calls.errors[0], /Model discovery exceeded 15 seconds/);
+    assert.match(calls.errors[0], /Model discovery canceled/);
     assert.equal(calls.errorOptions[0].modal, true);
     assert.equal(calls.consent, 0);
     assert.equal(calls.requests, 0);
@@ -1240,7 +1243,7 @@ test('canceling batch review preserves previously saved summaries without adding
     assert.deepEqual((await library.readEntry(root, added.id)).recording.promptSummaries, [null, 'Previously saved summary']);
 });
 
-test('AI authoring enforces the 90-second deadline without saving a stalled request', async context => {
+test('AI authoring waits past 90 seconds until explicit cancellation without saving a stalled request', async context => {
     const { activateSummaryAuthoring } = require('../prompt-summary-authoring');
     const { source, root, inspection } = await authoringFixture(context);
     const added = await library.addPackage(root, await library.createPackage(source, [0], 'Deadline', inspection.sha256));
@@ -1249,14 +1252,15 @@ test('AI authoring enforces the 90-second deadline without saving a stalled requ
     context.mock.timers.enable({ apis: ['setTimeout'] });
     let started;
     const requestStarted = new Promise(resolve => { started = resolve; });
-    const { api, calls } = authoringAPI({ stall: true, onRequest: () => started() });
+    const options = { stall: true, onRequest: () => started() };
+    const { api, calls } = authoringAPI(options);
     const run = activateSummaryAuthoring({ subscriptions: [] }, api, file).run();
     await requestStarted;
-    context.mock.timers.tick(89999);
+    context.mock.timers.tick(180000);
     assert.equal(calls.errors.length, 0);
-    context.mock.timers.tick(1);
+    options.cancelSource.cancel();
     await run;
-    assert.match(calls.errors[0], /exceeded 90 seconds/);
+    assert.match(calls.errors[0], /canceled/);
     assert.deepEqual(await fs.readFile(file), before);
 });
 

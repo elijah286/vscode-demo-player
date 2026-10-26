@@ -14,7 +14,6 @@ let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
     const request = JSON.parse(input.replace(/^\uFEFF/, ''));
-    if (request.command === 'timeout') return setTimeout(() => {}, 60000);
     setTimeout(() => {
         const failed = request.command === 'failure';
         process.stdout.write(JSON.stringify(failed
@@ -106,13 +105,13 @@ try {
     if ($script:ticks -lt 3 -or $script:disabledTicks -lt 3) { throw 'The dialog did not process window events with only conflicting actions disabled while loading.' }
     if (-not $owner.FindName('ShowPrompt').IsEnabled -or -not $owner.FindName('SavedSearch').IsEnabled) { throw 'Background reads disabled independent presentation/search controls.' }
     if (-not $owner.IsEnabled -or $owner.Cursor) { throw 'The dialog did not restore its enabled state and cursor after loading.' }
-    foreach ($command in @('failure', 'timeout')) {
-        $expected = if ($command -eq 'failure') { 'Synthetic helper failure' } else { 'exceeded 30 seconds' }
+    foreach ($command in @('failure')) {
+        $expected = 'Synthetic helper failure'
         try { Invoke-DemoLibrary @{ command = $command } $owner; throw 'Expected helper failure.' }
         catch { if ($_.Exception.Message -notmatch $expected) { throw } }
         if (-not $owner.IsEnabled -or $owner.Cursor) { throw 'The dialog did not restore its enabled state and cursor after a helper error.' }
     }
-    Write-Output 'CAPTURE HELPER PASSED: all 12 real CLI commands preserve isolated recording/summary payloads; reads work with and without a WPF owner; only conflicting actions are disabled, independent controls remain available, errors propagate, the 30-second timeout is enforced, and owner state is restored.'
+    Write-Output 'CAPTURE HELPER PASSED: all 12 real CLI commands preserve isolated recording/summary payloads; reads work with and without a WPF owner; only conflicting actions are disabled, independent controls remain available, errors propagate, and owner state is restored.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()

@@ -108,11 +108,9 @@ function Test-ControllerFailures {
     $script:stateTask = $null
     $script:connectionFailures = 0
     & $tick
-    Assert-Equal $script:lastFault 'Player was not ready within 45 seconds.' 'Readiness timeout is explicit'
-    Assert-Equal $script:stopping $true 'Readiness timeout requests scoped stop'
-    Assert-Equal $script:sentAction 'stop' 'Timed-out target is not played'
-    Assert-Equal $playPause.IsEnabled $false 'Timed-out primary control remains disabled'
-    Assert-Equal $nextStep.IsEnabled $false 'Timed-out Next Step remains disabled'
+    Assert-Equal $status.Text 'Waiting for player readiness' 'Slow startup is visible'
+    Assert-Equal $script:stopping $false 'Slow startup does not stop a live target'
+    Assert-Equal $script:preparedDeadline ([DateTime]::MaxValue) 'Readiness notice is informational, not a deadline'
     $script:stopping = $false
     $script:connectionStop = $false
     $script:pairedVisible = $true
@@ -125,12 +123,14 @@ function Test-ControllerFailures {
         $script:stateTask = $cancelled.Task
         & $tick
     }
-    Assert-Equal $script:stopping $true 'Repeated connection cancellation requests scoped stop'
-    Assert-Equal $script:connectionStop $true 'Connection-driven stop is distinct from user stop'
+    Assert-Equal $script:stopping $false 'Repeated connection cancellation does not stop live playback'
+    Assert-Equal $script:connectionStop $false 'Only explicit stop closes the target'
+    Assert-Equal $status.Text 'Connection unavailable' 'Connection failures remain visible'
     $script:alive = $false
     & $tick
-    Assert-Equal ($script:lastFault -like 'The isolated VS Code target closed. Control connection failed:*') $true 'Connection-driven exit reports target closure and retains its cause'
+    Assert-Equal $script:lastFault 'The isolated VS Code target closed.' 'Actual target exit is still reported'
     $script:connectionStop = $false
+    $script:stopping = $true
     $script:lastFault = 'User stop preserves existing status'
     & $tick
     Assert-Equal $script:lastFault 'User stop preserves existing status' 'User stop is not relabeled as unexpected closure'

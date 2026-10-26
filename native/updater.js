@@ -30,8 +30,7 @@ function trustedURL(value) {
     return url;
 }
 
-async function request(url, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
-    const signal = AbortSignal.timeout(timeoutMs);
+async function request(url, { fetchImpl = fetch, signal } = {}) {
     for (let redirects = 0; redirects <= 5; redirects++) {
         const response = await fetchImpl(trustedURL(url), {
             redirect: 'manual', signal,
@@ -110,7 +109,7 @@ async function downloadUpdate(currentVersion, expectedVersion, directory, option
     await fs.mkdir(directory);
     const installerPath = path.join(directory, INSTALLER);
     try {
-        const response = await request(release.installer.browser_download_url, { ...options, timeoutMs: options?.timeoutMs ?? 120000 });
+        const response = await request(release.installer.browser_download_url, options);
         const file = await fs.open(installerPath, 'wx');
         const hash = crypto.createHash('sha256');
         let size = 0;
