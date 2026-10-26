@@ -74,6 +74,7 @@ public static class DemoUITest {
 }
 '@ -ReferencedAssemblies UIAutomationClient, UIAutomationTypes
 $root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Split-Path $PSScriptRoot -Parent }
+. (Join-Path $PSScriptRoot 'compact-automation.ps1')
 $evidence = Join-Path ([System.IO.Path]::GetFullPath($EvidenceRoot)) ('run-' + [guid]::NewGuid().ToString('N'))
 $env:VSCODE_DEMO_PLAYER_SUMMARY_ROOT = Join-Path $evidence 'summary-authoring'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
@@ -182,6 +183,7 @@ $inspection = Invoke-DemoLibrary @{ command = 'inspect'; file = $source }
 $saved = Invoke-DemoLibrary @{ command = 'capture'; file = $source; indices = @(0,1); title = 'Synthetic UI demo'; sha256 = $inspection.sha256 }
 
 function Find-Element($Parent, [string]$Property, [string]$Value) {
+    if ($Property -eq 'Id') { Expand-CompactControllerTools $Parent $Value }
     $identifier = switch ($Property) {
         'Name' { [System.Windows.Automation.AutomationElement]::NameProperty }
         'Id' { [System.Windows.Automation.AutomationElement]::AutomationIdProperty }
@@ -212,6 +214,10 @@ function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 6
 
 function Get-AppWindow([string]$Title) {
     # Owned modal HWNDs must be found without traversing unrelated desktop controls.
+    if ($Title -eq 'Demo Player') {
+        $compact = [DemoUITest]::FindWindow([int]$script:controllerId, 'VibeReplay - Demo Player')
+        if ($compact) { return $compact }
+    }
     return [DemoUITest]::FindWindow([int]$script:controllerId, $Title)
 }
 
@@ -1156,7 +1162,7 @@ try {
     Start-Sleep -Milliseconds 2500
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume' -or
         (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'A later paused reselection autoplayed from reconstructed review history.' }
-    $pausedAuto.Toggle()
+    ([System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'AutoContinue').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     } 'later reselection target'

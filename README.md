@@ -1,6 +1,81 @@
-# VS Code Demo Player
+# VibeReplay (VS Code Demo Player)
 
-**[Download the Windows installer - v0.2.30](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.30/VSCodeDemoPlayer-Setup.exe)** |
+## Compact native VibeReplay controller
+
+Version 0.2.31 adds **VibeReplay**, a compact native Windows
+controller to the Windows installer.
+The default empty controller is 280 WPF layout units wide and no more than 226
+units tall, with presentation and preparation
+tools collapsed by default. Use the title-bar minimize button to switch to a
+48-unit-high mini strip. Both sizes scale with Windows DPI settings.
+Drag the title bar to move it. The title-bar menu controls always-on-top,
+hiding for recording, restoration, and exit. A hidden controller can be restored
+by double-clicking its notification-area icon; playback continues while hidden.
+
+Playback still occurs in its own isolated VS Code window. Keep the controller
+outside the recorded region or capture only the VS Code window. Always-on-top
+does **not** make a window invisible to recording software. Summary overlays
+remain optional.
+
+**Presentation** contains overlay options, frame color, speed, auto-continue,
+Editor/experimental Agents mode, and saved summary language. **Prepare & settings**
+contains exchange selection, summary generation, translation, protected-key/model
+settings, and in-product updates. Opening playback collapses both sections.
+Capture, summary review, consent, and other existing preparation dialogs remain
+available on demand; this first increment does not redesign those dialogs or
+port the whole application to .NET 10.
+
+The controller view and persistent library connection are implemented in
+[PlayerShell.cs](PlayerShell.cs). Packaging compiles `VibeReplay.Shell.dll`;
+source launches compile that same source in memory. This increment deliberately
+keeps the Windows PowerShell 5.1/.NET Framework host and existing workflow adapters
+to preserve compatibility. It is **not** the proposed complete .NET 10 host
+migration, which requires its own compatibility and installed-upgrade gates.
+No additional end-user runtime is required by this increment.
+
+Regular library operations now reuse an app-owned Node worker rather than
+starting Node for every metadata query. Discovery retains its bounded streaming
+channel; AI retains its separately cancellable provider helper. Cancelled or
+failed transport requests are never automatically replayed, since a write may
+already have committed. Error and cancellation messages require refresh before
+retrying. Closing the controller stops its library worker.
+Controller operations use inline activity instead of opening another progress
+window. Existing preparation dialogs retain their established progress behavior.
+
+To run a real native preview using only a new synthetic library:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\Start-CompactPreview.ps1 -NodePath 'C:\Tools\node\node.exe'
+```
+
+Supply an existing Node 22.16+ executable. The command prints its controller PID,
+synthetic library path, and selected demo ID. Click **Open**, then **Play**.
+Nothing is installed; no real conversations, protected keys, or normal VS Code
+profiles are changed. Generated recordings/evidence remain under `.build`.
+The source launcher also accepts `-DemoId` for an existing library selection.
+`Show-ReplayController.ps1 -LegacyController` retains the previous controller
+for comparison; it is not the default.
+
+Focused validation:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-shell.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\persistent-library.ps1 -NodePath 'C:\Tools\node\node.exe'
+# Interactive desktop only, against the PID printed by Start-CompactPreview:
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-ui.ps1 -ControllerProcessId 12345 -EvidenceRoot .\.build\compact-acceptance -ExercisePlayback
+```
+
+The first checks actual offscreen WPF layout and compatibility controls; the
+second checks persistent transport, explicit errors, completion beyond the former
+30-second cutoff, explicit cancellation, and cleanup.
+The third exercises the native controller, mini mode, Open-without-autoplay,
+Play/Pause/Resume, both exchanges, completion, and scoped Stop in actual isolated
+VS Code playback. It leaves the synthetic controller open for inspection.
+None of these is an installed old-version-to-new-version upgrade test.
+Legacy installer identity, stable launcher/asset names, version metadata,
+library/settings formats, and update handoff remain unchanged.
+
+**[Download the Windows installer - v0.2.31](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.31/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
