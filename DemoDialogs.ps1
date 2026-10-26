@@ -339,6 +339,68 @@ function New-DemoDialog([string]$Xaml, $Owner) {
     $reader = [System.Xml.XmlNodeReader]::new([xml]$Xaml)
     try { $dialog = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $reader.Dispose() }
     $dialog.Owner = $Owner
+    # Keep the operating system's accessible palette in high-contrast mode.
+    $highContrast = [System.Windows.SystemParameters]::HighContrast
+    if (-not $highContrast) {
+        if (-not $script:DemoDialogTheme) {
+            $themeReader = [System.Xml.XmlNodeReader]::new([xml][IO.File]::ReadAllText((Join-Path $PSScriptRoot 'DialogTheme.xaml')))
+            try { $script:DemoDialogTheme = [System.Windows.Markup.XamlReader]::Load($themeReader) }
+            finally { $themeReader.Dispose() }
+        }
+        $dialog.Resources.MergedDictionaries.Add($script:DemoDialogTheme)
+        $dialog.Style = $dialog.FindResource([System.Windows.Window])
+        foreach ($name in @('Save', 'Select', 'Continue', 'Translate', 'Generate', 'InstallUpdate')) {
+            $button = $dialog.FindName($name)
+            if ($button -is [System.Windows.Controls.Button]) { $button.Style = $dialog.FindResource('DialogPrimaryButton') }
+        }
+        $layout = [System.Windows.Controls.DockPanel]::new()
+        $layout.Background = $dialog.Background
+        $header = [System.Windows.Controls.Border]::new()
+        $header.Padding = '20,14,20,12'
+        $header.BorderThickness = '0,0,0,1'
+        $header.BorderBrush = $dialog.FindResource('DialogBorder')
+        $heading = [System.Windows.Controls.TextBlock]::new()
+        $heading.FontSize = 18
+        $heading.FontWeight = 'SemiBold'
+        $binding = [System.Windows.Data.Binding]::new('Title')
+        $binding.Source = $dialog
+        $heading.SetBinding([System.Windows.Controls.TextBlock]::TextProperty, $binding) | Out-Null
+        $header.Child = $heading
+        [System.Windows.Controls.DockPanel]::SetDock($header, 'Top')
+        $content = $dialog.Content
+        $dialog.Content = $null
+        $layout.Children.Add($header) | Out-Null
+        $layout.Children.Add($content) | Out-Null
+        $dialog.Content = $layout
+        if (-not [double]::IsNaN($dialog.Height)) {
+            $dialog.Height = [Math]::Min($dialog.Height + 52, [System.Windows.SystemParameters]::WorkArea.Height - 24)
+        }
+    }
+    $errorText = $dialog.FindName('Error')
+    if ($errorText -is [System.Windows.Controls.TextBlock]) {
+        $errorText.Foreground = if ($highContrast) { [System.Windows.SystemColors]::WindowTextBrush }
+            else { [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FFB4AB') }
+    }
+    $workArea = [System.Windows.SystemParameters]::WorkArea
+    $width = if ([double]::IsNaN($dialog.Width)) { $workArea.Width - 24 } else { [Math]::Min($dialog.Width, $workArea.Width - 24) }
+    $height = if ([double]::IsNaN($dialog.Height)) { $workArea.Height - 24 } else { [Math]::Min($dialog.Height, $workArea.Height - 24) }
+    if ($dialog.MinWidth -gt $width -or $dialog.MinHeight -gt $height) {
+        $content = $dialog.Content
+        $dialog.Content = $null
+        # Bound the inner layout so an outer accessibility scroll does not disable row virtualization.
+        $content.Width = [Math]::Max($dialog.MinWidth, $width) - 16
+        $content.Height = [Math]::Max($dialog.MinHeight, $height) - 40
+        $viewport = [System.Windows.Controls.ScrollViewer]::new()
+        $viewport.HorizontalScrollBarVisibility = 'Auto'
+        $viewport.VerticalScrollBarVisibility = 'Auto'
+        $viewport.Background = $dialog.Background
+        $viewport.Content = $content
+        $dialog.Content = $viewport
+        $dialog.MinWidth = [Math]::Min($dialog.MinWidth, $width)
+        $dialog.MinHeight = [Math]::Min($dialog.MinHeight, $height)
+    }
+    if (-not [double]::IsNaN($dialog.Width)) { $dialog.Width = $width }
+    if (-not [double]::IsNaN($dialog.Height)) { $dialog.Height = $height }
     return $dialog
 }
 
@@ -433,13 +495,13 @@ function Show-InteractionPicker($Owner) {
     $dialog = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Find interaction"
- Width="1180" Height="820" MinWidth="850" MinHeight="620" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
+ Width="1180" Height="820" MinWidth="850" MinHeight="720" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <TabControl x:Name="PickerTabs" Margin="12" SelectedIndex="0">
  <TabItem Header="Agent conversations" AutomationProperties.AutomationId="AgentConversationsTab">
  <Grid Margin="8">
   <Grid.RowDefinitions>
-   <RowDefinition Height="Auto"/><RowDefinition Height="2*" MinHeight="90"/><RowDefinition Height="Auto"/>
-   <RowDefinition Height="3*" MinHeight="120"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/><RowDefinition Height="2*" MinHeight="60"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="3*" MinHeight="80"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
   <StackPanel Margin="0,0,0,8">
   <DockPanel>
@@ -569,8 +631,6 @@ function Show-InteractionPicker($Owner) {
  </TabControl>
 </Window>
 '@ $Owner
-    $dialog.Width = [Math]::Min($dialog.Width, [System.Windows.SystemParameters]::WorkArea.Width - 24)
-    $dialog.Height = [Math]::Min($dialog.Height, [System.Windows.SystemParameters]::WorkArea.Height - 24)
     $dialog.Tag = @{
         File = $null; Inspection = $null; Result = $null; Scan = $null; Locations = @()
         PreparedKey = $null; PreparedEntry = $null; Entries = @()
@@ -599,7 +659,10 @@ function Show-InteractionPicker($Owner) {
             $sessions.Items.Count.ToString() + ' of ' + $dialog.Tag.Rows.Count + ' conversations. Click headers to sort; duration is recorded activity span.'
         }
     }
+    $filterTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
+    $filterTimer.Interval = [TimeSpan]::FromMilliseconds(150)
     $applyFilters = {
+        $filterTimer.Stop()
         if ($dialog.Tag.UpdatingFilters) { return }
         $f = @{
             Search = $dialog.FindName('HistorySearch').Text
@@ -649,7 +712,15 @@ function Show-InteractionPicker($Owner) {
         } finally { $dialog.Tag.UpdatingFilters = $false }
         & $applyFilters
     }
-    foreach ($name in @('HistorySearch', 'MinPrompts', 'MinDuration')) { $dialog.FindName($name).Add_TextChanged($applyFilters) }
+    $filterTimer.Add_Tick($applyFilters)
+    $dialog.Add_Closed({ $filterTimer.Stop() })
+    foreach ($name in @('HistorySearch', 'MinPrompts', 'MinDuration')) {
+        $dialog.FindName($name).Add_TextChanged({
+            if ($dialog.Tag.UpdatingFilters) { return }
+            $filterTimer.Stop()
+            $filterTimer.Start()
+        })
+    }
     foreach ($name in @('ProjectFilter', 'AgentFilter', 'SourceFilter', 'StatusFilter')) { $dialog.FindName($name).Add_SelectionChanged($applyFilters) }
     foreach ($name in @('DateFrom', 'DateTo')) { $dialog.FindName($name).Add_SelectedDateChanged($applyFilters) }
     foreach ($name in @('DateFrom', 'DateTo')) {
@@ -1100,7 +1171,9 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
 </Window>
 '@ $Owner
     $checks = [Collections.Generic.List[Windows.Controls.CheckBox]]::new()
+    $selectionState = @{ Updating = $false }
     $updateCount = {
+        if ($selectionState.Updating) { return }
         $count = @($checks | Where-Object { $_.IsChecked }).Count
         $dialog.FindName('Count').Text = "$count/$($checks.Count) included"
         $dialog.FindName('Save').IsEnabled = $count -gt 0
@@ -1127,8 +1200,14 @@ function Show-DemoExchangeSelection($Owner, [string]$Id) {
         $check.Add_Checked($updateCount)
         $check.Add_Unchecked($updateCount)
     }
-    $dialog.FindName('All').Add_Click({ foreach ($check in $checks) { $check.IsChecked = $true } })
-    $dialog.FindName('None').Add_Click({ foreach ($check in $checks) { $check.IsChecked = $false } })
+    $setAll = {
+        param([bool]$Included)
+        $selectionState.Updating = $true
+        try { foreach ($check in $checks) { $check.IsChecked = $Included } }
+        finally { $selectionState.Updating = $false; & $updateCount }
+    }
+    $dialog.FindName('All').Add_Click({ & $setAll $true })
+    $dialog.FindName('None').Add_Click({ & $setAll $false })
     $dialog.FindName('Save').Add_Click({
         try {
             $inputs = if ($null -ne $entry.recording.promptSummaries) { @($entry.recording.promptSummaries) } else { [object[]]::new($checks.Count) }
