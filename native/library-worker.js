@@ -9,7 +9,7 @@ async function serve(input = process.stdin, output = process.stdout) {
         let id = null;
         try {
             if (Buffer.byteLength(line, 'utf8') > MAX_REQUEST) throw new Error('Library command exceeds 1 MiB.');
-            const packet = JSON.parse(line);
+            const packet = JSON.parse(line.replace(/^\uFEFF/, ''));
             if (!Number.isSafeInteger(packet.id) || packet.id < 1 || !packet.request || typeof packet.request !== 'object' || Array.isArray(packet.request)) {
                 throw new Error('Invalid library request envelope.');
             }

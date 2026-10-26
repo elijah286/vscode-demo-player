@@ -8,12 +8,14 @@ $root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Pat
 $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
 $script:LibraryRoot = Join-Path ([IO.Path]::GetTempPath()) ('vibereplay-worker-' + [guid]::NewGuid().ToString('N'))
 $script:PersistentLibrary = $true
+$inputEncoding = [Console]::InputEncoding
 $assertions = 0
 function Assert($Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
     $script:assertions++
 }
 try {
+    [Console]::InputEncoding = [Text.UTF8Encoding]::new($true)
     $first = @(Invoke-DemoLibrary @{ command = 'list' })
     Assert ($first.Count -eq 0) 'Empty library list must remain empty.'
     $worker = [VibeReplay.LibraryConnections]::Get($script:NodePath, (Join-Path $root 'native\library-worker.js'), $script:LibraryRoot)
@@ -39,7 +41,7 @@ try {
     [IO.File]::WriteAllText($slow, @'
 const readline = require('node:readline');
 readline.createInterface({ input: process.stdin }).on('line', line => {
-    const packet = JSON.parse(line);
+    const packet = JSON.parse(line.replace(/^\uFEFF/, ''));
     setTimeout(() => process.stdout.write(JSON.stringify({ version: 1, id: packet.id, ok: true, result: packet.request.text }) + '\n'), 32000);
 });
 '@)
@@ -69,6 +71,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     } finally { $cancellation.Dispose(); $connection.Dispose() }
     Write-Output ("Persistent library: " + $assertions + ' assertions passed.')
 } finally {
+    [Console]::InputEncoding = $inputEncoding
     [VibeReplay.LibraryConnections]::Close()
     if (Test-Path -LiteralPath $script:LibraryRoot) { Remove-Item -LiteralPath $script:LibraryRoot -Recurse -Force }
 }

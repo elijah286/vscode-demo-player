@@ -22,14 +22,14 @@ test('persistent library protocol reuses one process, preserves errors and rejec
         await fs.rm(root, { recursive: true, force: true });
     });
     const pid = child.pid;
-    async function send(packet) {
-        child.stdin.write(JSON.stringify(packet) + '\n');
+    async function send(packet, preamble = '') {
+        child.stdin.write(preamble + JSON.stringify(packet) + '\n');
         const response = await lines.next();
         assert.equal(response.done, false, stderr);
         return JSON.parse(response.value);
     }
     for (const id of [1, 2, 3]) {
-        assert.deepEqual(await send({ id, request: { root, command: 'list' } }), { version: 1, id, ok: true, result: [] });
+        assert.deepEqual(await send({ id, request: { root, command: 'list' } }, id === 1 ? '\uFEFF' : ''), { version: 1, id, ok: true, result: [] });
         assert.equal(child.pid, pid);
         assert.equal(child.exitCode, null);
     }
