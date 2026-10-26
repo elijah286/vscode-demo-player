@@ -387,7 +387,7 @@ test('private controller accepts only authorized state-appropriate controls', { 
     assert.equal((await call('/next', { method: 'POST' })).status, 202);
     state.phase = 'complete';
     state.turnIndex = 2;
-    assert.equal((await (await call('/state')).json()).label, 'Finished - replay or exit');
+    assert.equal((await (await call('/state')).json()).label, 'Finished - replay or close recording');
     assert.equal((await call('/play', { method: 'POST' })).status, 409);
     assert.equal((await call('/next', { method: 'POST' })).status, 409);
     assert.equal((await call('/restart', { method: 'POST' })).status, 202);

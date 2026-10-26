@@ -166,7 +166,7 @@ try {
     $first = $conversationMessages.Children[0]
     Assert-Layout ($first.Child.Children[0].Text -eq 'You' -and $first.Child.Children[1].Text -eq 'Input 1') 'First message must label You.'
     Assert-Layout ($conversationPanel.Visibility -eq 'Visible' -and -not $showPrompt.IsChecked) 'History input must not depend on prompt toggle.'
-    Assert-Layout ($elapsedText.Text -eq 'Unavailable' -and -not $showElapsed.IsEnabled) 'Untimed history must keep fixed timer with unavailable notice.'
+    Assert-Layout ($timerPanel.Visibility -eq 'Collapsed' -and -not $showElapsed.IsEnabled) 'Missing recorded timing must never force a timer or invent a duration.'
     $messages += Message '0:output' $false 'Output 1'
     Set-History $messages
     $second = $conversationMessages.Children[1]
@@ -175,6 +175,12 @@ try {
     Assert-Layout ($second.Background.ToString() -eq '#FFE9EDF2' -and $second.Child.Children[1].Foreground.ToString() -eq '#FF202020') 'AI contrast is wrong.'
     Assert-Layout ($second.Child.Children[0].Text -eq 'AI' -and $second.Child.Children[2].Text -eq [string][char]0x2193) 'Completed output needs AI label and arrow.'
     $transitions = $script:conversationTransitionCount
+    $script:lastView.overlay.elapsed = '00:00:00'
+    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($showElapsed.IsEnabled -and $timerPanel.Visibility -eq 'Collapsed') 'Output mode must respect unchecked recorded-time preference.'
+    $showElapsed.IsChecked = $true
+    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout ($timerPanel.Visibility -eq 'Visible') 'Recorded time must remain independently selectable in output mode.'
     foreach ($elapsed in @('00:00:01', '00:00:02', '00:00:02')) {
         $script:lastView.overlay.elapsed = $elapsed
         Update-ReplayOverlays -MeasureOnly
@@ -401,7 +407,7 @@ try {
             $script:exitRequested = $false
             $script:testStopRequested = $false
             & $stopAction
-            Assert-Layout ($script:testStopRequested -and $script:exitRequested -eq ($phase -eq 'complete')) 'Exit must close the controller after the final exchange; mid-run Stop must retain it.'
+            Assert-Layout ($script:testStopRequested -and -not $script:exitRequested) 'Closing a recording must retain the standalone controller both mid-run and after completion.'
         }
         foreach ($name in @('Cancel-AutoContinue', 'Test-AutoContinueDue', 'Get-ReadingDwellSeconds', 'Get-EstimatedRunMilliseconds', 'Update-PlaybackEstimate')) {
             $function = $controllerAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)

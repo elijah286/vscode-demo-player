@@ -1185,7 +1185,14 @@ try {
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes complete output summaries' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary } 'conversation starts with Input1' | Out-Null
-    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or $showElapsed.Current.IsEnabled) { throw 'Output mode must label the input and own fixed timer visibility.' }
+    if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or -not $showElapsed.Current.IsEnabled) { throw 'Output mode must label the input and keep recorded time independently selectable.' }
+    $elapsedToggle = [System.Windows.Automation.TogglePattern]$showElapsed.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $elapsedToggle.Toggle()
+    Wait-Until { (Find-Element $overlay 'Id' 'ElapsedText').Current.IsOffscreen } 'unchecked recorded time hides timer in output mode' | Out-Null
+    if ((Find-Element $overlay 'Id' 'FirstText').Current.Name -cne $overlaySummary -or -not $overlay.Current.IsEnabled) { throw 'Hiding time also hid or damaged conversation summaries.' }
+    $elapsedToggle.Toggle()
+    Wait-Until { -not (Find-Element $overlay 'Id' 'ElapsedText').Current.IsOffscreen -and
+        (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -eq '00:00:00' } 'checked recorded time restores real zero preview' | Out-Null
     $timerTop = (Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top
     Save-WindowImage $overlay 'conversation-input1.png'
     Invoke-Button $window 'PlayPause'
@@ -1282,7 +1289,12 @@ try {
     Save-WindowImage $overlay 'conversation-input2-output2.png'
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable after the final exchange.' }
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Replay' -or
-        (Find-Element $window 'Id' 'Stop').Current.Name -ne 'Exit') { throw 'Finished playback must offer Replay and Exit.' }
+        (Find-Element $window 'Id' 'Stop').Current.Name -ne 'Close recording') { throw 'Finished playback must offer Replay and Close recording without exiting VibeReplay.' }
+    $elapsedToggle.Toggle()
+    Wait-Until { (Find-Element $overlay 'Id' 'ElapsedText').Current.IsOffscreen } 'completed recording also respects unchecked timer' | Out-Null
+    $elapsedToggle.Toggle()
+    Wait-Until { -not (Find-Element $overlay 'Id' 'ElapsedText').Current.IsOffscreen -and
+        (Find-Element $overlay 'Id' 'ElapsedText').Current.Name -eq '00:03:03' } 'completed recorded duration restores without resetting history' | Out-Null
     Start-Sleep -Milliseconds 800
     if (-not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -or
         (Find-Element $overlay 'Id' 'Message3Text').Current.Name -cne $secondOutputSummary) { throw 'Finished playback must retain its window and last reply.' }
@@ -1301,6 +1313,17 @@ try {
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'Auto continue finishes final exchange without Next Step' 30 | Out-Null
     if ($dwell.Elapsed.TotalSeconds -lt 2 -or (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Auto continue missed dwell or looped after last exchange.' }
     $autoPattern.Toggle()
+    Invoke-Button $window 'Stop'
+    Wait-Until { -not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) } 'close finished recording closes only its replay target' 20 | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'ChooseDemo').Current.IsEnabled -and
+        (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Open' } 'finished recording returns to the app without exiting' | Out-Null
+    if (-not (Get-Process -Id $controllerId -ErrorAction SilentlyContinue)) { throw 'Closing the finished recording exited VibeReplay.' }
+    Invoke-Button $window 'PlayPause'
+    Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Play' } 'same recording can reopen without restarting VibeReplay' 50 | Out-Null
+    $replay = Wait-Until {
+        Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
+    } 'reopened target after closing finished recording'
+    $replayId = [int]$replay.ProcessId
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -eq 'Exchange complete  1/2' } 'manual restart after auto run' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()

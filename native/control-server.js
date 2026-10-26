@@ -32,7 +32,7 @@ function playbackView(state) {
             enabled: true
         };
     }
-    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished - replay or exit', action: 'restart', button: 'Replay', enabled: true };
+    if (state.phase === 'complete') return { phase: 'complete', label: 'Finished - replay or close recording', action: 'restart', button: 'Replay', enabled: true };
     if (state.phase === 'error') return { phase: 'error', label: 'Replay error', button: 'Unavailable', enabled: false };
     if (state.phase === 'stopping' || state.phase === 'stopped') return { phase: state.phase, label: 'Stopping', button: 'Unavailable', enabled: false };
     return { phase: state.phase, label: 'Preparing', button: 'Play', enabled: false };

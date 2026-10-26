@@ -577,8 +577,10 @@ and concurrent summary/inclusion changes are rejected rather than overwritten.
 
 After the final reply, the playback window and summary overlay stay open on the
 last exchange. **Replay** restarts the selected exchanges; the stop button becomes
-**Exit** (tooltip and accessible name) and closes the isolated playback/controller
-windows. Closing the controller also closes its paired replay window normally.
+**Close recording** (tooltip and accessible name) and closes only the isolated
+playback window, returning the standalone VibeReplay app to **Open** with the
+selection retained. You can choose or reopen a recording without restarting the
+app. Closing the controller itself still exits the app and closes its paired replay window normally.
 No unrelated editor window or process is terminated.
 
 The **VS Code / Agents (experimental)** selector chooses the native playback UI.
@@ -610,14 +612,19 @@ updates, checkbox changes, Stop, and mode switches within that controller sessio
 **Show summary of output** is also off by default. Enable it for a scrolling
 text-message history: right-aligned blue **You** input bubbles and
 a left-aligned neutral **AI** output bubble, each with a contrasting text label.
-This mode includes the input even if **Show prompt summary** is unchecked, and
-always pins working time at the top at every width. **Show elapsed time** is
-temporarily disabled; its prior choice returns when output mode is off.
-Untimed recordings show **Unavailable** rather than a fabricated duration.
-Complete Copilot SDK recordings use their recorded `assistant.turn_end` timestamp,
+This mode includes the input even if **Show prompt summary** is unchecked.
+**Show recorded working time** independently controls the timer in both overlay
+modes: unchecked means hidden, including after playback finishes. When checked
+and recorded timing exists, it pins working time at the top at every width.
+Untimed recordings disable the time option rather than showing a forced timer or
+a fabricated duration.
+Copilot SDK recordings use their recorded final `assistant.turn_end` timestamp,
 including older saved selections that retained SDK events but omitted native
-completion metadata. Partial recordings or invalid endpoints remain unavailable;
-last activity is not substituted for completion.
+completion metadata. Exchanges with partially supported archived content still
+have usable time when their last assistant/tool boundary is an explicit turn end;
+their content is not reclassified as complete. Missing/invalid endpoints or
+assistant/tool activity after the last end remain unavailable; last activity is
+not substituted for completion.
 The timer itself never animates or moves with the bubbles.
 
 The first input appears before playback. Only after the entire recorded reply
