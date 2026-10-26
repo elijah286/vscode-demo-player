@@ -188,11 +188,12 @@ function reviewSummaries(vscode, drafts, validateFit, repairDraft) {
             saving = true;
             try {
                 const reviewed = validateReviewedDrafts(message.drafts, drafts);
-                if (validateFit) await validateFit(reviewed);
+                if (validateFit) await validateFit(reviewed, correction.signal);
+                if (closed) return;
                 resolve(reviewed);
                 panel.dispose();
             } catch (error) {
-                void panel.webview.postMessage({ command: 'error', message: error.message });
+                if (!closed) void panel.webview.postMessage({ command: 'error', message: error.message });
             } finally {
                 saving = false;
             }

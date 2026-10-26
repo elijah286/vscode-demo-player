@@ -935,7 +935,7 @@ try {
     $responseClock = [Diagnostics.Stopwatch]::StartNew()
     $progressText = (Find-Element $repairProgress 'Id' 'OpenAISummaryProgress').Current.Name
     $responseClock.Stop()
-    if ($responseClock.Elapsed.TotalMilliseconds -gt 250 -or $progressText -notmatch '4 requests.*90 seconds') { throw 'Length correction blocked UI or omitted the request/deadline bounds.' }
+    if ($responseClock.Elapsed.TotalMilliseconds -gt 250 -or $progressText -notmatch '4 requests.*completion or cancel') { throw 'Length correction blocked UI or omitted the request limit/cancellation guidance.' }
     Write-Output ('LENGTH CORRECTION RESPONSIVENESS: ' + [Math]::Round($responseClock.Elapsed.TotalMilliseconds, 1) + 'ms (limit250ms).')
     Invoke-Button $repairProgress 'CancelOpenAISummaryProgress'
     Wait-Until { -not (Get-AppWindow 'Generating AI Summaries') } 'cancel length rewrite' | Out-Null

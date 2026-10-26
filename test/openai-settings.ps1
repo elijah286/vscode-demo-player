@@ -63,7 +63,7 @@ try {
     $progress | Add-Member -MemberType ScriptMethod -Name FindName -Value { param($Name) return $this.Label }
     $originalInvoke = ${function:Invoke-DemoLibrary}
     try {
-        function Invoke-DemoLibrary($Request, $Owner, [string]$Helper, [int]$TimeoutSeconds, [switch]$KeepOwnerEnabled) {
+        function Invoke-DemoLibrary($Request, $Owner, [string]$Helper, [switch]$KeepOwnerEnabled) {
             $script:summaryCalls.Add($Request)
             if ($script:failSummaryCall -and $script:summaryCalls.Count -eq $script:failSummaryCall) { throw 'Synthetic part failure.' }
             return ('s' * 300)
@@ -103,7 +103,7 @@ try {
         function Get-PlayerAISettings { return @{ encryptedKey = 'synthetic'; model = 'gpt-4.1-mini' } }
         function Get-PlayerOpenAIKey { return 'synthetic-translation-key-only' }
         function Show-DemoError($Owner, $Failure) { $script:translationFailure = $Failure.Exception.Message }
-        function Invoke-DemoLibrary($Request, $Owner, $Helper, [ValidateRange(1,95)][int]$TimeoutSeconds = 30) {
+        function Invoke-DemoLibrary($Request, $Owner, $Helper) {
             Assert-True ($Helper -eq 'openai-summaries.js') 'Translations reuse the trusted OpenAI helper.'
             if ($Request.command -eq 'prepareTranslations') {
                 return [pscustomobject]@{ entry = @{ id = 'synthetic' }; outputs = @('Original English reply'); candidates = @(
@@ -111,7 +111,7 @@ try {
                     @{ index = 0; kind = 'output'; source = 'I selected blue. Continue?' }
                 ) }
             }
-            Assert-True ($Request.command -eq 'generateSummary' -and $TimeoutSeconds -eq 95) 'Translation uses the bounded generation helper timeout.'
+            Assert-True ($Request.command -eq 'generateSummary') 'Translation uses the completion-driven generation helper.'
             Assert-True ($Request.language -ceq $script:translationLanguage) 'The selected translation language reaches every request.'
             Assert-True ($Request.apiKey -ceq 'synthetic-translation-key-only') 'Translation uses the saved key.'
             Assert-True (($Request.Keys | Sort-Object) -join ',' -eq 'apiKey,command,kind,language,model,source') 'Only summaries and required provider options are sent; no originals or context.'

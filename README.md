@@ -109,7 +109,7 @@ and temporary helpers outside tracked application source. Use synthetic librarie
 and isolated profiles for the validation commands below, not the real demo library.
 
 **Open** never starts playback. While the target prepares, playback remains
-disabled; failures and readiness timeouts are reported. After each exchange,
+disabled; failures are reported and slow readiness remains cancellable. After each exchange,
 **Start Over** restarts the entire selected demo, **Next Step** plays the next
 prompt/response exchange, and **Stop** closes only the paired target. Next Step
 is disabled after the final exchange. Closing the target returns the controller
@@ -140,10 +140,10 @@ prereleases, drafts, unrelated URLs, and incomplete releases are refused.
 The installer remains unsigned: SHA-256 verifies release integrity, not an
 independent publisher identity or protection against repository compromise.
 
-Metadata requests have a 15-second network limit; installer downloads have a
-120-second limit. The UI caps each whole check at 30 seconds and each download
-operation at 180 seconds, with no retries. The installer helper waits at most
-30 seconds for app exit and five minutes for installation; it does not kill
+Update checks and downloads wait for completion or explicit cancellation, not
+an elapsed-time deadline. Close the update window to cancel the owned helper;
+there are no automatic request retries. The installer helper waits for actual
+app exit and installation completion; it does not kill
 the installer or unrelated editor processes. Errors are displayed in the update
 window/footer and saved to `%LOCALAPPDATA%\VSCodeDemoPlayer\last-update-error.log`.
 Update handoff results and installer logs remain under
@@ -276,7 +276,7 @@ remain listed as **Load to inspect** rather than disappearing. **Discovery
 details** shows errors and limits; row tooltips explain partial, unavailable
 and unsupported sources. Chat titles use the VS Code index where available.
 Loading reconstructs and validates the full selected recording (100 MiB maximum)
-with a 30-second helper limit and conflicting actions disabled until done.
+with explicit cancellation and conflicting actions disabled until done.
 Request serialization, helper I/O and response decoding run in a background
 runspace, including asynchronous worker startup. The window itself remains
 enabled: searches and independent presentation controls still respond.
@@ -290,24 +290,25 @@ Slow library operations show an activity label, elapsed seconds, an animated
 indicator and **Cancel operation**. Closing that activity window also cancels.
 Saved selections start loading after the picker is visible, rather than
 delaying its appearance. The same background wait is used for saved-library
-refresh, import, rename, delete and export. The budget includes sending the request:
-a helper that stops reading stdin cannot freeze the window before the watchdog
-starts. Closing the owning window cancels and stops that helper. This explicit
+refresh, import, rename, delete and export. Sending requests and reading output
+are asynchronous, so a helper that stops reading stdin cannot freeze the window
+or prevent cancellation. Closing the owning window cancels and stops that helper. This explicit
 owner-close cancellation is logged as a warning instead of reopening an error
 dialog for the closed window; it still never confirms a successful operation.
-History
-discovery retains its separate 60-second budget and streamed progress.
+History discovery also waits for completion or cancellation and retains streamed progress.
 
 Success requires a complete successful response **and** a zero-exit helper.
-Output alone does not confirm success if the helper remains running. Timeout
-errors identify the operation and whether it stalled sending the request or
-waiting for helper exit, without adding recording paths, titles or content.
-The helper is stopped and its exit awaited before controls are restored.
+Output alone does not confirm success if the helper remains running. Operations
+have no total-duration or inactivity cutoff, including while sending input or
+draining output. Even a silent operation remains under user control: wait or cancel.
+Only cancellation, owner closure, or a genuine failure stops an unfinished helper.
+Its exit is awaited before controls are restored. The short post-stop cleanup
+wait is not an operation deadline and cannot interrupt ongoing useful work.
 Library requests use UTF-8 streaming decoding, including split Unicode characters
 and the optional leading byte-order mark emitted by some Windows PowerShell
 console encodings. Malformed JSON still fails explicitly; task completion does
 not add extra values to the returned library results.
-Timeout/cancellation is not a rollback: a write may already have reached disk.
+Cancellation is not a rollback: a write may already have reached disk.
 Refresh the library before retrying; no automatic retry or lock removal occurs.
 
 The isolated helper checks exercise all 12 real CLI commands with synthetic
@@ -316,7 +317,11 @@ They enforce a 250 ms dispatcher/input-delay budget while serializing 5,000
 request objects and decoding 20,000 response objects, and check independent
 controls, explicit cancellation, delayed success, failure, responsive saved refresh,
 blocked stdin, output without process exit, streamed history and owner-close
-cancellation against the unchanged 30-second deadline:
+cancellation, plus a streaming helper that completes after 32 seconds (beyond
+the former 30-second cutoff) and history polling with a synthetic scan age past
+the former 60-second cutoff. Update checks verify that elapsed time cannot stop
+a live helper and that explicit cancellation reaps it and cleans partial downloads
+without blocking independent UI work:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\capture-helper.ps1 -NodePath 'C:\Tools\node\node.exe'
@@ -324,10 +329,9 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\library-help
 ```
 
 These checks use temporary libraries, do not show windows or access real recordings,
-and remove their fixtures afterward. A passing check does not diagnose a timeout
+and remove their fixtures afterward. A passing check does not diagnose a failure
 on a different recording; record which action failed (load, save, library
-refresh, etc.) and reproduce with a sanitized synthetic fixture before
-changing the timeout.
+refresh, etc.) and reproduce with a sanitized synthetic fixture.
 
 SDK event recordings normalize saved prompts, assistant text and tool transitions
 for playback. Original selected events, tool-result data, initial context and
@@ -605,8 +609,8 @@ not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
 Both providers automatically rewrite completed, well-formed overlong drafts before
 review. Each source part/combination permits **at most 4 requests**: one generation
-and up to three length corrections, with a fixed **90-second total deadline**
-(the player's helper watchdog allows 95 seconds including process overhead).
+and up to three length corrections. Requests wait for actual completion or
+explicit cancellation, with no elapsed-time deadline in either provider or helper.
 Corrections resend the consented source/context and previous draft, prioritizing
 the recorded answer, final unanswered question/choices and qualifications over
 incidental detail. Each intermediate summary must fit 600 before combination.
@@ -708,7 +712,7 @@ included exchanges with saved input/output summaries are translated; excluded
 exchanges and missing summaries are left alone. Original English prompt/reply
 exchanges, tool payloads and neighboring context are not sent for translation.
 API charges and OpenAI retention policies apply, even if you later cancel.
-Each summary permits up to four requests for length correction within 90 seconds;
+Each summary permits up to four requests for length correction, without a duration cutoff;
 failed/refused requests are not retried automatically.
 
 Choose **Translate and review**, check/edit the drafts against the originals,
@@ -796,8 +800,8 @@ outputs need manual summaries; no success is invented. Full recordings remain
 local and unchanged, but the consented text is sent to OpenAI.
 
 Progress identifies the exchange and summary kind. **Cancel** stops the helper;
-already sent requests may still incur charges. There is a 90-second limit per
-request, including bounded automatic length correction as described above. Long sources are automatically split into
+already sent requests may still incur charges. Requests have no total-duration
+limit; automatic length correction remains request-count bounded as described above. Long sources are automatically split into
 parts of at most 64,000 characters. Each part is summarized in order, then
 intermediate summaries are combined into one overlay summary with additional
 bounded requests; no original source is silently truncated. Both source and
@@ -880,11 +884,17 @@ The library defaults to `%LOCALAPPDATA%\VSCodeDemoPlayer\demos`, outside the
 repository. `-LibraryRoot` chooses a separate library. Multiple players may
 read it; concurrent writes are rejected with a visible busy error. After a
 helper crash, inspect the library and ensure no writer is running before
-manually removing `.library.lock`. Library helper operations time out after
-30 seconds, startup after 45 seconds, and HTTP calls after one second.
+manually removing `.library.lock`. Library helpers, history scans, AI generation,
+and update downloads run until completion, explicit cancellation, or a real error.
+Slow startup displays waiting guidance after 45 seconds but does not stop the
+live target. Local control HTTP probes retain a one-second transport timeout;
+failed probes disable conflicting controls and report connection unavailability,
+but do not close the playback window. Poll intervals, protocol/connection
+handshake limits, bounded input sizes/request counts, and post-cancellation
+cleanup waits are not whole-operation deadlines.
 If VS Code's updater is preventing new windows, Open fails immediately with
 instructions to save your work and choose **Restart to Update** in VS Code,
-rather than waiting for startup to time out. The update guard checks the
+rather than waiting for startup readiness. The update guard checks the
 `vscode-updating` mutex's presence, not thread ownership, matching VS Code's
 startup behavior. It does not stop, bypass, or modify the updater or other editor
 windows. Recordings and summaries remain unchanged. Unexpected target exit

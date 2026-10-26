@@ -19,12 +19,12 @@ try {
     catch [ArgumentException] { Write-Output 'The original application has already exited.' }
     if ($parent) {
         try {
-            if (-not $parent.WaitForExit(30000)) { throw 'Demo Player did not exit within 30 seconds. No update was started.' }
+            $parent.WaitForExit()
         } finally { $parent.Dispose() }
     }
     $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $job.installRoot + '"'), ('/LOG="' + (Join-Path $directory 'installer.log') + '"')) -PassThru
     try {
-        if (-not $setup.WaitForExit(300000)) { throw 'The installer exceeded five minutes. It was not killed; inspect the installer before retrying.' }
+        $setup.WaitForExit()
         if ($setup.ExitCode -ne 0) { throw ('The installer failed with exit code ' + $setup.ExitCode + '. See ' + (Join-Path $directory 'installer.log')) }
     } finally { $setup.Dispose() }
     $installed = [IO.File]::ReadAllText((Join-Path $job.installRoot 'build-info.json')) | ConvertFrom-Json
