@@ -9,6 +9,7 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) ('capture-helper-test-' + [guid]
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'native')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'DemoDialogs.ps1') -Destination $scratch
 Copy-Item -LiteralPath (Join-Path $root 'SummaryPresentation.ps1') -Destination $scratch
+foreach ($file in @('PlayerShell.ps1', 'PlayerShell.cs')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $scratch }
 $helper = @'
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });

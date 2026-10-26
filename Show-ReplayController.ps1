@@ -5,7 +5,9 @@ param(
     [string]$LibraryRoot = (Join-Path $env:LOCALAPPDATA 'VSCodeDemoPlayer\demos'),
     [string]$NodePath,
     [string]$CodePath,
-    [string]$InstalledLauncherPath
+    [string]$DemoId,
+    [string]$InstalledLauncherPath,
+    [switch]$LegacyController
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,6 +29,7 @@ $script:LibraryRoot = [System.IO.Path]::GetFullPath($LibraryRoot)
 $script:NodePath = $NodePath
 $script:CodePath = $CodePath
 . (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1')
+$script:PersistentLibrary = -not $LegacyController
 . (Join-Path $PSScriptRoot 'DemoDialogs.ps1')
 . (Join-Path $PSScriptRoot 'PlayerAI.ps1')
 . (Join-Path $PSScriptRoot 'PlayerUpdates.ps1')
@@ -141,8 +144,13 @@ if (-not $script:standalone) {
   </Grid>
 </Window>
 '@
-$reader = [System.Xml.XmlNodeReader]::new($layout)
-try { $window = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $reader.Dispose() }
+if ($LegacyController) {
+    $reader = [System.Xml.XmlNodeReader]::new($layout)
+    try { $window = [System.Windows.Markup.XamlReader]::Load($reader) } finally { $reader.Dispose() }
+} else {
+    . (Join-Path $PSScriptRoot 'PlayerShell.ps1')
+    $window = [VibeReplay.ControllerWindow]::new()
+}
 if ($InstalledLauncherPath) {
     Add-Type -AssemblyName System.Drawing
     $icon = [Drawing.Icon]::ExtractAssociatedIcon($InstalledLauncherPath)
@@ -206,8 +214,9 @@ $frameColor = $window.FindName('FrameColor')
 $frameColorSwatch = $window.FindName('FrameColorSwatch')
 $windowMode = $window.FindName('WindowMode')
 $area = [System.Windows.SystemParameters]::WorkArea
+$window.Content.Measure([Windows.Size]::new($window.Width, [double]::PositiveInfinity))
 $window.Left = [Math]::Max($area.Left, $area.Right - $window.Width - 16)
-$window.Top = [Math]::Max($area.Top, $area.Bottom - $window.Height - 16)
+$window.Top = [Math]::Max($area.Top, $area.Bottom - $window.Content.DesiredSize.Height - 16)
 $script:client = $null
 $script:stateTask = $null
 $script:actionTask = $null
@@ -359,6 +368,8 @@ $selectExchanges.Add_Click({
 })
 
 function Set-IdleView {
+    if ($window -is [VibeReplay.ControllerWindow]) { $window.SetRecording($false) }
+    if ($window.FindName('PlaybackProgress')) { $window.FindName('PlaybackProgress').Value = 0 }
     $script:selectionResumePending = $false
     Cancel-AutoContinue -ResetRun
     $script:lastView = $script:selectedDemo.presentation
@@ -404,6 +415,7 @@ function Reset-ReplaySession {
 
 function Start-DemoReplay {
     if (-not $script:selectedDemo) { throw 'Select a demo first.' }
+    if ($window -is [VibeReplay.ControllerWindow]) { $window.SetRecording($true) }
     $script:launching = $true
     $status.Text = 'Validating selection and opening isolated playback...'
     try {
@@ -769,6 +781,9 @@ $timer.Add_Tick({
                 $window.Show()
             }
             $status.Text = if ($view.progress) { $view.label + '  ' + $view.progress } else { $view.label }
+            if ($window.FindName('PlaybackProgress') -and $view.total -gt 0) {
+                $window.FindName('PlaybackProgress').Value = 100 * $view.current / $view.total
+            }
             if ($view.phase -eq 'error') {
                 $script:lastFault = if ($view.error) { $view.error } else { 'Recorded playback failed.' }
                 $status.Text = 'Replay error: ' + $script:lastFault
@@ -834,11 +849,16 @@ $window.Add_Closed({
     $script:closeAllowed = $true
     $script:overlayWindow.Close()
     if ($script:client) { $script:client.Dispose() }
+    [VibeReplay.LibraryConnections]::Close()
 })
 $application = [System.Windows.Application]::new()
 $application.ShutdownMode = [System.Windows.ShutdownMode]::OnMainWindowClose
 $application.MainWindow = $window
 Initialize-PlayerUpdates
+if ($DemoId) {
+    if (-not $script:standalone) { throw 'DemoId is available only in standalone mode.' }
+    $script:selectedDemo = Invoke-DemoLibrary @{ command = 'metadata'; id = $DemoId }
+}
 if ($script:standalone) { Set-IdleView; $window.Show() }
 else {
     $chooseDemo.IsEnabled = $false
