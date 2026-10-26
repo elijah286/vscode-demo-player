@@ -1186,7 +1186,7 @@ test('individual review approvals and deletions persist only summary metadata th
     assert.deepEqual(after.recording.turns, before.recording.turns);
     const playback = await library.packageRecordings(file);
     assert.equal(playback[0].promptSummary.length, 300);
-    assert.equal(playback[1].promptSummary.length, 300);
+    assert.equal(playback[1].promptSummary, 'second '.repeat(60).trim());
     assert.equal(playback[1].request.message.text, 'second '.repeat(60));
     const exported = path.join(directory, 'reviewed.demo-recording.json');
     await library.exportDemo(root, added.id, exported);
@@ -1300,7 +1300,7 @@ test('batch authoring summarizes every eligible prompt once with one consent/mod
     assert.deepEqual(cleared.recording.turns, before.recording.turns);
     assert.deepEqual(cleared.recording.source, before.recording.source);
     const replay = await library.packageRecordings(file);
-    assert.equal(replay[1].promptSummary, 'y'.repeat(297) + '...', 'Clearing restores the bounded default excerpt');
+    assert.equal(replay[1].promptSummary, prompts[1], 'Clearing restores the full prompt, never an unfinished excerpt');
     assert.equal(replay[0].promptSummary, 'x'.repeat(300), 'A prompt at the new budget is not truncated');
     const regenerated = authoringAPI();
     await activateSummaryAuthoring({ subscriptions: [] }, regenerated.api, file).run();

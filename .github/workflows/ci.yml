@@ -64,6 +64,13 @@ jobs:
       - name: Check exchange selection without showing windows
         shell: powershell
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
+      - name: Check cohesive dialog layout and bounded UI work
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-theme.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-performance.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check isolated agent worktree ownership and handoffs
         shell: powershell
         run: .\test\agent-worktrees.ps1

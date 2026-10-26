@@ -242,7 +242,7 @@ test('paired question remains untrusted context for the actual answer, in every 
     }
 });
 
-test('generation rejects incomplete, clipped and third-person drafts without trimming or retry charges', async () => {
+test('generation rejects invalid drafts after bounded content corrections, but oversized responses fail immediately', async () => {
     for (const summary of [
         'I want to repair the framewor', 'I can proceed, however,', 'I found a mismatch...',
         'User wants to repair the project.', 'The user responded affirmatively.',
@@ -255,11 +255,69 @@ test('generation rejects incomplete, clipped and third-person drafts without tri
             calls++;
             return Response.json(completed(summary));
         } }), /No summar(?:y|ies).*saved/i);
-        assert.equal(calls, 1, 'Never automatically repeat a paid request to repair a bad draft');
+        assert.equal(calls, summary.length > 4096 ? 1 : 4, 'Only completed drafts with correctable content use the consented correction budget');
     }
     for (const summary of ['I want to repair the project.', 'Can you repair it?', 'Yes.', 'No.', 'I said "Yes."', 'x'.repeat(239) + '.']) {
         assert.equal(await generateOpenAISummary(request, { fetchImpl: reply(completed(summary)) }), summary);
     }
+});
+
+test('both providers rewrite completed fragments and third-person drafts from the original source before review', async () => {
+    const { generateSummary, MAX_SUMMARY_REQUESTS } = require('../prompt-summary-authoring');
+    const source = 'I checked the project. It cannot run. Should I install blue or green?';
+    const final = 'I found the project cannot run. Should I install blue or green?';
+    const question = 'Can it run?';
+    const previous = 'I need a working project.';
+    for (const invalid of ['I checked the projec', 'I set a !', 'I found a problem...',
+        'The assistant checked the project.']) {
+        for (const provider of ['openai', 'vscode']) {
+            let calls = 0;
+            const progress = [];
+            const respond = prompt => {
+                calls++;
+                assert.ok(prompt.endsWith(JSON.stringify(source)));
+                assert.ok(prompt.includes(JSON.stringify(question)));
+                assert.ok(prompt.includes(JSON.stringify(previous)));
+                if (calls > 1) {
+                    assert.match(prompt, /AUTOMATIC CONTENT CORRECTION/);
+                    assert.match(prompt, /not merely its final punctuation/);
+                    assert.ok(prompt.includes(JSON.stringify(invalid)));
+                }
+                return calls === 1 ? invalid : final;
+            };
+            const result = provider === 'openai' ? await generateOpenAISummary({ ...request, kind: 'output', source, question, previous }, {
+                progress: state => progress.push(state),
+                fetchImpl: async (_url, http) => Response.json(completed(respond(JSON.parse(http.body).input)))
+            }) : await generateSummary({ LanguageModelChatMessage: { User: content => ({ content }) } }, {
+                maxInputTokens: 10000, countTokens: async () => 1,
+                sendRequest: async messages => ({ text: (async function* () { yield respond(messages[0].content); })() })
+            }, source, undefined, 'output', { question, previous, progress: state => progress.push(state) });
+            assert.equal(result, final);
+            assert.equal(calls, 2);
+            assert.deepEqual(progress, [
+                { attempt: 1, maximum: MAX_SUMMARY_REQUESTS, correcting: false },
+                { attempt: 2, maximum: MAX_SUMMARY_REQUESTS, correcting: true }
+            ]);
+        }
+    }
+});
+
+test('content and length corrections share one request budget, including translations', async () => {
+    const source = 'Do you want blue or green?';
+    for (const language of [undefined, 'fr', 'zh-CN']) {
+        let calls = 0;
+        const drafts = ['I found a...', 'I checked '.repeat(80) + 'Ready.', 'I found a problem...', 'Blue or green?'];
+        const result = await generateOpenAISummary({ ...request, source, language }, {
+            fetchImpl: async () => Response.json(completed(drafts[calls++]))
+        });
+        assert.equal(result, drafts[3]);
+        assert.equal(calls, 4);
+    }
+    let calls = 0;
+    await assert.rejects(generateOpenAISummary(request, {
+        fetchImpl: async () => { calls++; return Response.json(completed('I set a !')); }
+    }), /after 4 requests.*No drafts were saved.*edit summaries manually/);
+    assert.equal(calls, 4);
 });
 
 test('both providers automatically fit complete overlong drafts before review and intermediate reduction', async () => {
@@ -342,16 +400,16 @@ test('bounded sequential rewrites keep source questions, choices, paired and pre
     }
 });
 
-test('cancellation and provider failure during a length rewrite never trigger more requests', async () => {
-    const overflow = 'I inspected the settings. '.repeat(60) + 'Ready.';
-    for (const mode of ['cancel', 'auth', 'incomplete', 'refusal']) {
+test('cancellation and provider failure during length or content correction never trigger more requests', async () => {
+    for (const draft of ['I inspected the settings. '.repeat(60) + 'Ready.', 'I set a !']) {
+      for (const mode of ['cancel', 'auth', 'incomplete', 'refusal']) {
         const controller = new AbortController();
         let calls = 0;
         await assert.rejects(generateOpenAISummary(request, {
             signal: controller.signal,
             fetchImpl: async (_url, options) => {
                 calls++;
-                if (calls === 1) return Response.json(completed(overflow));
+                if (calls === 1) return Response.json(completed(draft));
                 if (mode === 'auth') return Response.json({}, { status: 401 });
                 if (mode === 'incomplete') return Response.json({ status: 'incomplete', output: [] });
                 if (mode === 'refusal') return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal' }] }] });
@@ -360,6 +418,7 @@ test('cancellation and provider failure during a length rewrite never trigger mo
             }
         }), /canceled|rejected|did not complete|declined/);
         assert.equal(calls, 2);
+      }
     }
 });
 

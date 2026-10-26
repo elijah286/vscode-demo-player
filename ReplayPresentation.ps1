@@ -216,6 +216,14 @@ function Update-Conversation($Overlay, [switch]$Immediate) {
 function Update-ReplayOverlays([switch]$MeasureOnly) {
     if (Get-Command Update-PlaybackEstimate -ErrorAction SilentlyContinue) { Update-PlaybackEstimate }
     $overlay = $script:lastView.overlay
+    if ($showOutput.IsChecked -and $null -ne $overlay.conversation.missingOutputSummaries -and @($overlay.conversation.missingOutputSummaries).Count -gt 0) {
+        $missing = @($overlay.conversation.missingOutputSummaries) -join ', '
+        $showOutput.IsChecked = $false
+        $failure = [Management.Automation.ErrorRecord]::new(
+            [InvalidOperationException]::new("Output summaries are missing for exchanges $missing. Show summary of output has been turned off. Stop playback, then Generate AI output summaries or edit summaries in Select exchanges before enabling it again. The original conversation can still play. No AI requests were sent."),
+            'MissingOutputSummaries', [Management.Automation.ErrorCategory]::InvalidData, $missing)
+        Show-DemoError $window $failure
+    }
     $script:outputMode = [bool]$showOutput.IsChecked
     $conversationActive = $script:outputMode -and -not $script:stopping -and $overlay.conversation.active
     $showOutput.IsEnabled = -not $script:stopping -and [bool]$overlay.conversation.active

@@ -238,6 +238,16 @@ try {
     Assert-Layout ($true) 'Excluded exchanges must not block summary playback.'
     $recording.promptSummaries[0] = $null
     Assert-Layout ((Get-DemoPlaybackInput $recording 0) -ceq 'Original question') 'Deleted input summaries must validate their real playback excerpt.'
+    $recording.turns[0].snapshot.requests[0].message.text = ('Full original prompt text. ' * 20).Trim()
+    Assert-Layout ((Get-DemoPlaybackInput $recording 0) -ceq $recording.turns[0].snapshot.requests[0].message.text) 'Fallback must retain the full original past 300 characters without an ellipsis.'
+    $recording.playbackIncluded[0] = $true
+    $recording.outputSummaries[0] = $null
+    $missingFailure = ''
+    try { Assert-DemoSummaryPairs $recording 820 1888 1048 -RequireOutput } catch { $missingFailure = $_.Exception.Message }
+    Assert-Layout ($missingFailure -like 'Exchange 1:*output summary missing*Generate AI output summaries*No AI requests were sent*') 'Output mode must reject included missing summaries before opening playback.'
+    $recording.playbackIncluded[0] = $false
+    Assert-DemoSummaryPairs $recording 820 1888 1048 -RequireOutput
+    Assert-Layout ($true) 'Missing output in excluded exchanges must not block playback.'
     $area = [System.Windows.Rect]::new(0, 0, 1920, 1080)
     foreach ($text in @(('W' * 300), ('A faithful synthetic summary. ' * 12).Substring(0,300), ([string][char]0x754C * 300),
         ([string][char]0x6211 + [char]0x60F3 + [char]0x8981 + [char]0x84DD + [char]0x8272 + [char]0x8FB9 + [char]0x6846 + [char]0x3002),
@@ -346,6 +356,13 @@ try {
     Arrange-Overlay 820 180
     Assert-Layout ($showElapsed.IsEnabled -and $promptPanel.Visibility -eq 'Visible' -and $conversationPanel.Visibility -eq 'Collapsed') 'Output off must restore legacy mode and toggles.'
     Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1) 'Legacy wide timer position must return.'
+    function Show-DemoError($Owner, $ErrorRecord) { $script:missingSummaryError = $ErrorRecord.Exception.Message }
+    $script:lastView.overlay.conversation | Add-Member NoteProperty missingOutputSummaries @(2, 4)
+    $showOutput.IsChecked = $true
+    Update-ReplayOverlays -MeasureOnly
+    Assert-Layout (-not $showOutput.IsChecked -and $script:missingSummaryError -like '*exchanges 2, 4*Generate AI output summaries*No AI requests were sent*') 'Enabling output mode must report missing future outputs and turn it off, not show placeholders.'
+    Assert-Layout ($conversationPanel.Visibility -eq 'Collapsed') 'Incomplete summary conversations must not be presented as ready.'
+    $script:lastView.overlay.conversation.missingOutputSummaries = @()
     $handled = $false
     $null = $script:overlayResizeTracker.OnMessage([IntPtr]::Zero, 0x0005, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$handled)
     Assert-Layout (-not $script:overlayResizeTracker.NativeResize -and -not $handled) 'Automatic WM_SIZE must not disable automatic sizing or swallow window messages.'

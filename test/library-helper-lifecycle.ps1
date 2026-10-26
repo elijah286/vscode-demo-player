@@ -9,6 +9,7 @@ $root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Pat
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('library-lifecycle-test-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'native')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'DemoDialogs.ps1') -Destination $scratch
+Copy-Item -LiteralPath (Join-Path $root 'DialogTheme.xaml') -Destination $scratch
 Copy-Item -LiteralPath (Join-Path $root 'SummaryPresentation.ps1') -Destination $scratch
 Copy-Item -LiteralPath (Join-Path $root 'PlayerShell.ps1') -Destination $scratch
 $shellFile = if (Test-Path -LiteralPath (Join-Path $root 'VibeReplay.Shell.dll')) { 'VibeReplay.Shell.dll' } else { 'PlayerShell.cs' }

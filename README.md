@@ -21,9 +21,17 @@ remain optional.
 Editor/experimental Agents mode, and saved summary language. **Prepare & settings**
 contains exchange selection, summary generation, translation, protected-key/model
 settings, and in-product updates. Opening playback collapses both sections.
-Capture, summary review, consent, and other existing preparation dialogs remain
-available on demand; this first increment does not redesign those dialogs or
-port the whole application to .NET 10.
+Capture, summary review, consent, translation, AI settings, progress, and update
+dialogs share the controller's dark green surfaces, mint primary actions,
+rounded controls, readable table rows, and visible keyboard-focus states.
+Native window frames, file/folder pickers, and system confirmation/error boxes
+remain Windows-managed. Windows high-contrast mode retains the system palette
+instead of applying the custom dialog theme.
+The interaction picker has a minimum size of 850 by 720 WPF layout units to
+keep its review and playback actions reachable with the larger controls.
+If the Windows work area is smaller, the dialog fits that work area and provides
+an outer scrollable viewport over a bounded layout, keeping actions reachable
+without expanding thousands of virtualized rows.
 
 The controller view and persistent library connection are implemented in
 [PlayerShell.cs](PlayerShell.cs). Packaging compiles `VibeReplay.Shell.dll`;
@@ -41,6 +49,13 @@ already have committed. Error and cancellation messages require refresh before
 retrying. Closing the controller stops its library worker.
 Controller operations use inline activity instead of opening another progress
 window. Existing preparation dialogs retain their established progress behavior.
+Dialog resources are parsed once per PowerShell UI session and reused.
+History text/numeric filters wait for a 150 ms typing pause before refreshing
+the in-memory view (no disk rescan); dropdowns, dates, and Clear filters apply
+immediately. History and saved-selection lists recycle visible rows. Bulk
+exchange inclusion updates the count once, rather than rescanning every
+checkbox after each change. Preview limits, original content, cancellation,
+privacy review, and summary/translation approval semantics are unchanged.
 
 To run a real native preview using only a new synthetic library:
 
@@ -60,22 +75,28 @@ Focused validation:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-shell.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-theme.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-performance.ps1
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\persistent-library.ps1 -NodePath 'C:\Tools\node\node.exe'
 # Interactive desktop only, against the PID printed by Start-CompactPreview:
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-ui.ps1 -ControllerProcessId 12345 -EvidenceRoot .\.build\compact-acceptance -ExercisePlayback
 ```
 
-The first checks actual offscreen WPF layout and compatibility controls; the
-second checks persistent transport, explicit errors, completion beyond the former
+The compact-shell check exercises actual offscreen WPF layout and compatibility
+controls. The dialog checks load all secondary windows with the production theme,
+render synthetic picker evidence under `.build\dialog-theme`, verify bounded
+row realization with 5,000 conversations, and exercise filter coalescing and
+bulk-selection updates using real controls and production handlers.
+The persistent-library check verifies persistent transport, explicit errors, completion beyond the former
 30-second cutoff, explicit cancellation, and cleanup.
-The third exercises the native controller, mini mode, Open-without-autoplay,
+The interactive check exercises the native controller, mini mode, Open-without-autoplay,
 Play/Pause/Resume, both exchanges, completion, and scoped Stop in actual isolated
 VS Code playback. It leaves the synthetic controller open for inspection.
 None of these is an installed old-version-to-new-version upgrade test.
 Legacy installer identity, stable launcher/asset names, version metadata,
 library/settings formats, and update handoff remain unchanged.
 
-**[Download the Windows installer - v0.2.31](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.31/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.32](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.32/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -593,6 +614,10 @@ This mode includes the input even if **Show prompt summary** is unchecked, and
 always pins working time at the top at every width. **Show elapsed time** is
 temporarily disabled; its prior choice returns when output mode is off.
 Untimed recordings show **Unavailable** rather than a fabricated duration.
+Complete Copilot SDK recordings use their recorded `assistant.turn_end` timestamp,
+including older saved selections that retained SDK events but omitted native
+completion metadata. Partial recordings or invalid endpoints remain unavailable;
+last activity is not substituted for completion.
 The timer itself never animates or moves with the bubbles.
 
 The first input appears before playback. Only after the entire recorded reply
@@ -617,9 +642,12 @@ automatically rewritten or regenerated. New AI generation, unlike saved/manual
 summary editing, includes bounded length correction covered by its consent notice.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
-reset the conversation deterministically. A missing/deleted output summary
-shows explicit guidance to generate or edit it before playback, never an
-invented success or a paraphrase of the user request.
+reset the conversation deterministically. Missing/deleted output summaries in any
+included exchange block opening playback with output mode on. Enabling that mode
+in an already-open selection turns it back off with an explicit list of exchanges
+to generate or edit. Original-conversation playback remains available with output
+mode off. Playback never sends AI requests or fills bubbles with missing-summary
+placeholders as if the presentation were ready.
 
 **Auto continue** defaults off. When enabled, a completed exchange waits for a
 nonblocking reading dwell before advancing: one second plus one second per 35
@@ -638,12 +666,15 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layo
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
 ```
 
-The summary falls back to a bounded, whitespace-normalized excerpt of the exact
+The summary falls back to the full, whitespace-normalized text of the exact
 original prompt. In the interaction picker, use **Review / edit summaries...**, select an
 exchange's **Input (You)** or **Output (AI)** and write or edit its overlay text
 (one line, up to 1200 characters). Output source previews contain only recorded
 assistant text and tool status, not raw tool payloads. Leave an input blank to
-use its original excerpt; blank output remains explicitly missing. Then **Save summaries** and
+use its full original text; blank output remains explicitly missing. Long originals
+may need a reviewed summary to pass the measured conversation-pair fit check;
+they are never cut at 300 characters or given an artificial ellipsis.
+Then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn, and optional `outputSummaries` (one string or `null` per turn).
 Legacy packages and playlists without output fields still load.
@@ -685,9 +716,13 @@ New AI drafts target **180-220 characters or fewer**, with a **600-character
 safety limit** to accommodate complete sentences and explicit questions/choices,
 not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
-Both providers automatically rewrite completed, well-formed overlong drafts before
+Both providers automatically rewrite completed drafts with overlong text,
+unfinished wording, ellipses or third-person narration before
 review. Each source part/combination permits **at most 4 requests**: one generation
-and up to three length corrections. Requests wait for actual completion or
+and up to three shared length/content corrections. Content corrections rewrite
+the whole thought from the original source, never merely add punctuation to a
+fragment. Translations use the same budget and completeness check.
+Requests wait for actual completion or
 explicit cancellation, with no elapsed-time deadline in either provider or helper.
 Corrections resend the consented source/context and previous draft, prioritizing
 the recorded answer, final unanswered question/choices and qualifications over
@@ -699,8 +734,9 @@ fails the batch explicitly: no invalid or partial batch is offered as successful
 or saved; retry generation explicitly or choose another model.
 Draft transport remains bounded at 4096 characters; larger responses fail
 explicitly, never silently slice or become a saved summary. Valid first results
-use no correction requests. There are no automatic retries for malformed,
-incomplete/refused, authentication, TLS, billing, rate-limit or network failures.
+use no correction requests. Empty, multiline, oversized or malformed responses
+fail explicitly, as do incomplete/refused provider requests, authentication,
+TLS, billing, rate-limit and network failures; these are never retried automatically.
 
 For older/in-flight unsaved overlong AI drafts, **Automatically shorten AI summaries**
 in the open player/native review repairs unchanged generated drafts only, after

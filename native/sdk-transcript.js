@@ -11,6 +11,14 @@ function sdkEventMarkdown(part) {
         literalBlock(JSON.stringify(part.events, null, 2));
 }
 
+function sdkCompletedAt(request) {
+    if (request?.sdkCompletion !== 'complete' || request.sdkSessionStart?.type !== 'session.start' ||
+        request.sdkSessionStart.data?.version !== 1 || !Array.isArray(request.sdkEvents)) return undefined;
+    const end = request.sdkEvents.findLast(event => event.type === 'assistant.turn_end');
+    const completedAt = Date.parse(end?.timestamp);
+    return Number.isFinite(completedAt) && completedAt >= request.timestamp ? completedAt : undefined;
+}
+
 function sdkSnapshot(records) {
     const first = records[0];
     if (first?.type !== 'session.start' || first.data?.version !== 1) throw new Error('Unsupported SDK recording: expected session.start version 1.');
@@ -40,7 +48,11 @@ function sdkSnapshot(records) {
         });
         if (metadata.length) request.response.push({ kind: 'recordedSdkEvent', events: metadata });
         request.sdkCompletion = ended && finalText && !pending && !invalidTools.size && !archivedMessages.size && !request.sourceError ? 'complete' : 'partial';
-        if (request.sdkCompletion === 'complete') request.result = {};
+        if (request.sdkCompletion === 'complete') {
+            request.result = {};
+            const completedAt = sdkCompletedAt(request);
+            if (completedAt !== undefined) request.modelState = { completedAt };
+        }
     }
     for (const event of records.slice(1)) {
         if (typeof event?.type !== 'string' || !event.data || typeof event.data !== 'object') throw new Error('Malformed saved SDK event.');
@@ -90,4 +102,4 @@ function sdkSnapshot(records) {
     return snapshot;
 }
 
-module.exports = { sdkSnapshot, sdkEventMarkdown };
+module.exports = { sdkSnapshot, sdkEventMarkdown, sdkCompletedAt };
