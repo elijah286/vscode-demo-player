@@ -593,6 +593,10 @@ This mode includes the input even if **Show prompt summary** is unchecked, and
 always pins working time at the top at every width. **Show elapsed time** is
 temporarily disabled; its prior choice returns when output mode is off.
 Untimed recordings show **Unavailable** rather than a fabricated duration.
+Complete Copilot SDK recordings use their recorded `assistant.turn_end` timestamp,
+including older saved selections that retained SDK events but omitted native
+completion metadata. Partial recordings or invalid endpoints remain unavailable;
+last activity is not substituted for completion.
 The timer itself never animates or moves with the bubbles.
 
 The first input appears before playback. Only after the entire recorded reply
@@ -617,9 +621,12 @@ automatically rewritten or regenerated. New AI generation, unlike saved/manual
 summary editing, includes bounded length correction covered by its consent notice.
 Brief incoming fades honor the Windows client-area animation preference. Polling and
 pause/resume do not replay transitions. Start Over, Stop and a new selection
-reset the conversation deterministically. A missing/deleted output summary
-shows explicit guidance to generate or edit it before playback, never an
-invented success or a paraphrase of the user request.
+reset the conversation deterministically. Missing/deleted output summaries in any
+included exchange block opening playback with output mode on. Enabling that mode
+in an already-open selection turns it back off with an explicit list of exchanges
+to generate or edit. Original-conversation playback remains available with output
+mode off. Playback never sends AI requests or fills bubbles with missing-summary
+placeholders as if the presentation were ready.
 
 **Auto continue** defaults off. When enabled, a completed exchange waits for a
 nonblocking reading dwell before advancing: one second plus one second per 35
@@ -638,12 +645,15 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\overlay-layo
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
 ```
 
-The summary falls back to a bounded, whitespace-normalized excerpt of the exact
+The summary falls back to the full, whitespace-normalized text of the exact
 original prompt. In the interaction picker, use **Review / edit summaries...**, select an
 exchange's **Input (You)** or **Output (AI)** and write or edit its overlay text
 (one line, up to 1200 characters). Output source previews contain only recorded
 assistant text and tool status, not raw tool payloads. Leave an input blank to
-use its original excerpt; blank output remains explicitly missing. Then **Save summaries** and
+use its full original text; blank output remains explicitly missing. Long originals
+may need a reviewed summary to pass the measured conversation-pair fit check;
+they are never cut at 300 characters or given an artificial ellipsis.
+Then **Save summaries** and
 **Use selected exchanges** (or **Use saved selection**). Local playlists can also supply one reviewed `promptSummaries`
 entry per turn, and optional `outputSummaries` (one string or `null` per turn).
 Legacy packages and playlists without output fields still load.
@@ -685,9 +695,13 @@ New AI drafts target **180-220 characters or fewer**, with a **600-character
 safety limit** to accommodate complete sentences and explicit questions/choices,
 not a fixed display box. Incidental details should be omitted before questions
 or qualifications; the additional room is not a request for longer replies.
-Both providers automatically rewrite completed, well-formed overlong drafts before
+Both providers automatically rewrite completed drafts with overlong text,
+unfinished wording, ellipses or third-person narration before
 review. Each source part/combination permits **at most 4 requests**: one generation
-and up to three length corrections. Requests wait for actual completion or
+and up to three shared length/content corrections. Content corrections rewrite
+the whole thought from the original source, never merely add punctuation to a
+fragment. Translations use the same budget and completeness check.
+Requests wait for actual completion or
 explicit cancellation, with no elapsed-time deadline in either provider or helper.
 Corrections resend the consented source/context and previous draft, prioritizing
 the recorded answer, final unanswered question/choices and qualifications over
@@ -699,8 +713,9 @@ fails the batch explicitly: no invalid or partial batch is offered as successful
 or saved; retry generation explicitly or choose another model.
 Draft transport remains bounded at 4096 characters; larger responses fail
 explicitly, never silently slice or become a saved summary. Valid first results
-use no correction requests. There are no automatic retries for malformed,
-incomplete/refused, authentication, TLS, billing, rate-limit or network failures.
+use no correction requests. Empty, multiline, oversized or malformed responses
+fail explicitly, as do incomplete/refused provider requests, authentication,
+TLS, billing, rate-limit and network failures; these are never retried automatically.
 
 For older/in-flight unsaved overlong AI drafts, **Automatically shorten AI summaries**
 in the open player/native review repairs unchanged generated drafts only, after

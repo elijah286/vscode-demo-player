@@ -85,7 +85,6 @@ function Get-DemoSummaryLayout([string]$InputText, [string]$OutputText, [double]
 function Get-DemoPlaybackInput($Recording, [int]$Index, [switch]$SourceOnly) {
     if (-not $SourceOnly -and $null -ne $Recording.promptSummaries -and $Recording.promptSummaries[$Index]) { return [string]$Recording.promptSummaries[$Index] }
     $text = ([string]$Recording.turns[$Index].snapshot.requests[0].message.text -replace '\s+', ' ').Trim()
-    if ($text.Length -gt 300) { return $text.Substring(0, 297) + '...' }
     return $text
 }
 
@@ -103,10 +102,13 @@ function Get-DemoSummaryWorkArea([Windows.Window]$Window) {
     return [Windows.SystemParameters]::WorkArea
 }
 
-function Assert-DemoSummaryPairs($Recording, [double]$Width, [double]$MaxWidth, [double]$MaxHeight) {
+function Assert-DemoSummaryPairs($Recording, [double]$Width, [double]$MaxWidth, [double]$MaxHeight, [switch]$RequireOutput) {
     for ($index = 0; $index -lt $Recording.turns.Count; $index++) {
         if ($null -ne $Recording.playbackIncluded -and -not $Recording.playbackIncluded[$index]) { continue }
         $outputText = if ($null -ne $Recording.outputSummaries) { [string]$Recording.outputSummaries[$index] } else { '' }
+        if ($RequireOutput -and [string]::IsNullOrWhiteSpace($outputText)) {
+            throw "Exchange $($index + 1): output summary missing. Generate AI output summaries or edit summaries in Select exchanges before enabling Show summary of output. Alternatively, turn that option off to play the original conversation. No AI requests were sent."
+        }
         $fit = Get-DemoSummaryLayout (Get-DemoPlaybackInput $Recording $index) $outputText $Width $MaxWidth $MaxHeight
         if (-not $fit.Fits) { throw "Exchange $($index + 1): shorten the prompt/reply summaries in Review / edit summaries. They cannot fit together on this screen without scrolling. No text was truncated." }
     }

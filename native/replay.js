@@ -171,8 +171,7 @@ function extractRecording(file, snapshot, requestIndex) {
     return {
         file,
         requestIndex,
-        promptSummary: promptExcerpt.length > 300 ?
-            promptExcerpt.slice(0, 297) + '...' : promptExcerpt,
+        promptSummary: promptExcerpt,
         sessionId: snapshot.sessionId,
         title: snapshot.customTitle,
         responderName: request.agent?.fullName || snapshot.responderUsername,

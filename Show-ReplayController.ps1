@@ -343,7 +343,7 @@ $selectExchanges.Add_Click({
                 $entry = Invoke-DemoLibrary @{ command = 'read'; id = $script:selectedDemo.id } $window
                 if ($showOutput.IsChecked) {
                     $fitArea = Get-DemoSummaryWorkArea $script:overlayWindow
-                    Assert-DemoSummaryPairs $entry.recording $script:overlayWindow.Width ($fitArea.Width - 32) ($fitArea.Height - 32)
+                    Assert-DemoSummaryPairs $entry.recording $script:overlayWindow.Width ($fitArea.Width - 32) ($fitArea.Height - 32) -RequireOutput
                 }
                 $script:selectedDemo = Invoke-DemoLibrary @{ command = 'metadata'; id = $script:selectedDemo.id } $window
                 $script:switchView = $script:lastView.PSObject.Copy()
@@ -429,7 +429,7 @@ function Start-DemoReplay {
             Invoke-DemoLibrary @{ command = 'metadata'; id = $Id } | Out-Null
             if ($CheckFit) {
                 $entry = Invoke-DemoLibrary @{ command = 'read'; id = $Id }
-                Assert-DemoSummaryPairs $entry.recording $FitWidth $FitMaxWidth $FitMaxHeight
+                Assert-DemoSummaryPairs $entry.recording $FitWidth $FitMaxWidth $FitMaxHeight -RequireOutput
             }
             $launchArguments = @{ DemoPath = (Join-Path $Library ($Id + '.demo.json')); NoController = $true; CodePath = $Code; WindowMode = $Mode }
             & (Join-Path $Root 'Start-Replay.ps1') @launchArguments

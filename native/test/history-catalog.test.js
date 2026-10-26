@@ -13,6 +13,7 @@ const { readRecordings } = require('../replay');
 const { nativeResponsePart } = require('../native-response');
 const { RecordingAgentHost } = require('../recording-agent-host');
 const { archivedEdit } = require('../saved-parts');
+const { controlView } = require('../control-server');
 
 const id = '12345678-1234-1234-1234-123456789abc';
 function sdkEvents() {
@@ -31,6 +32,37 @@ function sdkEvents() {
         record('assistant.turn_end', {}, 12)
     ];
 }
+
+test('SDK completion timestamps drive working time for fresh and previously saved recordings without counting idle gaps', () => {
+    const snapshot = sdkSnapshot(sdkEvents());
+    const recordings = snapshot.requests.map(request => ({ request }));
+    assert.equal(recordings[0].request.modelState.completedAt, Date.UTC(2026, 9, 16, 12, 0, 7));
+    assert.equal(recordings[1].request.modelState.completedAt, Date.UTC(2026, 9, 16, 12, 0, 12));
+    const state = { phase: 'complete', turnIndex: 2, recordings };
+    assert.equal(controlView(state).overlay.elapsedMs, 8000);
+    for (const { request } of recordings) delete request.modelState;
+    const saved = structuredClone(snapshot);
+    assert.equal(controlView(state).overlay.elapsed, '00:00:08', 'Old saved SDK requests use their explicit turn-end events');
+    assert.deepEqual(snapshot, saved, 'Playback must not mutate saved requests to repair timing');
+    state.phase = 'response';
+    state.turnIndex = 0;
+    state.responseOrigin = 0;
+    state.clock = { now: () => 2500 };
+    assert.equal(controlView(state).overlay.elapsedMs, 3000);
+    for (const change of ['missing', 'invalid', 'backwards', 'partial']) {
+        const broken = sdkEvents();
+        if (change === 'missing') broken.splice(7, 1);
+        if (change === 'invalid') broken[7].timestamp = 'invalid';
+        if (change === 'backwards') broken[7].timestamp = broken[0].timestamp;
+        const requests = sdkSnapshot(broken).requests;
+        if (change === 'partial') {
+            delete requests[0].modelState;
+            requests[0].sdkCompletion = 'partial';
+        }
+        assert.equal(requests[0].modelState, undefined);
+        assert.equal(controlView({ phase: 'complete', turnIndex: 2, recordings: requests.map(request => ({ request })) }).overlay.elapsedMs, null);
+    }
+});
 
 async function setup(context) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'history-catalog-test-'));
