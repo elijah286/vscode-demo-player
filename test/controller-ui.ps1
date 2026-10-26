@@ -1086,6 +1086,11 @@ try {
     Save-WindowImage $overlay 'overlay-resized-wrapped.png'
     $showOutput = Find-Element $window 'Id' 'ShowOutput'
     if (([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Output summary must default off.' }
+    $completeOutputEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    $secondOutputSummary = 'I showed the next recorded answer.'
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id
+        summaries = @($outputSummary, $secondOutputSummary); expected = @($completeOutputEntry.recording.outputSummaries) } | Out-Null
+    Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes complete output summaries' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     Wait-Until { (Find-Element $overlay 'Id' 'FirstText').Current.Name -ceq $overlaySummary } 'conversation starts with Input1' | Out-Null
     if ((Find-Element $overlay 'Id' 'FirstLabel').Current.Name -ne 'You' -or $showElapsed.Current.IsEnabled) { throw 'Output mode must label the input and own fixed timer visibility.' }
@@ -1179,16 +1184,16 @@ try {
     Save-WindowImage $overlay 'conversation-output1-input2.png'
     Wait-Until { (Find-Element $window 'Id' 'Status').Current.Name -like 'Finished*' } 'second answer complete' | Out-Null
     Wait-Until { (Find-Element $overlay 'Id' 'Message2Text').Current.Name -ceq 'Show the next recorded interaction.' -and
-        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -like '*summary missing*' } 'Missing Output2 appends to four-message history' | Out-Null
+        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -ceq $secondOutputSummary } 'Output2 appends to four-message history' | Out-Null
     if ((Find-Element $overlay 'Id' 'ElapsedText').Current.Name -ne '00:03:03' -or
         [Math]::Abs((Find-Element $overlay 'Id' 'ElapsedText').Current.BoundingRectangle.Top - $timerTop) -gt 1) { throw 'Final output changed fixed cumulative timer semantics.' }
-    Save-WindowImage $overlay 'conversation-input2-missing-output2.png'
+    Save-WindowImage $overlay 'conversation-input2-output2.png'
     if ((Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'Next Step must be unavailable after the final exchange.' }
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Replay' -or
         (Find-Element $window 'Id' 'Stop').Current.Name -ne 'Exit') { throw 'Finished playback must offer Replay and Exit.' }
     Start-Sleep -Milliseconds 800
     if (-not (Get-Process -Id $replayId -ErrorAction SilentlyContinue) -or
-        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -notlike '*summary missing*') { throw 'Finished playback must retain its window and last reply.' }
+        (Find-Element $overlay 'Id' 'Message3Text').Current.Name -cne $secondOutputSummary) { throw 'Finished playback must retain its window and last reply.' }
     Save-WindowImage $window 'controller-finished.png'
     Invoke-Button $window 'PlayPause'
     Wait-Until { (Find-Element $window 'Id' 'PlayPause').Current.Name -eq 'Pause' } 'Start Over restarts the selected demo' | Out-Null

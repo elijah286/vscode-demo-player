@@ -356,7 +356,7 @@ try {
     Arrange-Overlay 820 180
     Assert-Layout ($showElapsed.IsEnabled -and $promptPanel.Visibility -eq 'Visible' -and $conversationPanel.Visibility -eq 'Collapsed') 'Output off must restore legacy mode and toggles.'
     Assert-Layout ([System.Windows.Controls.Grid]::GetColumn($timerPanel) -eq 1) 'Legacy wide timer position must return.'
-    function Show-DemoError($Owner, $ErrorRecord) { $script:missingSummaryError = [string]$ErrorRecord }
+    function Show-DemoError($Owner, $ErrorRecord) { $script:missingSummaryError = $ErrorRecord.Exception.Message }
     $script:lastView.overlay.conversation | Add-Member NoteProperty missingOutputSummaries @(2, 4)
     $showOutput.IsChecked = $true
     Update-ReplayOverlays -MeasureOnly

@@ -219,7 +219,10 @@ function Update-ReplayOverlays([switch]$MeasureOnly) {
     if ($showOutput.IsChecked -and $null -ne $overlay.conversation.missingOutputSummaries -and @($overlay.conversation.missingOutputSummaries).Count -gt 0) {
         $missing = @($overlay.conversation.missingOutputSummaries) -join ', '
         $showOutput.IsChecked = $false
-        Show-DemoError $window "Output summaries are missing for exchanges $missing. Show summary of output has been turned off. Stop playback, then Generate AI output summaries or edit summaries in Select exchanges before enabling it again. The original conversation can still play. No AI requests were sent."
+        $failure = [Management.Automation.ErrorRecord]::new(
+            [InvalidOperationException]::new("Output summaries are missing for exchanges $missing. Show summary of output has been turned off. Stop playback, then Generate AI output summaries or edit summaries in Select exchanges before enabling it again. The original conversation can still play. No AI requests were sent."),
+            'MissingOutputSummaries', [Management.Automation.ErrorCategory]::InvalidData, $missing)
+        Show-DemoError $window $failure
     }
     $script:outputMode = [bool]$showOutput.IsChecked
     $conversationActive = $script:outputMode -and -not $script:stopping -and $overlay.conversation.active
