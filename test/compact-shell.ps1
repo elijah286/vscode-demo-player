@@ -20,6 +20,10 @@ try {
         'OperationPanel', 'LibraryActivity', 'CancelLibraryOperation')
     foreach ($name in $names) { Assert ($null -ne $window.FindName($name)) ("Missing compatibility surface: " + $name) }
     Assert ([Windows.Automation.AutomationProperties]::GetAutomationId($window.FindName('SummaryLanguage')) -ceq 'SummaryDisplayLanguage') 'Saved-language accessibility identity must remain compatible.'
+    $summaryButton = $window.FindName('GeneratePromptSummaries')
+    Assert ([Windows.Automation.AutomationProperties]::GetName($summaryButton) -ceq 'Generate AI prompt summaries (0/0)') 'Summary count must be available to accessibility clients.'
+    $summaryButton.Content = 'Generate AI prompt summaries (1/2)'
+    Assert ([Windows.Automation.AutomationProperties]::GetName($summaryButton) -ceq 'Generate AI prompt summaries (1/2)') 'Accessible summary count must track content changes.'
     Assert (-not $window.FindName('PlayPause').IsEnabled) 'Play must be disabled without a selection.'
     Assert (-not $window.FindName('PresentationOptions').IsExpanded) 'Presentation settings must start collapsed.'
     Assert (-not $window.FindName('PreparationOptions').IsExpanded) 'Preparation tools must start collapsed.'

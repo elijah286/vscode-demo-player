@@ -274,7 +274,11 @@ namespace VibeReplay {
 
         private Button Button(string name, string content, string label) {
             var button = Register(name, new Button { Content = content, ToolTip = label, Margin = new Thickness(0, 2, 0, 2), MinHeight = 27, Padding = new Thickness(8, 5, 8, 5) });
-            AutomationProperties.SetName(button, label);
+            if (content.Length > 1) {
+                button.SetBinding(AutomationProperties.NameProperty, new System.Windows.Data.Binding("Content") { Source = button });
+            } else {
+                AutomationProperties.SetName(button, label);
+            }
             return button;
         }
 

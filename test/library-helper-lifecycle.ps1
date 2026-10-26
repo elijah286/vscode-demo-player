@@ -13,6 +13,9 @@ Copy-Item -LiteralPath (Join-Path $root 'SummaryPresentation.ps1') -Destination 
 Copy-Item -LiteralPath (Join-Path $root 'PlayerShell.ps1') -Destination $scratch
 $shellFile = if (Test-Path -LiteralPath (Join-Path $root 'VibeReplay.Shell.dll')) { 'VibeReplay.Shell.dll' } else { 'PlayerShell.cs' }
 Copy-Item -LiteralPath (Join-Path $root $shellFile) -Destination $scratch
+if ($shellFile -eq 'VibeReplay.Shell.dll') {
+    [void][Reflection.Assembly]::Load([IO.File]::ReadAllBytes((Join-Path $root $shellFile)))
+}
 $helperPath = Join-Path $scratch 'native\library-cli.js'
 $pidPath = Join-Path $scratch 'native\helper.pid'
 $failures = [Collections.Generic.List[string]]::new()
