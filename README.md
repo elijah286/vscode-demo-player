@@ -1,6 +1,6 @@
 # VS Code Demo Player
 
-**[Download the Windows installer - v0.2.29](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.29/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.30](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.30/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
@@ -322,6 +322,9 @@ the former 30-second cutoff) and history polling with a synthetic scan age past
 the former 60-second cutoff. Update checks verify that elapsed time cannot stop
 a live helper and that explicit cancellation reaps it and cleans partial downloads
 without blocking independent UI work:
+
+Pass `-ApplicationRoot <production-payload>` to the lifecycle harness to check
+the packaged helper/update code with the same synthetic fixtures and limits.
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\capture-helper.ps1 -NodePath 'C:\Tools\node\node.exe'

@@ -1,10 +1,11 @@
 param(
-    [Parameter(Mandatory = $true)][string]$NodePath
+    [Parameter(Mandatory = $true)][string]$NodePath,
+    [string]$ApplicationRoot
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework
-$root = Split-Path $PSScriptRoot -Parent
+$root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Split-Path $PSScriptRoot -Parent }
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('library-lifecycle-test-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'native')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'DemoDialogs.ps1') -Destination $scratch
