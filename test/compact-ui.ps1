@@ -68,9 +68,13 @@ if ($ExercisePlayback) {
     Wait-For { $next = Find-Control 'NextStep'; $next -and $next.Current.IsEnabled } 'first exchange review' | Out-Null
     Assert ((Find-Control 'Status').Current.Name -match '1/2') 'First exchange must remain visible for review.'
     Invoke-Control 'NextStep'
-    Wait-For { (Find-Control 'PrimaryLabel').Current.Name -eq 'Start Over' } 'second exchange completion' | Out-Null
+    Wait-For { (Find-Control 'PrimaryLabel').Current.Name -eq 'Replay' -and
+        (Find-Control 'Status').Current.Name -match '2/2' -and
+        -not (Find-Control 'NextStep').Current.IsEnabled } 'second exchange completion' | Out-Null
     Assert (-not (Find-Control 'NextStep').Current.IsEnabled) 'Next must be disabled after the final exchange.'
     Save-Controller 'native-complete.png'
+    Invoke-Control 'PlayPause'
+    Wait-For { (Find-Control 'PrimaryLabel').Current.Name -eq 'Pause' } 'explicit replay before testing Stop instead of final Exit' | Out-Null
     Invoke-Control 'Stop'
     Wait-For { (Find-Control 'PrimaryLabel').Current.Name -eq 'Open' } 'scoped target closure' | Out-Null
     Assert ((Get-Controller).Current.IsEnabled) 'Controller must remain available after its paired target closes.'
