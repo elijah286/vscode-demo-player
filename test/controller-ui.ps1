@@ -6,6 +6,7 @@ param(
     [switch]$PlaybackOnly,
     [switch]$SummaryOnly,
     [switch]$RecoveryOnly,
+    [switch]$DecoderOnly,
     [switch]$TranslationOnly,
     [switch]$PickerOnly,
     [switch]$LargeSummarySources
@@ -144,23 +145,25 @@ global.fetch = async (url, options) => {
         const marker = 'Source summary (JSON): ';
         const source = JSON.parse(body.input.slice(body.input.lastIndexOf(marker) + marker.length));
         if (!language || !/^Synthetic OpenAI (input|output) summary\.$/.test(source)) throw new Error('Translation leaked original exchanges or unexpected context');
-        const pattern = body.text?.format?.schema?.properties?.summary?.pattern;
-        if (typeof pattern !== 'string' || !new RegExp(pattern, 'u').test(languages[language])) throw new Error('Translation lost its strict length constraint');
-        fs.appendFileSync(path.join(__dirname, 'translation-requests.jsonl'), JSON.stringify({ language, source, pattern }) + '\n');
+        const schema = body.text?.format?.schema?.properties?.summary;
+        if (body.text.format.strict !== true || JSON.stringify(schema) !== '{"type":"string"}') throw new Error('Translation restored a decoder character cap or lost strict structure');
+        fs.appendFileSync(path.join(__dirname, 'translation-requests.jsonl'), JSON.stringify({ language, source, schema }) + '\n');
         return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary: languages[language] }) }] }] });
     }
     const kind = body.input.startsWith('Summarize what the recorded assistant') ? 'output' : 'input';
     const correcting = body.input.includes('AUTOMATIC LENGTH CORRECTION:');
-    const pattern = body.text?.format?.schema?.properties?.summary?.pattern;
-    if (typeof pattern !== 'string' || new RegExp(pattern, 'u').test('x'.repeat(601))) throw new Error('Missing hard summary length constraint');
-    fs.appendFileSync(path.join(__dirname, 'openai-requests.jsonl'), JSON.stringify({ kind, model: body.model, correcting, pattern }) + '\n');
+    const schema = body.text?.format?.schema?.properties?.summary;
+    if (body.text.format.strict !== true || JSON.stringify(schema) !== '{"type":"string"}') throw new Error('Generation restored a decoder character cap or lost strict structure');
+    fs.appendFileSync(path.join(__dirname, 'openai-requests.jsonl'), JSON.stringify({ kind, model: body.model, correcting, schema }) + '\n');
     const reject = path.join(__dirname, 'reject-next-key');
     if (fs.existsSync(reject)) { fs.unlinkSync(reject); return Response.json({ error: { message: 'Synthetic rejected key' } }, { status: 401 }); }
     if (fs.existsSync(path.join(__dirname, 'delay-summary'))) return new Promise(() => {});
     if (correcting && fs.existsSync(path.join(__dirname, 'delay-rewrite'))) await new Promise(resolve => setTimeout(resolve, 2500));
     const overflow = path.join(__dirname, 'overlong-summary');
     const length = kind === 'output' && !correcting && fs.existsSync(overflow) ? Number(fs.readFileSync(overflow, 'utf8')) : 0;
-    const summary = kind === 'output' && fs.existsSync(path.join(__dirname, 'recover-output')) ? 'I set a !' :
+    const complete = 'I want automated tests for the synthetic dashboard, including plugin loading, failed connections and runtime errors. '.repeat(3) + 'I need to build and maintain automated tests.';
+    const summary = fs.existsSync(path.join(__dirname, 'decoder-complete')) ? complete :
+        kind === 'output' && fs.existsSync(path.join(__dirname, 'recover-output')) ? 'I set a !' :
         length ? 'I checked ' + 'x'.repeat(length - 11) + '.' : correcting ? 'I checked the result. Should I use blue or green?' : 'Synthetic OpenAI ' + kind + ' summary.';
     return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 };
@@ -439,7 +442,7 @@ try {
         Write-Output 'PICKER UI ACCEPTANCE PASSED: six exchanges/two unavailable; default four read-only event exchanges, explicit mixed subset and enabled capture/summary actions after privacy review, exact stable indices0,1,3,4 persisted, all-unavailable entries visible with disabled actions and explicit feedback; no source changes or AI requests.'
         return
     }
-    if ($SummaryOnly -or $TranslationOnly -or $RecoveryOnly) {
+    if ($SummaryOnly -or $TranslationOnly -or $RecoveryOnly -or $DecoderOnly) {
         $entryPath = Join-Path $library ($saved.id + '.demo.json')
         $before = [IO.File]::ReadAllText($entryPath)
         Invoke-Button $window 'ChooseDemo'
@@ -511,6 +514,7 @@ try {
             Write-Output 'RECOVERY UI ACCEPTANCE PASSED: picker/action/consent, exact4 requests per rejected output, prior valid input drafts and exact failed text retained, explicit warning, pending/invalid Save blocked, invalid edit rejected, complete parenthesized correction accepted, explicit deletion, Cancel byte-preserving, atomic Save, exact20 synthetic requests and no paid requests while editing; originals unchanged.'
             return
         }
+        if ($DecoderOnly) { [IO.File]::WriteAllText((Join-Path $evidence 'decoder-complete'), 'synthetic complete output beyond old decoder cap', $utf8) }
         foreach ($scope in @('Both','Input','Output')) {
             Invoke-AISummaryAction $dialog $scope
             if ($scope -eq 'Both') {
@@ -519,11 +523,13 @@ try {
                 Invoke-Button $settingsDialog 'SaveOpenAISettings'
             }
             $consent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'constrained generation source/charge consent'
-            if ((Find-Element $consent 'Id' 'OpenAIConsentNotice').Current.Name -notmatch 'schema constrains generation to 300 Unicode') { throw 'Consent omitted the enforced schema bound.' }
+            if ((Find-Element $consent 'Id' 'OpenAIConsentNotice').Current.Name -notmatch 'Length and completeness are checked locally') { throw 'Consent omitted the actual local validation contract.' }
             Invoke-Button $consent 'ConfirmOpenAIGeneration'
             $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'constrained summary review'
             $draft = (Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-            if ($draft.Length -gt 600 -or $draft -notmatch '^Synthetic OpenAI (input|output) summary\.$') { throw 'Constrained generation did not produce a complete bounded review draft.' }
+            if ($DecoderOnly) {
+                if ($draft.Length -le 300 -or $draft.Length -gt 600 -or -not $draft.EndsWith('I need to build and maintain automated tests.')) { throw 'Decoder completion lost the whole final thought or changed the local length bound.' }
+            } elseif ($draft.Length -gt 600 -or $draft -notmatch '^Synthetic OpenAI (input|output) summary\.$') { throw 'Generation did not produce a complete bounded review draft.' }
             if ($scope -eq 'Both') {
                 Invoke-Button $review 'Cancel'
             } else { Invoke-Button $review 'SaveSummaries' }
@@ -538,7 +544,14 @@ try {
         $requests = @(Get-Content (Join-Path $evidence 'openai-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
         if ($requests.Count -ne 8 -or @($requests | Where-Object correcting).Count) { throw 'Constrained valid drafts made extra rewrite requests.' }
         if ([IO.File]::ReadAllText($target) -cne $targetContent -or [IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Summary generation changed original sources.' }
-        Write-Output 'SUMMARY UI ACCEPTANCE PASSED: one action, combined/input/output scopes, scope cancel without requests/writes, consent explains schema bound, strict pattern on all8 synthetic requests, complete bounded drafts, explicit combined cancel/input-save/output-save, originals unchanged. No live key/request. Live constrained decoder fidelity NOT certified by this synthetic check.'
+        if ($DecoderOnly) {
+            foreach ($text in @($entry.recording.promptSummaries) + @($entry.recording.outputSummaries)) {
+                if ($text.Length -le 300 -or $text.Length -gt 600 -or -not $text.EndsWith('I need to build and maintain automated tests.')) { throw 'Saved decoder-completion summary lost final meaning or exceeded the app limit.' }
+            }
+            Write-Output 'DECODER COMPLETION UI PASSED: actual picker/generation/consent, no decoder character cap on eight requests/all scopes, every complete draft >300 and <=600 UTF-16 units with final assignment retained, explicit Cancel unchanged, explicit input/output Save, saved final thoughts verified, original sources unchanged. Synthetic only.'
+            return
+        }
+        Write-Output 'SUMMARY UI ACCEPTANCE PASSED: one action, combined/input/output scopes, scope cancel without requests/writes, consent explains local validation, strict JSON structure without decoder character caps on all8 synthetic requests, complete bounded drafts, explicit combined cancel/input-save/output-save, originals unchanged. No live key/request. Live model fidelity NOT certified by this synthetic check.'
         if ($TranslationOnly) {
             Invoke-Button $dialog 'SelectDemo'
             Wait-Until { -not (Get-AppWindow 'Find interaction') -and (Find-Element $window 'Id' 'TranslateSummaries').Current.IsEnabled } 'selected English summaries ready for translation' | Out-Null

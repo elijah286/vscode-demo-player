@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const library = require('../demo-library');
-const { ENDPOINT, DEFAULT_MODEL, SUMMARY_PATTERN, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
+const { ENDPOINT, DEFAULT_MODEL, prepareSummaries, generateOpenAISummary } = require('../openai-summaries');
 const { summaryQuestionContext, QUESTION_CONTEXT_LENGTH, previousExchangeContext, summaryPrompt } = require('../prompt-summary-authoring');
 
 test('both providers reject the reported fragment near the old cap and preserve complete longer questions without clipping', async () => {
@@ -164,7 +164,7 @@ test('summary translation supports Simplified Chinese and European languages wit
                 assert.ok(body.input.includes(TRANSLATION_LANGUAGES[language]));
                 assert.match(body.input, /untrusted text/);
                 assert.doesNotMatch(body.input, /Previous exchange|Paired user question|Recorded query/);
-                assert.equal(body.text.format.schema.properties.summary.pattern, SUMMARY_PATTERN);
+                assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string' });
                 return Response.json(completed(translated));
             }
         }), translated);
@@ -222,8 +222,8 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
         assert.equal(body.text.format.strict, true);
         assert.deepEqual(body.text.format.schema.required, ['summary']);
         assert.equal(body.text.format.schema.additionalProperties, false);
-        assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string', pattern: SUMMARY_PATTERN },
-            'Constrain length during decoding, not by cutting text or forcing terminal punctuation');
+        assert.deepEqual(body.text.format.schema.properties.summary, { type: 'string' },
+            'Constrain structure, not decoder length: allow the model to finish before validating the complete thought');
         assert.ok(body.input.endsWith(JSON.stringify(request.source)));
         assert.ok(!options.body.includes(key));
         return Response.json(completed('Name three colors.'));
@@ -232,15 +232,7 @@ test('direct OpenAI uses only the fixed HTTPS endpoint, header key, no tools or 
     assert.equal(calls, 1);
 });
 
-test('strict summary schema bounds Unicode output before review for generation and legacy repair', async () => {
-    const constraint = new RegExp(SUMMARY_PATTERN, 'u');
-    for (const value of ['I checked the result. What should I use it for?', 'x'.repeat(300), '\u{1f642}'.repeat(300)]) {
-        assert.ok(constraint.test(value));
-        assert.ok(value.length <= 600, 'Every allowed scalar uses at most two UTF-16 units');
-    }
-    for (const value of ['', 'x'.repeat(301), '\u{1f642}'.repeat(301), 'First.\nSecond.', 'First.\rSecond.']) {
-        assert.equal(constraint.test(value), false);
-    }
+test('strict structure lets complete thoughts exceed the former decoder cap while local UTF-16/content guards remain authoritative', async () => {
     for (const kind of ['input', 'output']) {
         for (const rewrite of ['', 'I checked '.repeat(73) + 'Ready.']) {
             let calls = 0;
@@ -248,28 +240,36 @@ test('strict summary schema bounds Unicode output before review for generation a
                 fetchImpl: async (_url, options) => {
                     calls++;
                     const schema = JSON.parse(options.body).text.format.schema.properties.summary;
-                    const decoder = new RegExp(schema.pattern, 'u');
-                    const overlong = 'I checked '.repeat(73) + 'Ready.';
-                    assert.equal(decoder.test(overlong), false, 'The reported overlong draft is not a permitted API output');
-                    const allowed = 'I checked the result. Should I use blue or green?';
-                    assert.ok(decoder.test(allowed));
-                    assert.ok(!decoder.test('A'.repeat(300) + '!'), 'The schema must not add punctuation onto a capped fragment');
+                    assert.deepEqual(schema, { type: 'string' });
+                    const allowed = 'I checked the synthetic dashboard and its plugin loader. '.repeat(6) + 'Should I test blue or green?';
+                    assert.ok(allowed.length > 300 && allowed.length <= 600);
                     return Response.json(completed(allowed));
                 }
             });
-            assert.equal(calls, 1, 'A schema-compliant result needs no length repair requests');
+            assert.equal(calls, 1, 'A complete locally bounded result needs no correction or truncation');
             assert.ok(summary.length <= 600);
             assert.match(summary, /blue or green\?$/);
         }
     }
+    const overlong = 'I checked '.repeat(73) + 'Ready.';
+    for (const initial of [overlong, '\u{1f642}'.repeat(300) + '.', 'I need to build and maintain automated']) {
+        let calls = 0;
+        const result = await generateOpenAISummary(request, { fetchImpl: async (_url, options) => {
+            calls++;
+            assert.deepEqual(JSON.parse(options.body).text.format.schema.properties.summary, { type: 'string' });
+            return Response.json(completed(calls === 1 ? initial : 'I need to build and maintain automated tests.'));
+        } });
+        assert.equal(calls, 2, 'Overlong UTF-16 or unfinished output must be rewritten, not approved or sliced');
+        assert.equal(result, 'I need to build and maintain automated tests.');
+    }
 });
 
-test('unsupported constrained schemas fail explicitly without a weaker-schema retry', async () => {
+test('unsupported strict schemas fail explicitly without a different-schema retry', async () => {
     let calls = 0;
     await assert.rejects(generateOpenAISummary(request, { fetchImpl: async () => {
         calls++;
-        return Response.json({ error: { message: 'Unsupported pattern' } }, { status: 400 });
-    } }), /required constrained summary schema.*length constraint will not be disabled/);
+        return Response.json({ error: { message: 'Unsupported schema' } }, { status: 400 });
+    } }), /required summary schema.*No request was retried with a different schema/);
     assert.equal(calls, 1);
 });
 

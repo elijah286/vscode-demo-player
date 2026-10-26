@@ -868,6 +868,10 @@ Use `-RecoveryOnly` instead to exercise picker-to-generation recovery: four
 rejected attempts per output, retained valid drafts, warned review, invalid edits
 blocked from saving, complete edits/deletion accepted, byte-preserving Cancel
 and explicit atomic Save. This uses synthetic HTTP responses, not a real key.
+Use `-DecoderOnly` to verify complete summaries beyond the former 300-character
+decoder cap through all generation scopes, review, byte-preserving cancellation
+and saving. Every draft must remain within 600 UTF-16 units and retain its final
+assignment; provider requests must use strict structure without a character cap.
 The mocked responses do not certify live-provider translation fidelity.
 It also verifies offline Original/Chinese switching in both overlay modes,
 native playback in both languages and selection persistence after restart.
@@ -882,8 +886,8 @@ field, never in a recording or chat. The dialog links to
 separately from ChatGPT subscriptions; your project needs API billing, quota and
 model access. The default is **gpt-4.1-mini**, a low-cost, low-latency model.
 Changing the model does not test access or send a request.
-The model must support Responses API strict JSON-schema outputs with string
-patterns; the default has been verified with real prompt and reply summaries.
+The model must support Responses API strict JSON-schema outputs;
+the default has been verified with real prompt and reply summaries.
 
 Starting with v0.2.17, only the OpenAI helper enables Node's trusted Windows
 certificate store. This supports HTTPS inspection with a certificate trusted
@@ -905,18 +909,17 @@ are left untouched and are no longer used by application AI actions.
 missing prompts and supported outputs in the current selection. Each short source
 uses one HTTPS request to `https://api.openai.com/v1/responses`, with no tools
 and `store: false`. This does not override OpenAI's service data-retention rules.
-The response uses a strict JSON schema with a required string summary and a
-server-enforced [Structured Outputs string pattern](https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas)
-limiting it to 300 Unicode characters on one line.
-Even 300 supplementary characters fit the existing 600 UTF-16-unit AI limit.
-The same constraint applies to inputs, outputs, source chunks, combination and
-legacy shortening. Length is constrained during generation, not just requested
-in a prompt. The schema does **not** force terminal punctuation, append anything,
-or cut text; local one-line, length, voice and complete-statement validation still
-reject malformed or incomplete content before review. A model that rejects the
-required pattern fails explicitly with model-selection guidance; there is no
-retry with a weaker schema. The optional VS Code language-model authoring path
-does not expose this API constraint and retains its bounded correction safeguards.
+The response uses a strict JSON schema with exactly one required string summary.
+It deliberately has **no decoder-enforced character cap**: live comparison showed
+a capped decoder returning a provider-completed response ending mid-sentence.
+The model must finish the thought before the app checks it. The existing local
+one-line, **600 UTF-16-unit**, voice and complete-statement guards remain in force
+for inputs, outputs, translations, source chunks, combination and legacy repair.
+Overlong or unfinished completed drafts use the same four-request correction
+budget, never slicing text, appending punctuation, increasing limits or silently
+approving fragments. Transport remains bounded at 4096 characters per draft.
+Unsupported strict-schema models fail explicitly, without a different-schema
+retry. The optional VS Code language-model path uses the same local guards.
 The **Generate OpenAI Summaries** consent dialog shows the exact text being
 sent and selected model before any request. Review it for secrets: displayed
 answer text may contain private content even after filtering. Raw tool
