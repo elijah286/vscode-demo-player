@@ -1242,7 +1242,7 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
  Width="760" Height="610" MinWidth="500" MinHeight="480" WindowStartupLocation="CenterOwner" FontFamily="Segoe UI">
  <Grid Margin="16">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="100"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <TextBlock Text="Originals are retained. Include in playback selects exchanges for the next run. AI generation automatically rewrites drafts to fit 600 characters, targeting 180-220, with complete thoughts and questions/choices. Preserve recorded answers; never invent success. Older unsaved overlong AI drafts can be shortened with AI below after consent. Saved/manual summaries are not automatically changed and allow 1200 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12"/>
+  <TextBlock x:Name="Instructions" Text="Originals are retained. Include in playback selects exchanges for the next run. AI generation automatically rewrites drafts to fit 600 characters, targeting 180-220, with complete thoughts and questions/choices. Preserve recorded answers; never invent success. Older unsaved overlong AI drafts can be shortened with AI below after consent. Saved/manual summaries are not automatically changed and allow 1200 characters. Excluded exchanges remain editable." TextWrapping="Wrap" Margin="0,0,0,12" AutomationProperties.AutomationId="SummaryReviewInstructions"/>
   <StackPanel Grid.Row="1" Margin="0,0,0,10">
    <ComboBox x:Name="Exchange" AutomationProperties.AutomationId="SummaryExchange"/>
    <CheckBox x:Name="Include" Content="Include in playback" Margin="0,6,0,0" AutomationProperties.AutomationId="IncludeInPlayback"/>
@@ -1276,17 +1276,24 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
         }
     }
     $generatedOriginals = @{}
+    $recoveredItems = @{}
     if ($Generated) {
         $dialog.Title = 'Review AI Summaries'
         foreach ($draft in $Generated.Drafts) {
             $generatedOriginals[2 * $draft.index + [int]($draft.kind -eq 'output')] = [string]$draft.summary
+            if ($draft.reviewIssue) { $recoveredItems[2 * $draft.index + [int]($draft.kind -eq 'output')] = $true }
             if ($draft.kind -eq 'input') { $drafts[$draft.index] = $draft.summary }
             else { $outputDrafts[$draft.index] = $draft.summary }
         }
     }
     $included = @($entry.recording.turns | ForEach-Object { $true })
     if ($null -ne $entry.recording.playbackIncluded) { $included = @($entry.recording.playbackIncluded.Clone()) }
-    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Included = $included; Index = -1; GeneratedOriginals = $generatedOriginals }
+    $dialog.Tag = @{ Summaries = $drafts; Outputs = $outputDrafts; Included = $included; Index = -1; GeneratedOriginals = $generatedOriginals
+        RecoveredItems = $recoveredItems; ContentIssues = @{}; ContentStamp = ''; ContentPending = ($recoveredItems.Count -gt 0)
+        ContentRunning = $false; ContentClosed = $false }
+    if ($recoveredItems.Count) {
+        $dialog.FindName('Instructions').Text = 'AI exhausted its four-request correction budget for some completed drafts. They were recovered below, not approved or saved. Edit or delete them; Save remains guarded by content, length and measured fit checks. Other generated drafts are retained. No extra AI requests are made by editing. ' + $dialog.FindName('Instructions').Text
+    }
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
     $include = $dialog.FindName('Include')
@@ -1303,8 +1310,26 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             $dialog.Tag.Included[$turn] = [bool]$include.IsChecked
         }
     }
+    $contentSnapshot = {
+        $checks = @($dialog.Tag.RecoveredItems.Keys | Sort-Object | ForEach-Object {
+            $item = [int]$_
+            $turn = [int][Math]::Floor($item / 2)
+            [pscustomobject]@{ item = $item; summary = $(if ($item % 2 -eq 0) { [string]$dialog.Tag.Summaries[$turn] } else { [string]$dialog.Tag.Outputs[$turn] }) }
+        })
+        [pscustomobject]@{ Drafts = $checks; Stamp = (ConvertTo-Json -InputObject $checks -Compress -Depth 3) }
+    }
+    $contentTimer = [Windows.Threading.DispatcherTimer]::new()
+    $contentTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+    $dialog.Add_Closed({ $dialog.Tag.ContentClosed = $true; $contentTimer.Stop() })
     $summaryFitCache = @{}
     $reviewIssues = {
+        if ($dialog.Tag.ContentPending -or $dialog.Tag.ContentRunning) { 'Checking recovered AI drafts before saving.' }
+        else {
+            foreach ($item in $dialog.Tag.ContentIssues.Keys) {
+                if ([int]$item -lt 0) { $dialog.Tag.ContentIssues[$item] }
+                else { 'Exchange ' + ([int][Math]::Floor([int]$item / 2) + 1) + ' recovered draft needs correction: ' + $dialog.Tag.ContentIssues[$item] }
+            }
+        }
         for ($item = 0; $item -lt 2 * $entry.recording.turns.Count; $item++) {
             $turn = [int][Math]::Floor($item / 2)
             $text = if ($item % 2 -eq 0) { $dialog.Tag.Summaries[$turn] } else { $dialog.Tag.Outputs[$turn] }
@@ -1332,6 +1357,15 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     }
     $updateReview = {
         & $storeDraft
+        if ($dialog.Tag.RecoveredItems.Count) {
+            $snapshot = & $contentSnapshot
+            $dialog.Tag.ContentPending = $snapshot.Stamp -cne $dialog.Tag.ContentStamp
+            if ($dialog.Tag.ContentPending -and -not $dialog.Tag.Loading) { $contentTimer.Stop(); $contentTimer.Start() }
+        } else {
+            $dialog.Tag.ContentPending = $false
+            $dialog.Tag.ContentIssues = @{}
+            $contentTimer.Stop()
+        }
         $issues = @(& $reviewIssues)
         $repairable = @($dialog.Tag.GeneratedOriginals.Keys | Where-Object {
             $item = [int]$_
@@ -1348,6 +1382,36 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
             'Above the AI limit of 600; saving explicitly accepts this human-edited summary.'
         } else { 'Nothing is saved until Save summaries. Generated AI drafts fit 600 characters; manual summaries allow 1200.' })
     }
+    $contentTimer.Add_Tick({
+        $contentTimer.Stop()
+        if ($dialog.Tag.ContentRunning -or $dialog.Tag.ContentClosed) { return }
+        & $storeDraft
+        $snapshot = & $contentSnapshot
+        $dialog.Tag.ContentRunning = $true
+        try {
+            $answers = @(Invoke-DemoLibrary @{ command = 'summaryDraftIssues'; drafts = @($snapshot.Drafts)
+                english = (-not $Generated.Language -or $Generated.Language -eq 'en') } $dialog -KeepOwnerEnabled)
+            $issues = @{}
+            $seen = @{}
+            if ($answers.Count -ne $snapshot.Drafts.Count) { throw 'Invalid recovered draft validation response.' }
+            foreach ($answer in $answers) {
+                $item = [int]$answer.item
+                if (-not $dialog.Tag.RecoveredItems.ContainsKey($item) -or $seen.ContainsKey($item) -or $answer.issue -isnot [string]) { throw 'Invalid recovered draft validation response.' }
+                $seen[$item] = $true
+                if ($answer.issue) { $issues[$item] = $answer.issue }
+            }
+            $dialog.Tag.ContentIssues = $issues
+            $dialog.Tag.ContentStamp = $snapshot.Stamp
+        } catch {
+            if (-not $dialog.Tag.ContentClosed) {
+                $dialog.Tag.ContentIssues = @{ -1 = ('Recovered draft validation failed: ' + $_.Exception.Message + ' Edit the text to retry or Cancel. Nothing was saved.') }
+                $dialog.Tag.ContentStamp = $snapshot.Stamp
+            }
+        } finally {
+            $dialog.Tag.ContentRunning = $false
+            if (-not $dialog.Tag.ContentClosed) { & $updateReview }
+        }
+    })
     $summary.Add_TextChanged($updateReview)
     $exchange.Add_SelectionChanged({
         & $storeDraft
@@ -1408,6 +1472,8 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
                 if ($draft.kind -eq 'input') { $dialog.Tag.Summaries[$draft.index] = $draft.summary }
                 else { $dialog.Tag.Outputs[$draft.index] = $draft.summary }
                 $dialog.Tag.GeneratedOriginals[$item] = [string]$draft.summary
+                if ($draft.reviewIssue) { $dialog.Tag.RecoveredItems[$item] = $true }
+                else { $dialog.Tag.RecoveredItems.Remove($item) }
             }
             $turn = [int][Math]::Floor($dialog.Tag.Index / 2)
             $summary.Text = if ($dialog.Tag.Index % 2 -eq 0) { [string]$dialog.Tag.Summaries[$turn] } else { [string]$dialog.Tag.Outputs[$turn] }
@@ -1421,12 +1487,16 @@ function Show-DemoSummaryDialog($Owner, [string]$Id, $Generated) {
     $dialog.FindName('Save').Add_Click({
         try {
             & $storeDraft
+            if ($dialog.Tag.RecoveredItems.Count -and (& $contentSnapshot).Stamp -cne $dialog.Tag.ContentStamp) {
+                throw 'Recovered drafts changed and are still being checked. Nothing was saved.'
+            }
             $issues = @(& $reviewIssues)
             if ($issues.Count) { throw ($issues -join "`n") }
             Invoke-DemoLibrary @{ command = 'summaryBatch'; id = $Id
                 language = $Generated.Language
                 summaries = @{ promptSummaries = @($dialog.Tag.Summaries); outputSummaries = @($dialog.Tag.Outputs); playbackIncluded = @($dialog.Tag.Included) }
                 expected = Get-DemoSummaryExpected $entry.recording
+                recoveredItems = @($dialog.Tag.RecoveredItems.Keys | ForEach-Object { [int]$_ })
             } $dialog | Out-Null
             $dialog.DialogResult = $true
         } catch { Show-DemoError $dialog $_ }

@@ -5,6 +5,7 @@ param(
     [switch]$Installed,
     [switch]$PlaybackOnly,
     [switch]$SummaryOnly,
+    [switch]$RecoveryOnly,
     [switch]$TranslationOnly,
     [switch]$PickerOnly,
     [switch]$LargeSummarySources
@@ -94,6 +95,27 @@ if (process.argv[1]?.endsWith('library-cli.js')) {
         return open(...args);
     };
 }
+if (process.argv[1]?.endsWith('library-cli.js') || process.argv[1]?.endsWith('library-worker.js')) {
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (text, ...args) => {
+        if (typeof text === 'string' && text.trim().startsWith('{')) {
+            const response = JSON.parse(text);
+            if (response.ok && Array.isArray(response.result) && typeof response.result[0]?.issue === 'string') {
+                if (fs.existsSync(path.join(__dirname, 'fail-validation'))) {
+                    response.ok = false;
+                    response.error = 'Synthetic local validation failure.';
+                    delete response.result;
+                    text = JSON.stringify(response) + '\n';
+                }
+                if (fs.existsSync(path.join(__dirname, 'delay-validation'))) {
+                    setTimeout(() => write(text, ...args), 2000);
+                    return true;
+                }
+            }
+        }
+        return write(text, ...args);
+    };
+}
 if (!process.argv[1]?.endsWith('openai-summaries.js')) return;
 const write = process.stdout.write.bind(process.stdout);
 process.stdout.write = (text, ...args) => {
@@ -138,7 +160,8 @@ global.fetch = async (url, options) => {
     if (correcting && fs.existsSync(path.join(__dirname, 'delay-rewrite'))) await new Promise(resolve => setTimeout(resolve, 2500));
     const overflow = path.join(__dirname, 'overlong-summary');
     const length = kind === 'output' && !correcting && fs.existsSync(overflow) ? Number(fs.readFileSync(overflow, 'utf8')) : 0;
-    const summary = length ? 'I checked ' + 'x'.repeat(length - 11) + '.' : correcting ? 'I checked the result. Should I use blue or green?' : 'Synthetic OpenAI ' + kind + ' summary.';
+    const summary = kind === 'output' && fs.existsSync(path.join(__dirname, 'recover-output')) ? 'I set a !' :
+        length ? 'I checked ' + 'x'.repeat(length - 11) + '.' : correcting ? 'I checked the result. Should I use blue or green?' : 'Synthetic OpenAI ' + kind + ' summary.';
     return Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 };
 '@)
@@ -416,7 +439,7 @@ try {
         Write-Output 'PICKER UI ACCEPTANCE PASSED: six exchanges/two unavailable; default four read-only event exchanges, explicit mixed subset and enabled capture/summary actions after privacy review, exact stable indices0,1,3,4 persisted, all-unavailable entries visible with disabled actions and explicit feedback; no source changes or AI requests.'
         return
     }
-    if ($SummaryOnly -or $TranslationOnly) {
+    if ($SummaryOnly -or $TranslationOnly -or $RecoveryOnly) {
         $entryPath = Join-Path $library ($saved.id + '.demo.json')
         $before = [IO.File]::ReadAllText($entryPath)
         Invoke-Button $window 'ChooseDemo'
@@ -433,6 +456,61 @@ try {
         Invoke-Button $scopeDialog 'CancelSummaryScope'
         Wait-Until { -not (Get-AppWindow 'Generate AI summaries') } 'scope cancellation returns to selection' | Out-Null
         if ([IO.File]::ReadAllText($entryPath) -cne $before -or (Test-Path (Join-Path $evidence 'openai-requests.jsonl'))) { throw 'Cancelling scope wrote data or sent a request.' }
+        if ($RecoveryOnly) {
+            [IO.File]::WriteAllText((Join-Path $evidence 'recover-output'), 'synthetic completed content rejection', $utf8)
+            foreach ($action in @('Cancel', 'Save')) {
+                Invoke-AISummaryAction $dialog 'Both'
+                if ($action -eq 'Cancel') {
+                    $settingsDialog = Wait-Until { Get-AppWindow 'OpenAI Settings' } 'synthetic key for recovered generation'
+                    ([System.Windows.Automation.ValuePattern](Find-Element $settingsDialog 'Id' 'OpenAIKey').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue('synthetic-openai-key-for-ui-tests')
+                    Invoke-Button $settingsDialog 'SaveOpenAISettings'
+                }
+                $consent = Wait-Until { Get-AppWindow 'Generate OpenAI Summaries' } 'recovery source/charge consent'
+                Invoke-Button $consent 'ConfirmOpenAIGeneration'
+                $review = Wait-Until { Get-AppWindow 'Review AI Summaries' } 'exhausted drafts retained in review'
+                if ((Find-Element $review 'Id' 'SummaryReviewInstructions').Current.Name -notmatch 'recovered below, not approved or saved') { throw 'Recovered drafts lack an explicit warning.' }
+                Wait-Until { (Find-Element $review 'Id' 'SummaryReviewStatus').Current.Name -match 'recovered draft needs correction' } 'authoritative local validation rejects recovered draft' | Out-Null
+                if ((Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled) { throw 'Rejected recovered drafts enabled Save.' }
+                $inputDraft = (Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+                if ($inputDraft -cne 'Synthetic OpenAI input summary.') { throw 'A later rejected output discarded the earlier valid input draft.' }
+                Select-ComboItem (Find-Element $review 'Id' 'SummaryExchange') 'Exchange 1 - Output (AI)'
+                $box = [System.Windows.Automation.ValuePattern](Find-Element $review 'Id' 'SummaryText').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                if ($box.Current.Value -cne 'I set a !') { throw 'The exact completed rejected draft was lost or altered.' }
+                if ($action -eq 'Save') {
+                    $delayValidation = Join-Path $evidence 'delay-validation'
+                    [IO.File]::WriteAllText($delayValidation, 'synthetic local validation delay', $utf8)
+                    $box.SetValue('I updated the!')
+                    Wait-Until { (Find-Element $review 'Id' 'SummaryReviewStatus').Current.Name -match 'Checking recovered AI drafts' } 'Save guarded during asynchronous validation' | Out-Null
+                    if ((Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled) { throw 'Pending validation enabled Save.' }
+                    Wait-Until { (Find-Element $review 'Id' 'SummaryReviewStatus').Current.Name -match 'recovered draft needs correction' } 'invalid edited draft remains rejected' | Out-Null
+                    if ((Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled) { throw 'Invalid edits bypassed recovered draft validation.' }
+                    Remove-Item -LiteralPath $delayValidation
+                    $failValidation = Join-Path $evidence 'fail-validation'
+                    [IO.File]::WriteAllText($failValidation, 'synthetic local validation failure', $utf8)
+                    $box.SetValue('I checked the result.')
+                    Wait-Until { (Find-Element $review 'Id' 'SummaryReviewStatus').Current.Name -match 'validation failed:.*Synthetic local validation failure' } 'local validation failure is explicit and blocks Save' | Out-Null
+                    if ((Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled) { throw 'Local validation failure enabled Save.' }
+                    Remove-Item -LiteralPath $failValidation
+                    $box.SetValue('I checked the result. (It passed.)')
+                    Select-ComboItem (Find-Element $review 'Id' 'SummaryExchange') 'Exchange 2 - Output (AI)'
+                    Invoke-Button $review 'DeletePromptSummary'
+                    Wait-Until { (Find-Element $review 'Id' 'SaveSummaries').Current.IsEnabled } 'corrected and explicitly deleted drafts can save' | Out-Null
+                    Invoke-Button $review 'SaveSummaries'
+                } else { Invoke-Button $review 'Cancel' }
+                Wait-Until { -not (Get-AppWindow 'Review AI Summaries') } 'recovery explicit save/cancel' | Out-Null
+                if ($action -eq 'Cancel' -and [IO.File]::ReadAllText($entryPath) -cne $before) { throw 'Cancel changed library bytes.' }
+            }
+            $entry = Invoke-DemoLibrary @{ command = 'read'; id = $saved.id }
+            if (@($entry.recording.promptSummaries | Where-Object { $_ -ceq 'Synthetic OpenAI input summary.' }).Count -ne 2 -or
+                $entry.recording.outputSummaries[0] -cne 'I checked the result. (It passed.)' -or $null -ne $entry.recording.outputSummaries[1]) {
+                throw 'Atomic recovery save lost valid drafts, explicit edits, or deletion.'
+            }
+            $requests = @(Get-Content (Join-Path $evidence 'openai-requests.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+            if ($requests.Count -ne 20 -or @($requests | Where-Object { $_.kind -eq 'output' }).Count -ne 16) { throw 'Recovery or editing exceeded the exact four-attempt output budget.' }
+            if ([IO.File]::ReadAllText($target) -cne $targetContent -or [IO.File]::ReadAllText($source) -cne $sourceBeforeCapture) { throw 'Recovery changed original sources.' }
+            Write-Output 'RECOVERY UI ACCEPTANCE PASSED: picker/action/consent, exact4 requests per rejected output, prior valid input drafts and exact failed text retained, explicit warning, pending/invalid Save blocked, invalid edit rejected, complete parenthesized correction accepted, explicit deletion, Cancel byte-preserving, atomic Save, exact20 synthetic requests and no paid requests while editing; originals unchanged.'
+            return
+        }
         foreach ($scope in @('Both','Input','Output')) {
             Invoke-AISummaryAction $dialog $scope
             if ($scope -eq 'Both') {

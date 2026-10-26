@@ -26,7 +26,21 @@ async function execute(request) {
         case 'import': return library.addPackage(root, await library.readPackage(request.file));
         case 'rename': return library.renameDemo(root, request.id, request.title);
         case 'summaries': return library.savePromptSummaries(root, request.id, request.summaries, request.expected, request.kind, request.expectedLanguages);
-        case 'summaryBatch': return library.saveSummaryBatch(root, request.id, request.summaries, request.expected, request.language ?? undefined);
+        case 'summaryDraftIssues': return require('./prompt-summary-authoring').summaryDraftIssues(request.drafts, request.english ?? true);
+        case 'summaryBatch': {
+            if (request.recoveredItems !== undefined) {
+                if (!Array.isArray(request.recoveredItems) ||
+                    request.recoveredItems.some(item => !Number.isSafeInteger(item) || item < 0 ||
+                        !Array.isArray(request.summaries?.promptSummaries) || !Array.isArray(request.summaries?.outputSummaries) ||
+                        item >= 2 * request.summaries.promptSummaries.length)) throw new Error('Invalid recovered summary save request.');
+                const drafts = request.recoveredItems.map(item => ({ item, summary:
+                    (item % 2 ? request.summaries.outputSummaries : request.summaries.promptSummaries)[Math.floor(item / 2)] ?? '' }));
+                const issues = require('./prompt-summary-authoring').summaryDraftIssues(drafts, !request.language || request.language === 'en');
+                const failure = issues.find(draft => draft.issue);
+                if (failure) throw new Error('Recovered exchange ' + (Math.floor(failure.item / 2) + 1) + ': ' + failure.issue);
+            }
+            return library.saveSummaryBatch(root, request.id, request.summaries, request.expected, request.language ?? undefined);
+        }
         case 'summaryLanguage': return library.selectSummaryLanguage(root, request.id, request.language, request.expected);
         case 'summarySources': {
             const entry = await library.readEntry(root, request.id);

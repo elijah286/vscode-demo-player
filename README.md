@@ -729,9 +729,16 @@ the recorded answer, final unanswered question/choices and qualifications over
 incidental detail. Each intermediate summary must fit 600 before combination.
 One source-consent notice covers these additional, potentially billed requests;
 progress describes generation/correction, limits and source/combination parts.
-Cancel stops further work but cannot undo sent requests or charges. Exhaustion
-fails the batch explicitly: no invalid or partial batch is offered as successful
-or saved; retry generation explicitly or choose another model.
+Cancel stops further work but cannot undo sent requests or charges. In the
+Windows player, exhausted content/length corrections for a completed full-source
+draft open a clearly warned review instead of discarding that draft and the
+other generated drafts. Nothing is approved or saved automatically. Edit or
+delete the rejected draft; Save stays disabled while local content validation
+is pending or fails, and also requires the existing length and measured-fit
+checks. Editing sends no additional AI requests. The atomic save rechecks
+recovered draft content and the original stale-save snapshot. Native VS Code
+generation and incomplete source-part reductions still fail explicitly on
+exhaustion; a partial-source draft is never presented as a complete summary.
 Draft transport remains bounded at 4096 characters; larger responses fail
 explicitly, never silently slice or become a saved summary. Valid first results
 use no correction requests. Empty, multiline, oversized or malformed responses
@@ -750,8 +757,10 @@ Speak directly in the original speaker's voice: "I want...", "Can you...?" or
 "Yes.", not "User wants to..." or "The assistant...". For a user question,
 the output summary must lead with the actual recorded answer and qualifications;
 if the reply did not answer, it must say so, never invent an answer.
-Generation rejects malformed, visibly unfinished or role-narrated drafts explicitly,
-without slicing text or retrying those failures.
+Generation rejects malformed responses explicitly. Completed visibly unfinished
+or role-narrated drafts use only the bounded correction budget above, without
+slicing text. Balanced closing parentheses and Markdown formatting do not make
+an otherwise complete sentence invalid; returned text is preserved unchanged.
 This includes obvious dangling endings such as "I set a !"; punctuation alone
 does not prove grammatical completeness. Local checks are not a semantic
 guarantee, so review the draft against its recorded source.
@@ -855,6 +864,10 @@ For focused synthetic desktop acceptance, run `test\controller-ui.ps1` with
 `-TranslationOnly`, `-NodePath` and `-EvidenceRoot`. It checks all five language
 choices, review cancellation and explicit saving, unchanged English exchanges,
 and Chinese prompt/reply summaries through isolated native playback.
+Use `-RecoveryOnly` instead to exercise picker-to-generation recovery: four
+rejected attempts per output, retained valid drafts, warned review, invalid edits
+blocked from saving, complete edits/deletion accepted, byte-preserving Cancel
+and explicit atomic Save. This uses synthetic HTTP responses, not a real key.
 The mocked responses do not certify live-provider translation fidelity.
 It also verifies offline Original/Chinese switching in both overlay modes,
 native playback in both languages and selection persistence after restart.
