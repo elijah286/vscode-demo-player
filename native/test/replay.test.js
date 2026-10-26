@@ -288,14 +288,26 @@ test('mode changes are exposed only at complete response boundaries', () => {
     }
 });
 
-test('prompt preview is a bounded excerpt separate from original recording content', async context => {
+test('prompt presentation retains the full normalized original instead of clipping at 300 characters', async context => {
     const request = { result: {}, message: { text: '  Exact\r\noriginal ' + 'word '.repeat(80) }, response: [{ value: 'Original answer' }] };
     const file = await fixture(context, request);
     const recording = await readRecording(file, 0);
-    assert.equal(recording.promptSummary.length, 300);
-    assert.ok(recording.promptSummary.endsWith('...'));
+    assert.equal(recording.promptSummary, request.message.text.replace(/\s+/g, ' ').trim());
+    assert.ok(recording.promptSummary.length > 300);
     assert.match(recording.promptSummary, /^Exact original /);
     assert.deepEqual(recording.request, request);
+});
+
+test('summary playback reports every missing output, including future exchanges and original selection indices', () => {
+    const state = { phase: 'ready', turnIndex: 0, recordings: [
+        { promptSummary: 'Input 1', outputSummary: 'Output 1', originalIndex: 2 },
+        { promptSummary: 'Input 2', originalIndex: 4 },
+        { promptSummary: 'Input 3', outputSummary: '   ', originalIndex: 5 }
+    ] };
+    assert.deepEqual(controlView(state).overlay.conversation.missingOutputSummaries, [5, 6]);
+    state.recordings[1].outputSummary = 'Output 2';
+    state.recordings[2].outputSummary = 'Output 3';
+    assert.deepEqual(controlView(state).overlay.conversation.missingOutputSummaries, []);
 });
 
 test('playlist summaries accept the exact 1200-character budget and reject 1201 without altering full prompts', async context => {

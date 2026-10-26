@@ -2,6 +2,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const { RESPONSE_DURATION, playbackTiming } = require('./replay');
+const { sdkCompletedAt } = require('./sdk-transcript');
 const estimateProfiles = new WeakMap();
 
 function playbackEstimateProfile(recordings) {
@@ -51,7 +52,7 @@ function controlView(state) {
         : Math.min(Math.max(state.turnIndex, 1), total);
     const recording = state.recordings[current - 1];
     const timestamp = value => typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
-    const ranges = state.recordings.map(item => ({ start: timestamp(item.request?.timestamp), end: timestamp(item.request?.modelState?.completedAt) }));
+    const ranges = state.recordings.map(item => ({ start: timestamp(item.request?.timestamp), end: timestamp(item.request?.modelState?.completedAt ?? sdkCompletedAt(item.request)) }));
     const timed = ranges.every((range, index) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end >= range.start && (!index || range.start >= ranges[index - 1].end));
     const completedMs = ranges.slice(0, state.turnIndex).reduce((sum, range) => sum + range.end - range.start, 0);
     const range = ranges[state.turnIndex];
@@ -79,6 +80,7 @@ function controlView(state) {
         overlay: {
             promptSummary: recording.promptSummary ?? null,
             conversation: {
+                missingOutputSummaries: state.recordings.flatMap((item, index) => item.outputSummary?.trim() ? [] : [(item.originalIndex ?? index) + 1]),
                 exchange: current,
                 completed: ['review', 'complete'].includes(state.phase),
                 previousOutputSummary: current > 1 ? state.recordings[current - 2].outputSummary ?? null : null,

@@ -18,7 +18,8 @@ function translationPrompt(source, language, rewrite = '') {
         'Preserve the speaker\'s own voice, meaning, questions, choices, uncertainty, failures, names and technical identifiers. ' +
         'Translate only; add no facts, commentary or explanations. Use one line of complete sentences with final punctuation. ' +
         'Aim for 180-220 characters; never exceed 600 UTF-16 code units. Faithfully rephrase to fit; never truncate or use an ellipsis. ' +
-        (rewrite ? 'The previous translation was too long. Shorten it faithfully using the source. Previous translation (JSON): ' + JSON.stringify(rewrite) + '\n' : '') +
+        (rewrite ? (rewrite.length > 600 ? 'The previous translation was too long. ' : 'The previous translation has incomplete wording. ') +
+            'Rewrite it faithfully using the source as complete sentences, not a fragment with added punctuation. Previous translation (JSON): ' + JSON.stringify(rewrite) + '\n' : '') +
         'Source summary (JSON): ' + JSON.stringify(source);
 }
 
@@ -185,8 +186,6 @@ async function requestOpenAISummary({ apiKey, model, source, kind, partial, comb
     if (structured.summary.length > 4096) throw new SummaryError('The model returned too much text (over 4096 characters). No summary was saved.');
     const summary = structured.summary.trim();
     if (!summary) throw new SummaryError('OpenAI returned an empty summary. No summaries were saved.');
-    try { validateGeneratedSummary(summary, { english: language === undefined || language === 'en' }); }
-    catch (error) { throw new SummaryError(error.message); }
     return summary;
 }
 
