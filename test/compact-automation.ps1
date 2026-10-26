@@ -10,5 +10,13 @@ function Expand-CompactControllerTools($Parent, [string]$Id) {
     if ($expander) {
         $pattern = $expander.GetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern)
         if ($pattern.Current.ExpandCollapseState -eq 'Collapsed') { $pattern.Expand() }
+        $target = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $Id)
+        $until = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $control = $Parent.FindFirst([Windows.Automation.TreeScope]::Descendants, $target)
+            if ($control -and -not $control.Current.IsOffscreen) { return }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $until)
+        throw ('Compact tool did not become visible after expansion: ' + $Id)
     }
 }

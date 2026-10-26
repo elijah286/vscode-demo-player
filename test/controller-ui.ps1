@@ -1162,7 +1162,7 @@ try {
     Start-Sleep -Milliseconds 2500
     if ((Find-Element $window 'Id' 'PlayPause').Current.Name -ne 'Resume' -or
         (Find-Element $window 'Id' 'NextStep').Current.IsEnabled) { throw 'A later paused reselection autoplayed from reconstructed review history.' }
-    $pausedAuto.Toggle()
+    ([System.Windows.Automation.TogglePattern](Find-Element $window 'Id' 'AutoContinue').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
     $replay = Wait-Until {
         Get-CimInstance Win32_Process -Filter "Name='Code.exe'" | Where-Object { $_.CommandLine -like '*--extensionDevelopmentPath*' -and $_.CommandLine.Contains($root) -and $_.CommandLine -like '*historical-replay-player-*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1
     } 'later reselection target'

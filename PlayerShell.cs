@@ -145,7 +145,7 @@ namespace VibeReplay {
             presentation = new Expander { Header = "Presentation", Foreground = Muted, FontSize = 10 };
             Register("PresentationOptions", presentation);
             var presentationBody = new StackPanel { Margin = new Thickness(4, 9, 4, 6) };
-            presentationBody.Children.Add(Check("AutoContinue", "Auto continue", false));
+            presentationBody.Children.Add(Check("AutoContinue", "Auto continue", true));
             presentationBody.Children.Add(Check("ShowPrompt", "Show prompt summary", false));
             presentationBody.Children.Add(Check("ShowElapsed", "Show recorded working time", false));
             presentationBody.Children.Add(Check("ShowOutput", "Show input and output summaries", false));

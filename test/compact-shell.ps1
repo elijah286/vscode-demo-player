@@ -25,6 +25,7 @@ try {
     $summaryButton.Content = 'Generate AI prompt summaries (1/2)'
     Assert ([Windows.Automation.AutomationProperties]::GetName($summaryButton) -ceq 'Generate AI prompt summaries (1/2)') 'Accessible summary count must track content changes.'
     Assert (-not $window.FindName('PlayPause').IsEnabled) 'Play must be disabled without a selection.'
+    Assert ($window.FindName('AutoContinue').IsEnabled) 'Auto continue must remain an editable playback preference.'
     Assert (-not $window.FindName('PresentationOptions').IsExpanded) 'Presentation settings must start collapsed.'
     Assert (-not $window.FindName('PreparationOptions').IsExpanded) 'Preparation tools must start collapsed.'
     $window.SetMini($true)
