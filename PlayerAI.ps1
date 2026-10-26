@@ -125,7 +125,7 @@ function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
  </DockPanel>
 </Window>
 '@ $Owner
-        $translationDialog.FindName('Notice').Text = 'Send only the saved summaries shown below to OpenAI (' + $settings.model + ') for translation? Original prompts, replies, tools and context are NOT sent or changed. Only included exchanges with saved summaries are translated; missing summaries stay missing. API charges apply: up to 4 requests and 90 seconds per summary for length correction; no retries for failed requests. Response storage is disabled; OpenAI retention policies apply. Review for secrets. Save summaries saves and displays this language version, retaining Original and other saved languages (also in exports). Use Summary language in the controller to switch offline. Cancel leaves saved summaries unchanged. Cancellation cannot undo API charges.'
+        $translationDialog.FindName('Notice').Text = 'Send only the saved summaries shown below to OpenAI (' + $settings.model + ') for translation? Original prompts, replies, tools and context are NOT sent or changed. Only included exchanges with saved summaries are translated; missing summaries stay missing. API charges apply: up to 4 requests per summary for length correction; no retries for failed requests. Wait for completion or cancel; there is no elapsed-time cutoff. Response storage is disabled; OpenAI retention policies apply. Review for secrets. Save summaries saves and displays this language version, retaining Original and other saved languages (also in exports). Use Summary language in the controller to switch offline. Cancel leaves saved summaries unchanged. Cancellation cannot undo API charges.'
         $translationDialog.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
             'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" + $_.source
         }) -join "`r`n`r`n---`r`n`r`n")
@@ -140,7 +140,7 @@ function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
                     $translated = Invoke-DemoLibrary @{
                         command = 'generateSummary'; apiKey = $key; model = $settings.model; language = $language
                         source = $candidate.source; kind = $candidate.kind
-                    } $translationDialog -Helper 'openai-summaries.js' -TimeoutSeconds 95
+                    } $translationDialog -Helper 'openai-summaries.js'
                     $translationDialog.Tag.Drafts.Add([pscustomobject]@{ index = $candidate.index; kind = $candidate.kind; summary = $translated })
                 }
                 $translationDialog.DialogResult = $true
@@ -180,14 +180,14 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
         $notes = [Collections.Generic.List[string]]::new()
         for ($index = 0; $index -lt $parts.Count; $index++) {
             $phase = if ($combine) { 'Combining summaries' } else { 'Summarizing source' }
-            $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count + '. Automatically shortens if needed; at most 4 requests, 90 seconds total for this part.'
+            $Progress.FindName('Progress').Text = 'Exchange ' + ($Candidate.index + 1) + ' ' + $Candidate.kind + ': ' + $phase + ', part ' + ($index + 1) + '/' + $parts.Count + '. Automatically shortens if needed; at most 4 requests. Wait for completion or cancel.'
             $summary = Invoke-DemoLibrary @{
                 command = 'generateSummary'; apiKey = $ApiKey; model = $Model
                 source = ($parts[$index] + $(if ($combine) { $closingContext } else { '' })); kind = $Candidate.kind; partial = ($parts.Count -gt 1); combine = $combine
                 question = $(if ($Candidate.kind -eq 'output') { [string]$Candidate.question } else { '' })
                 previous = [string]$Candidate.previous
                 rewrite = $(if ($parts.Count -eq 1) { [string]$Candidate.rewrite } else { '' })
-            } $Progress -Helper 'openai-summaries.js' -TimeoutSeconds 95 -KeepOwnerEnabled
+            } $Progress -Helper 'openai-summaries.js' -KeepOwnerEnabled
             $notes.Add($summary)
         }
         if ($parts.Count -eq 1) { return $summary }
@@ -234,7 +234,7 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
  </DockPanel>
 </Window>
 '@ $Owner
-        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Each summary sends the shown previous exchange and paired user question (each up to 4000 characters; omissions marked). Long sources are split and combined; no source is dropped. Review for secrets. Only shown source/context, drafts and summarization instructions are sent; response storage is disabled (OpenAI retention policies apply). Raw tool arguments/results, reasoning and metadata are excluded. Target: 180-220 characters; AI maximum: 600. The API schema constrains generation to 300 Unicode characters (at most 600 UTF-16 units), without truncation or forced punctuation. Unsupported models fail explicitly, never disable this constraint. Each source part/combination uses at most 4 requests: one generation plus up to 3 automatic length rewrites (or up to 4 correction requests for an older draft), within 90 seconds total per part. Additional requests may be billed; this consent covers them. Incomplete/refused/failed requests are not retried. Saved/manual summaries are kept (manual limit 1200). Nothing is saved until Save summaries. Canceling cannot undo requests or charges.'
+        $consent.FindName('Notice').Text = 'Send the ' + @($prepared.candidates).Count + ' sources shown below to OpenAI using model ' + $settings.model + '? API charges apply per request. Each summary sends the shown previous exchange and paired user question (each up to 4000 characters; omissions marked). Long sources are split and combined; no source is dropped. Review for secrets. Only shown source/context, drafts and summarization instructions are sent; response storage is disabled (OpenAI retention policies apply). Raw tool arguments/results, reasoning and metadata are excluded. Target: 180-220 characters; AI maximum: 600. The API schema constrains generation to 300 Unicode characters (at most 600 UTF-16 units), without truncation or forced punctuation. Unsupported models fail explicitly, never disable this constraint. Each source part/combination uses at most 4 requests: one generation plus up to 3 automatic length rewrites (or up to 4 correction requests for an older draft). Wait for completion or cancel; there is no elapsed-time cutoff. Additional requests may be billed; this consent covers them. Incomplete/refused/failed requests are not retried. Saved/manual summaries are kept (manual limit 1200). Nothing is saved until Save summaries. Canceling cannot undo requests or charges.'
         $consent.FindName('Sources').Text = (@($prepared.candidates | ForEach-Object {
             'Exchange ' + ($_.index + 1) + ' - ' + $_.kind + "`r`n" +
             $(if ($_.previous) { "Previous exchange (context only):`r`n" + $_.previous + "`r`n`r`n" } else { '' }) +

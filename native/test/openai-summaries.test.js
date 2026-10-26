@@ -389,25 +389,58 @@ test('native long-source reductions fit every intermediate and retain original c
     assert.equal(combinations, 2);
 });
 
-test('one total deadline covers generation and all length corrections without restarting the budget', async () => {
+test('generation and length corrections share explicit cancellation without an elapsed-time deadline', async context => {
     let calls = 0;
     const signals = new Set();
-    const keepAlive = setTimeout(() => {}, 1000);
-    try {
-        await assert.rejects(generateOpenAISummary(request, {
-            timeoutMs: 100,
+    const controller = new AbortController();
+    let correctionStarted;
+    const started = new Promise(resolve => { correctionStarted = resolve; });
+    context.mock.method(AbortSignal, 'timeout', () => { throw new Error('Unexpected elapsed-time deadline'); });
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = generateOpenAISummary(request, {
+            signal: controller.signal,
             fetchImpl: async (_url, options) => {
                 signals.add(options.signal);
                 calls++;
                 if (calls === 1) return Response.json(completed('I checked the evidence. '.repeat(40) + 'Ready.'));
                 return new Promise((resolve, reject) => {
                     options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+                    correctionStarted();
                 });
             }
-        }), error => error.code === 'OPENAI_TIMEOUT');
+        });
+        await started;
+        context.mock.timers.tick(180000);
+        assert.equal(controller.signal.aborted, false);
+        controller.abort();
+        await assert.rejects(pending, error => error.code === 'OPENAI_CANCELLED');
         assert.equal(calls, 2);
         assert.equal(signals.size, 1);
-    } finally { clearTimeout(keepAlive); }
+});
+
+test('a slow successful OpenAI body completes without a duration cutoff', async context => {
+    context.mock.method(AbortSignal, 'timeout', () => { throw new Error('Unexpected elapsed-time deadline'); });
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const data = Buffer.from(JSON.stringify(completed('I checked the recorded evidence.')));
+    let resume;
+    let started;
+    const streaming = new Promise(resolve => { started = resolve; });
+    const pending = generateOpenAISummary(request, {
+        fetchImpl: async (_url, options) => {
+            assert.equal(options.signal, undefined);
+            return new Response(new ReadableStream({
+                start(stream) {
+                    stream.enqueue(data.subarray(0, 20));
+                    resume = () => { stream.enqueue(data.subarray(20)); stream.close(); };
+                    started();
+                }
+            }));
+        }
+    });
+    await streaming;
+    context.mock.timers.tick(180000);
+    resume();
+    assert.equal(await pending, 'I checked the recorded evidence.');
 });
 
 test('paired context bounds both ends with an explicit omission notice without splitting Unicode', () => {

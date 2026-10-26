@@ -22,24 +22,29 @@ function Stop-PlayerUpdateOperation {
         } finally { $state.Process.Dispose(); $state.Process = $null }
     }
     if ($state.Directory -and -not $state.Pending) {
-        $cleanup = [Diagnostics.ProcessStartInfo]::new()
-        $cleanup.FileName = Resolve-PlayerNode $script:NodePath
-        $cleanup.Arguments = '-e "require(''node:fs'').rmSync(process.argv[1],{recursive:true,force:true})" "' + $state.Directory + '"'
-        $cleanup.UseShellExecute = $false
-        $cleanup.CreateNoWindow = $true
-        $cleanup.RedirectStandardError = $true
-        $process = [Diagnostics.Process]::Start($cleanup)
-        if (-not $process) { throw 'The canceled-download cleanup helper could not start.' }
+        # Use a separate, hidden owner so cleanup can pump the dispatcher without
+        # conflicting with a library operation already running in the controller.
+        $cleanupOwner = [Windows.Window]::new()
         try {
-            $errors = $process.StandardError.ReadToEndAsync()
-            if (-not $process.WaitForExit(5000)) {
-                $process.Kill()
-                if (-not $process.WaitForExit(2000)) { throw 'The canceled-download cleanup helper did not exit after its time limit.' }
-                throw 'Canceled-download cleanup exceeded five seconds.'
-            }
-            if (-not $errors.Wait(2000)) { throw 'Timed out reading canceled-download cleanup errors.' }
-            if ($process.ExitCode -ne 0) { throw ('Canceled-download cleanup failed: ' + $errors.GetAwaiter().GetResult()) }
-        } finally { $process.Dispose() }
+            Invoke-DemoBackgroundOperation {
+                param($Token, $Node, $Directory)
+                $cleanup = [Diagnostics.ProcessStartInfo]::new()
+                $cleanup.FileName = $Node
+                $cleanup.Arguments = '-e "require(''node:fs'').rmSync(process.argv[1],{recursive:true,force:true})" "' + $Directory + '"'
+                $cleanup.UseShellExecute = $false
+                $cleanup.CreateNoWindow = $true
+                $cleanup.RedirectStandardError = $true
+                $process = [Diagnostics.Process]::Start($cleanup)
+                if (-not $process) { throw 'The canceled-download cleanup helper could not start.' }
+                try {
+                    $errors = $process.StandardError.ReadToEndAsync()
+                    $process.WaitForExit()
+                    $diagnostic = $errors.GetAwaiter().GetResult()
+                    if ($process.ExitCode -ne 0) { throw ('Canceled-download cleanup failed: ' + $diagnostic) }
+                } finally { $process.Dispose() }
+            } @((Resolve-PlayerNode $script:NodePath), $state.Directory) $cleanupOwner 'Removing canceled update download' -Cancellable $false | Out-Null
+            $state.Directory = $null
+        } finally { $cleanupOwner.Close() }
     }
 }
 
@@ -69,7 +74,6 @@ function Start-PlayerUpdateOperation([string]$Command) {
     $state.Process.StandardInput.Write(($request | ConvertTo-Json -Compress))
     $state.Process.StandardInput.Close()
     $state.Command = $Command
-    $state.Deadline = [DateTime]::UtcNow.AddSeconds($(if ($Command -eq 'check') { 30 } else { 180 }))
     $state.Notice = if ($Command -eq 'check') { 'Checking updates...' } else { 'Downloading update...' }
     $state.Detail = if ($Command -eq 'check') { 'Checking the latest public GitHub release. Playback remains available.' } else { 'Downloading and verifying the installer. Close this update window to cancel the download.' }
     Set-PlayerUpdateView
@@ -94,9 +98,8 @@ function Receive-PlayerUpdateOperation {
     $state = $script:playerUpdate
     if (-not $state.Process) { return }
     try {
-        if ([DateTime]::UtcNow -gt $state.Deadline) { throw 'The update operation exceeded its time limit. Try again later.' }
         if (-not $state.Process.HasExited) { return }
-        if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($state.Output, $state.Errors), 2000)) { throw 'Timed out reading the update helper result.' }
+        if (-not $state.Output.IsCompleted -or -not $state.Errors.IsCompleted) { return }
         $response = $state.Output.GetAwaiter().GetResult() | ConvertFrom-Json
         if (-not $response -or -not $response.ok -or $state.Process.ExitCode -ne 0) {
             $reason = if ($response.error) { $response.error } else { $state.Errors.GetAwaiter().GetResult() }

@@ -25,7 +25,7 @@ function server({ metadata = release(), installer = bytes, checksum = sums } = {
     return {
         fetchImpl: async (url, options) => {
             assert.equal(options.redirect, 'manual');
-            assert.ok(options.signal);
+            assert.equal(options.signal, undefined);
             const body = url.hostname === 'api.github.com' ? JSON.stringify(metadata) : url.pathname.endsWith('.txt') ? checksum : installer;
             return new Response(body);
         }
@@ -109,6 +109,66 @@ test('a verified update is downloaded without executing any installer', async co
     assert.equal(result.version, '0.2.0');
     assert.deepEqual(await fs.readFile(result.installerPath), bytes);
     assert.deepEqual(await fs.readdir(directory), ['VSCodeDemoPlayer-Setup.exe']);
+});
+
+test('streamed downloads continue beyond former deadlines and preserve the caller cancellation signal', async context => {
+    const directory = await destination(context);
+    const controller = new AbortController();
+    context.mock.method(AbortSignal, 'timeout', () => { throw new Error('Unexpected elapsed-time deadline'); });
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    let resume;
+    let started;
+    const streaming = new Promise(resolve => { started = resolve; });
+    const options = {
+        signal: controller.signal,
+        fetchImpl: async (url, requestOptions) => {
+            assert.equal(requestOptions.signal, controller.signal);
+            if (url.hostname === 'api.github.com') return Response.json(release());
+            if (url.pathname.endsWith('.txt')) return new Response(sums);
+            return new Response(new ReadableStream({
+                start(stream) {
+                    stream.enqueue(bytes.subarray(0, 10));
+                    resume = () => { stream.enqueue(bytes.subarray(10)); stream.close(); };
+                    started();
+                }
+            }));
+        }
+    };
+    const pending = downloadUpdate('0.1.0', '0.2.0', directory, options);
+    await streaming;
+    context.mock.timers.tick(300000);
+    assert.equal(controller.signal.aborted, false);
+    resume();
+    const result = await pending;
+    assert.deepEqual(await fs.readFile(result.installerPath), bytes);
+});
+
+test('explicit cancellation during download removes partial files without retrying', async context => {
+    const directory = await destination(context);
+    const controller = new AbortController();
+    let started;
+    const streaming = new Promise(resolve => { started = resolve; });
+    let requests = 0;
+    const pending = downloadUpdate('0.1.0', '0.2.0', directory, {
+        signal: controller.signal,
+        fetchImpl: async (url, options) => {
+            requests++;
+            if (url.hostname === 'api.github.com') return Response.json(release());
+            if (url.pathname.endsWith('.txt')) return new Response(sums);
+            return new Response(new ReadableStream({
+                start(stream) {
+                    stream.enqueue(bytes.subarray(0, 10));
+                    options.signal.addEventListener('abort', () => stream.error(options.signal.reason), { once: true });
+                    started();
+                }
+            }));
+        }
+    });
+    await streaming;
+    controller.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    assert.equal(requests, 3);
+    await assert.rejects(fs.stat(directory), { code: 'ENOENT' });
 });
 
 test('release changes, same versions and downgrades are refused before download', async context => {

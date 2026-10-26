@@ -2,6 +2,38 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { reviewSummaries } = require('../prompt-summary-review');
 
+test('slow fit validation remains cancellable through review closure without saving or posting to a closed panel', async context => {
+    let receive;
+    let dispose;
+    let validationSignal;
+    const errors = [];
+    const panel = {
+        dispose() { dispose(); },
+        onDidDispose(callback) { dispose = callback; return { dispose() {} }; },
+        webview: {
+            onDidReceiveMessage(callback) { receive = callback; return { dispose() {} }; },
+            postMessage(message) { errors.push(message); }
+        }
+    };
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const result = reviewSummaries({
+        ViewColumn: { Active: 1 }, window: { createWebviewPanel: () => panel }
+    }, [{ exchange: 1, kind: 'input', summary: 'Complete draft.' }], async (_reviewed, signal) => {
+        validationSignal = signal;
+        await new Promise((resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+    });
+    const saving = receive({ command: 'save', drafts: [{ exchange: 1, kind: 'input', summary: 'Complete draft.', status: 'approved' }] });
+    context.mock.timers.tick(120000);
+    assert.equal(validationSignal.aborted, false);
+    panel.dispose();
+    await saving;
+    assert.equal(validationSignal.aborted, true);
+    assert.equal(await result, undefined);
+    assert.deepEqual(errors, []);
+});
+
 test('a failed rendered-pair check keeps the review open and allows editing/retry', async () => {
     let receive;
     let dispose;

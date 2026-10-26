@@ -714,8 +714,9 @@ $timer.Add_Tick({
         }
         if (-not $script:pairedVisible -and -not $script:stopping -and [DateTime]::UtcNow -gt $script:preparedDeadline) {
             $window.Show()
-            $script:lastFault = 'Player was not ready within 45 seconds.'
-            Request-Stop
+            $status.Text = 'Waiting for player readiness'
+            $status.ToolTip = 'Startup is still in progress. Wait for readiness or use Stop to close only the isolated playback window.'
+            $script:preparedDeadline = [DateTime]::MaxValue
         }
         if (-not $script:client -and (Test-Path -LiteralPath $ControlPath)) {
             try { $descriptorText = [System.IO.File]::ReadAllText($ControlPath) }
@@ -824,7 +825,6 @@ $timer.Add_Tick({
         $script:actionTask = $null
         $playPause.IsEnabled = $false
         $nextStep.IsEnabled = $false
-        if ($script:connectionFailures -ge 3 -and -not $script:stopping) { Request-Stop -ConnectionFailure }
     }
 })
 $window.Add_Closed({

@@ -149,7 +149,7 @@ setTimeout(() => {}, 45000);
         Assert-HelperStopped
         if ($clock.Elapsed.TotalSeconds -gt 3 -or -not $owner.FindName('Load').IsEnabled -or $owner.Resources.Contains('DemoPlayerOperation')) { throw 'Cancellation did not promptly restore the window and release its worker.' }
     }
-    Test-LifecycleCase 'the 30-second budget includes a blocked stdin write' {
+    Test-LifecycleCase 'a blocked stdin write remains responsive and can be explicitly canceled' {
         [IO.File]::WriteAllText($helperPath, @'
 require('node:fs').writeFileSync(require('node:path').join(__dirname, 'helper.pid'), String(process.pid));
 setTimeout(() => {}, 45000);
@@ -158,11 +158,16 @@ setTimeout(() => {}, 45000);
         $script:disabledTicks = 0
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $message = ''
-        try { Invoke-DemoLibrary @{ command = 'capture'; title = ('private-fixture-content' * 12000) } $owner | Out-Null }
+        $cancel = [Windows.Threading.DispatcherTimer]::new()
+        $cancel.Interval = [TimeSpan]::FromMilliseconds(500)
+        $cancel.Add_Tick({ $cancel.Stop(); $owner.Resources['DemoPlayerOperation'].Cancellation.Cancel() })
+        $cancel.Start()
+        try { Invoke-DemoLibrary @{ command = 'capture'; title = ('private-fixture-content' * 12000) } $owner | Out-Null; throw 'Blocked input returned success.' }
         catch { $message = $_.Exception.Message }
+        finally { $cancel.Stop() }
         Assert-HelperStopped
-        if ($clock.Elapsed.TotalSeconds -lt 30 -or $clock.Elapsed.TotalSeconds -gt 35) { throw ('Blocked input escaped the 30-second budget: ' + $clock.Elapsed) }
-        if ($message -notmatch "capture.*exceeded 30 seconds.*sending" -or $message -match 'private-fixture-content') { throw ('Missing privacy-safe operation/phase context: ' + $message) }
+        if ($clock.Elapsed.TotalSeconds -gt 3) { throw ('Blocked input ignored cancellation: ' + $clock.Elapsed) }
+        if ($message -notmatch 'cancelled.*No success was confirmed' -or $message -match 'private-fixture-content') { throw ('Missing privacy-safe cancellation context: ' + $message) }
         if ($script:ticks -lt 10 -or $script:disabledTicks -lt 10) { throw 'Blocked input froze the owner dispatcher.' }
     }
     Test-LifecycleCase 'a written result without process exit is not confirmed success' {
@@ -175,10 +180,69 @@ process.stdin.on('end', () => {
 });
 '@)
         $message = ''
-        try { Invoke-DemoLibrary @{ command = 'read' } $owner | Out-Null }
+        $cancel = [Windows.Threading.DispatcherTimer]::new()
+        $cancel.Interval = [TimeSpan]::FromMilliseconds(500)
+        $cancel.Add_Tick({ $cancel.Stop(); $owner.Resources['DemoPlayerOperation'].Cancellation.Cancel() })
+        $cancel.Start()
+        try { Invoke-DemoLibrary @{ command = 'read' } $owner | Out-Null; throw 'Unconfirmed result returned success.' }
         catch { $message = $_.Exception.Message }
+        finally { $cancel.Stop() }
         Assert-HelperStopped
-        if ($message -notmatch "read.*exceeded 30 seconds.*exit" -or $message -notmatch 'No success was confirmed') { throw ('Unconfirmed completion lost its context: ' + $message) }
+        if ($message -notmatch 'cancelled.*No success was confirmed') { throw ('Unconfirmed completion lost its context: ' + $message) }
+    }
+    Test-LifecycleCase 'active helper completes after the former 30-second cutoff without being killed' {
+        [IO.File]::WriteAllText($helperPath, @'
+require('node:fs').writeFileSync(require('node:path').join(__dirname, 'helper.pid'), String(process.pid));
+process.stdin.resume();
+process.stdin.on('end', () => {
+    const updates = setInterval(() => process.stdout.write(' '), 250);
+    setTimeout(() => {
+        clearInterval(updates);
+        process.stdout.write(JSON.stringify({ ok: true, result: { title: 'Completed after 30 seconds' } }));
+    }, 32000);
+});
+'@)
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $script:ticks = 0
+        $result = Invoke-DemoLibrary @{ command = 'list' } $owner
+        Assert-HelperStopped
+        if ($clock.Elapsed.TotalSeconds -lt 32 -or $result.title -ne 'Completed after 30 seconds') { throw 'Slow active helper did not complete successfully past the former deadline.' }
+        if ($script:ticks -lt 100) { throw 'Slow operation blocked the dispatcher.' }
+    }
+    Test-LifecycleCase 'update polling preserves live work and explicit cancellation reaps the helper and cleans its download' {
+        Copy-Item -LiteralPath (Join-Path $root 'PlayerUpdates.ps1') -Destination $scratch
+        . (Join-Path $scratch 'PlayerUpdates.ps1')
+        . (Join-Path $root 'PlayerEnvironment.ps1')
+        function Set-PlayerUpdateFailure($Failure) { throw $Failure }
+        [IO.File]::WriteAllText((Join-Path $scratch 'native\updater.js'), @'
+process.stdin.resume();
+process.stdin.on('end', () => setInterval(() => process.stdout.write(' '), 100));
+'@)
+        $download = Join-Path $scratch 'pending-update'
+        [IO.Directory]::CreateDirectory($download) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $download 'partial.exe'), 'Synthetic partial download; not executable.')
+        $updateNotice = [pscustomobject]@{ Text = ''; ToolTip = '' }
+        $script:playerUpdate = @{
+            Process = $null; Pending = $null; Version = '0.1.0'; Result = $null
+            Directory = $download; Dialog = $null; Notice = ''; Detail = ''
+        }
+        try {
+            Start-PlayerUpdateOperation 'check'
+            $helperId = $script:playerUpdate.Process.Id
+            $script:playerUpdate.Deadline = [DateTime]::UtcNow.AddSeconds(-1)
+            Receive-PlayerUpdateOperation
+            if (-not $script:playerUpdate.Process -or $script:playerUpdate.Process.HasExited -or
+                $script:playerUpdate.Notice -ne 'Checking updates...') { throw 'Elapsed time stopped a live update helper.' }
+            $owner.Resources.Add('DemoPlayerOperation', @{})
+            $script:ticks = 0
+            Stop-PlayerUpdateOperation
+            if (Get-Process -Id $helperId -ErrorAction SilentlyContinue) { throw 'Explicit update cancellation left its helper running.' }
+            if ($script:playerUpdate.Process -or $script:playerUpdate.Directory -or (Test-Path -LiteralPath $download)) { throw 'Canceled download was not cleaned completely.' }
+            if ($script:ticks -lt 1 -or -not $owner.Resources.Contains('DemoPlayerOperation')) { throw 'Cleanup blocked the dispatcher or interfered with an independent library operation.' }
+        } finally {
+            $owner.Resources.Remove('DemoPlayerOperation')
+            Stop-PlayerUpdateOperation
+        }
     }
     Test-LifecycleCase 'streaming history handlers send input and reap successful and failed helpers' {
         $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $scratch 'DemoDialogs.ps1'), [ref]$null, [ref]$null)
@@ -224,6 +288,9 @@ process.stdin.on('end', () => {
                 $clock = [Diagnostics.Stopwatch]::StartNew()
                 $frame = [Windows.Threading.DispatcherFrame]::new()
                 & $startScan
+                $dialog.Tag.Scan.Clock.Stop()
+                $dialog.Tag.Scan.Clock = [pscustomobject]@{ Elapsed = [TimeSpan]::FromSeconds(61) }
+                $dialog.Tag.Scan.Clock | Add-Member ScriptMethod Stop {}
                 $guard.Start()
                 [Windows.Threading.Dispatcher]::PushFrame($frame)
                 $guard.Stop()
@@ -258,7 +325,7 @@ process.stdin.on('end', () => {
         }
     }
     if ($failures.Count) { throw ($failures -join "`n") }
-    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 8 runtime cases;compatible JSON values/types and case-insensitive access,250ms large-JSON input budget, independent controls, explicit cancellation, real30-second deadlines, blocked input, completion contract, streaming history, owner routing and process cleanup.'
+    Write-Output 'LIBRARY HELPER LIFECYCLE PASSED: 10 runtime cases; compatible JSON, 250ms large-JSON input budget, independent controls, explicit cancellation, active completion beyond 30 seconds, blocked input, completion contract, update cancellation/cleanup, streaming history, owner routing and process cleanup.'
 } finally {
     $heartbeat.Stop()
     $owner.Close()
