@@ -24,6 +24,7 @@ public static class UpdateUITest {
 }
 '@ -ReferencedAssemblies UIAutomationClient, UIAutomationTypes
 $root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'compact-automation.ps1')
 $installed = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Join-Path $env:LOCALAPPDATA 'Programs\VSCodeDemoPlayer' }
 $entry = Join-Path $installed $(if ($SourceController) { 'Show-ReplayController.ps1' } else { 'Start-InstalledPlayer.ps1' })
 if ($SourceController -and $InstallUpdate) { throw 'SourceController mode cannot run an installer. Only the captain may run shared installation/update acceptance.' }
@@ -45,9 +46,18 @@ function Wait-Until([scriptblock]$Action, [string]$Label, [int]$Seconds = 20) {
     throw ('Updater UI timeout: ' + $Label)
 }
 function Find-Control($Parent, [string]$Id) {
+    Expand-CompactControllerTools $Parent $Id
     return $Parent.FindFirst([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $Id))
 }
 function Get-Window([string]$Name) {
+    if ($Name -eq 'Demo Player') {
+        $compact = [Windows.Automation.AndCondition]::new([Windows.Automation.Condition[]]@(
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$script:controllerId),
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, 'VibeReplay - Demo Player')
+        ))
+        $candidate = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants, $compact)
+        if ($candidate) { return $candidate }
+    }
     $condition = [Windows.Automation.AndCondition]::new([Windows.Automation.Condition[]]@(
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$script:controllerId),
         [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $Name)

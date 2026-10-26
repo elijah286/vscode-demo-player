@@ -1,4 +1,5 @@
 . (Join-Path $PSScriptRoot 'SummaryPresentation.ps1')
+. (Join-Path $PSScriptRoot 'PlayerShell.ps1')
 if (-not ('DemoLibraryJson' -as [type])) {
     Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
 using System;
@@ -99,6 +100,7 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
     # Nested PowerShell dispatcher callbacks must not resolve the caller's progress/timer to our locals.
     $operationWindow = $null
     $operationTimer = [Windows.Threading.DispatcherTimer]::new()
+    $inlineOperation = -not $KeepOwnerEnabled -and $Owner -is [VibeReplay.ControllerWindow]
     $frame = [Windows.Threading.DispatcherFrame]::new()
     $closed = { $state.OwnerClosed = $true; if ($Cancellable) { $cancellation.Cancel() } }.GetNewClosure()
     try {
@@ -118,7 +120,14 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
                     $control.IsEnabled = $false
                 }
             }
-            if ($Owner.IsVisible) {
+            if ($inlineOperation) {
+                $Owner.FindName('OperationPanel').Visibility = 'Visible'
+                $Owner.FindName('LibraryActivity').Text = $Activity
+                $inlineCancel = $Owner.FindName('CancelLibraryOperation')
+                $inlineCancel.IsEnabled = $Cancellable
+                $inlineCancelHandler = { $cancellation.Cancel() }.GetNewClosure()
+                $inlineCancel.Add_Click($inlineCancelHandler)
+            } elseif ($Owner.IsVisible) {
                 $operationWindow = New-DemoDialog @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Working - Demo Player" SizeToContent="WidthAndHeight" ResizeMode="NoResize"
@@ -170,6 +179,12 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
                 } else { $Activity + ' (' + [int]$state.Clock.Elapsed.TotalSeconds + 's)' }
                 $operationWindow.FindName('CancelOperation').IsEnabled = $Cancellable -and -not $cancellation.IsCancellationRequested
             }
+            if ($inlineOperation -and $inlineCancel) {
+                $Owner.FindName('LibraryActivity').Text = if ($cancellation.IsCancellationRequested) {
+                    'Cancelling... No success has been confirmed.'
+                } else { $Activity + ' (' + [int]$state.Clock.Elapsed.TotalSeconds + 's)' }
+                $inlineCancel.IsEnabled = $Cancellable -and -not $cancellation.IsCancellationRequested
+            }
             if ($ProgressState -and $ProgressState.Message) {
                 $Owner.FindName('Progress').Text = $ProgressState.Message
             }
@@ -198,6 +213,10 @@ function Invoke-DemoBackgroundOperation([scriptblock]$Work, [object[]]$Arguments
         $Owner.Remove_Closed($closed)
         $state.Finished = $true
         if ($operationWindow) { $operationWindow.Close() }
+        if ($inlineOperation) {
+            $inlineCancel.Remove_Click($inlineCancelHandler)
+            $Owner.FindName('OperationPanel').Visibility = 'Collapsed'
+        }
         foreach ($saved in $controls) { $saved.Control.IsEnabled = $saved.Enabled }
         $Owner.Resources.Remove('DemoPlayerOperation')
         $worker.Dispose()
@@ -229,13 +248,33 @@ function Invoke-DemoLibrary([hashtable]$Request, $Owner,
             [hashtable]::Synchronized(@{ Prefix = $Owner.FindName('Progress').Text; Message = '' })
         } else { $null }
         return Invoke-DemoBackgroundOperation {
-            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout, $SummaryProgress)
+            param($Token, $Source, $Node, $Root, $Request, $Helper, $Timeout, $SummaryProgress, $Persistent)
             . $Source
             if (-not $Node) { . (Join-Path (Split-Path $Source -Parent) 'PlayerEnvironment.ps1'); $Node = Resolve-PlayerNode }
             $script:NodePath = $Node
             $script:LibraryRoot = $Root
+            $script:PersistentLibrary = $Persistent
             Invoke-DemoLibrary $Request -Helper $Helper -TimeoutSeconds $Timeout -CancellationToken $Token -SummaryProgress $SummaryProgress
-        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds, $summaryProgress) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled -ProgressState $summaryProgress
+        } @((Join-Path $PSScriptRoot 'DemoDialogs.ps1'), $script:NodePath, $script:LibraryRoot, $Request, $Helper, $TimeoutSeconds, $summaryProgress, [bool]$script:PersistentLibrary) $Owner $activity -KeepOwnerEnabled:$KeepOwnerEnabled -ProgressState $summaryProgress
+    }
+    if ($script:PersistentLibrary -and $Helper -eq 'library-cli.js' -and -not $SummaryProgress -and $Request.command -ne 'history') {
+        if (-not $script:NodePath) { . (Join-Path $PSScriptRoot 'PlayerEnvironment.ps1'); $script:NodePath = Resolve-PlayerNode }
+        $Request.root = $script:LibraryRoot
+        $connection = [VibeReplay.LibraryConnections]::Get($script:NodePath, (Join-Path $PSScriptRoot 'native\library-worker.js'), $script:LibraryRoot)
+        try {
+            $reply = $connection.Request(($Request | ConvertTo-Json -Depth 10 -Compress), $TimeoutSeconds, $CancellationToken)
+        } catch [OperationCanceledException] {
+            $failure = [OperationCanceledException]::new($_.Exception.Message)
+            $failure.Data['DemoPlayerOperationCancelled'] = $true
+            throw $failure
+        }
+        $response = [DemoLibraryJson]::Parse($reply)
+        if ($response.version -ne 1 -or -not $response.id -or $response.ok -isnot [bool]) {
+            [VibeReplay.LibraryConnections]::Close()
+            throw 'The library worker returned an invalid protocol response. No success was confirmed.'
+        }
+        if (-not $response.ok) { throw $response.error }
+        return $response.result
     }
     $state = Start-DemoLibraryProcess $Request $Helper
     $process = $state.Process

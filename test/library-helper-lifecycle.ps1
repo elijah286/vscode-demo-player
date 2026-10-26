@@ -9,6 +9,7 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) ('library-lifecycle-test-' + [gu
 [IO.Directory]::CreateDirectory((Join-Path $scratch 'native')) | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'DemoDialogs.ps1') -Destination $scratch
 Copy-Item -LiteralPath (Join-Path $root 'SummaryPresentation.ps1') -Destination $scratch
+foreach ($file in @('PlayerShell.ps1', 'PlayerShell.cs')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $scratch }
 $helperPath = Join-Path $scratch 'native\library-cli.js'
 $pidPath = Join-Path $scratch 'native\helper.pid'
 $failures = [Collections.Generic.List[string]]::new()

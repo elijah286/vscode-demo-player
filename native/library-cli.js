@@ -8,6 +8,10 @@ async function main() {
         if (input.length > 1024 * 1024) throw new Error('Library command exceeds 1 MiB.');
     }
     const request = JSON.parse(input.replace(/^\uFEFF/, ''));
+    return execute(request);
+}
+
+async function execute(request) {
     const root = request.root || library.defaultLibraryRoot();
     switch (request.command) {
         case 'list': return library.listDemos(root);
@@ -47,3 +51,5 @@ if (require.main === module) main().then(
         process.exitCode = 1;
     }
 );
+
+module.exports = { execute };

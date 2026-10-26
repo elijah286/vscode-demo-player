@@ -62,6 +62,13 @@ jobs:
       - name: Check exchange selection without showing windows
         shell: powershell
         run: powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\exchange-selection.ps1
+      - name: Check compact native shell and persistent library
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-shell.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\persistent-library.ps1 -NodePath (Get-Command node.exe).Source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check isolated agent worktree ownership and handoffs
         shell: powershell
         run: .\test\agent-worktrees.ps1

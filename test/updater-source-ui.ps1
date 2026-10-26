@@ -12,14 +12,16 @@ $application = if ($ApplicationSource) { (Resolve-Path -LiteralPath $Application
 $fixture = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) ('source-fixture-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'runtime')) | Out-Null
-foreach ($name in @('Show-ReplayController.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1', 'PlayerAI.ps1')) {
+foreach ($name in @('Show-ReplayController.ps1', 'PlayerShell.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1', 'PlayerAI.ps1')) {
     Copy-Item -LiteralPath (Join-Path $application $name) -Destination (Join-Path $fixture $name)
 }
+$shellFile = if (Test-Path -LiteralPath (Join-Path $application 'VibeReplay.Shell.dll')) { 'VibeReplay.Shell.dll' } else { 'PlayerShell.cs' }
+Copy-Item -LiteralPath (Join-Path $application $shellFile) -Destination (Join-Path $fixture $shellFile)
 $summaryLayout = Join-Path $application 'SummaryPresentation.ps1'
 if (Test-Path -LiteralPath $summaryLayout -PathType Leaf) {
     Copy-Item -LiteralPath $summaryLayout -Destination (Join-Path $fixture 'SummaryPresentation.ps1')
 }
-foreach ($name in @('package.json', 'library-cli.js', 'demo-library.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'updater.js')) {
+foreach ($name in @('package.json', 'library-cli.js', 'library-worker.js', 'demo-library.js', 'control-server.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'updater.js')) {
     Copy-Item -LiteralPath (Join-Path $application ('native\' + $name)) -Destination (Join-Path $fixture ('native\' + $name))
 }
 Copy-Item -LiteralPath $NodePath -Destination (Join-Path $fixture 'runtime\node.exe')

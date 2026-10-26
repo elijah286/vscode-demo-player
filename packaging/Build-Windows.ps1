@@ -48,8 +48,8 @@ $payload = Join-Path $cache ('payload-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $payload 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $payload 'runtime')) | Out-Null
 
-$rootFiles = @('Start-InstalledPlayer.ps1', 'PlayerTaskbarIdentity.cs', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'DemoDialogs.ps1', 'PlayerAI.ps1', 'ReplayPresentation.ps1', 'SummaryPresentation.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
-$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-response.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'control-server.js', 'demo-library.js', 'library-cli.js', 'updater.js', 'prompt-summary-authoring.js', 'prompt-summary-review.js', 'openai-summaries.js')
+$rootFiles = @('Start-InstalledPlayer.ps1', 'PlayerTaskbarIdentity.cs', 'Start-DemoPlayer.ps1', 'Start-Replay.ps1', 'Show-ReplayController.ps1', 'PlayerShell.ps1', 'DemoDialogs.ps1', 'PlayerAI.ps1', 'ReplayPresentation.ps1', 'SummaryPresentation.ps1', 'PlayerEnvironment.ps1', 'PlayerUpdates.ps1', 'Install-PlayerUpdate.ps1', 'README.md')
+$nativeFiles = @('package.json', 'package-lock.json', 'native-extension.js', 'native-response.js', 'native-composer.js', 'recording-agent-host.js', 'replay.js', 'saved-parts.js', 'sdk-transcript.js', 'history-catalog.js', 'control-server.js', 'demo-library.js', 'library-cli.js', 'library-worker.js', 'updater.js', 'prompt-summary-authoring.js', 'prompt-summary-review.js', 'openai-summaries.js')
 foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $payload $file) }
 foreach ($file in $nativeFiles) { Copy-Item -LiteralPath (Join-Path $root ('native\' + $file)) -Destination (Join-Path $payload ('native\' + $file)) }
 Copy-Item -LiteralPath $node -Destination (Join-Path $payload 'runtime\node.exe')
@@ -68,6 +68,10 @@ $environment = @{
 $environment | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $payload 'build-info.json') -Encoding UTF8
 
 $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
+$wpf = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'WPF'
+$references = @('PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll') | ForEach-Object { '/reference:' + (Join-Path $wpf $_) }
+& $compiler /nologo /target:library /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Xaml.dll /reference:System.Web.Extensions.dll @references ("/out:" + (Join-Path $payload 'VibeReplay.Shell.dll')) (Join-Path $root 'PlayerShell.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Compiling the VibeReplay controller and library bridge failed.' }
 $launcher = Join-Path $payload 'VSCodeDemoPlayer.exe'
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll ("/out:$launcher") (Join-Path $PSScriptRoot 'Launcher.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Compiling the Windows launcher failed.' }

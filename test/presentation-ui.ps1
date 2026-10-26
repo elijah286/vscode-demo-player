@@ -9,6 +9,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'compact-automation.ps1')
 $evidence = Join-Path ([System.IO.Path]::GetFullPath($EvidenceRoot)) ('presentation-' + [guid]::NewGuid().ToString('N'))
 [System.IO.Directory]::CreateDirectory($evidence) | Out-Null
 $source = Join-Path $evidence 'synthetic.jsonl'
@@ -23,6 +24,7 @@ $script:pair = & (Join-Path $root 'Start-Replay.ps1') @arguments
 
 function Find-Element($Parent, [string]$Id) {
     if (-not $Parent) { return $null }
+    Expand-CompactControllerTools $Parent $Id
     $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $Id)
     return $Parent.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
@@ -30,6 +32,11 @@ function Find-Element($Parent, [string]$Id) {
 function Find-Window([string]$Title) {
     $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$script:pair.ControllerProcessId)
     $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($Title -eq 'Demo Player') {
+        foreach ($window in $windows) {
+            if ($window.Current.Name -eq 'VibeReplay - Demo Player' -and -not $window.Current.IsOffscreen) { return $window }
+        }
+    }
     $namedWindow = [System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $Title),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))
