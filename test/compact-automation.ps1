@@ -1,7 +1,7 @@
 function Expand-CompactControllerTools($Parent, [string]$Id) {
     if (-not $Parent -or $Parent.Current.Name -ne 'VibeReplay - Demo Player') { return }
     $section = if ($Id -in @('AutoContinue', 'ShowPrompt', 'ShowElapsed', 'ShowOutput', 'FrameColor', 'WindowMode',
-            'PlaybackSpeed', 'SummaryLanguage')) { 'PresentationOptions' }
+            'PlaybackSpeed', 'SummaryLanguage', 'SummaryDisplayLanguage')) { 'PresentationOptions' }
         elseif ($Id -in @('SelectExchanges', 'GeneratePromptSummaries', 'GenerateOutputSummaries',
             'TranslateSummaries', 'AISettings', 'CheckUpdates', 'UpdateNotice')) { 'PreparationOptions' }
         else { return }

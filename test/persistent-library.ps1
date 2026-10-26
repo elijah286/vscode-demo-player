@@ -40,14 +40,16 @@ try {
 const readline = require('node:readline');
 readline.createInterface({ input: process.stdin }).on('line', line => {
     const packet = JSON.parse(line);
-    setTimeout(() => process.stdout.write(JSON.stringify({ version: 1, id: packet.id, ok: true, result: 'Completed after 30 seconds' }) + '\n'), 32000);
+    setTimeout(() => process.stdout.write(JSON.stringify({ version: 1, id: packet.id, ok: true, result: packet.request.text }) + '\n'), 32000);
 });
 '@)
     $connection = [VibeReplay.LibraryConnection]::new($script:NodePath, $slow, $script:LibraryRoot)
     try {
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        $reply = [DemoLibraryJson]::Parse($connection.Request('{}', [Threading.CancellationToken]::None))
-        Assert ($clock.ElapsedMilliseconds -ge 32000 -and $reply.result -eq 'Completed after 30 seconds') 'Persistent work must complete beyond the former 30-second cutoff.'
+        $unicode = (-join @([char]0x4E2D, [char]0x6587)) + [char]::ConvertFromUtf32(0x1F642)
+        $reply = [DemoLibraryJson]::Parse($connection.Request((@{ text = $unicode } | ConvertTo-Json -Compress), [Threading.CancellationToken]::None))
+        Assert ($clock.ElapsedMilliseconds -ge 32000) 'Persistent work must complete beyond the former 30-second cutoff.'
+        Assert ($reply.result -ceq $unicode) 'Persistent requests and responses must preserve Chinese and supplementary Unicode, independent of the console code page.'
         Assert $connection.IsAlive 'Completing a slow request must retain the reusable worker.'
     } finally { $connection.Dispose() }
     $blocked = Join-Path $script:LibraryRoot 'blocked.js'

@@ -4,7 +4,8 @@
 
 Version 0.2.31 adds **VibeReplay**, a compact native Windows
 controller to the Windows installer.
-The controller is 280 WPF layout units wide, with presentation and preparation
+The default empty controller is 280 WPF layout units wide and no more than 226
+units tall, with presentation and preparation
 tools collapsed by default. Use the title-bar minimize button to switch to a
 48-unit-high mini strip. Both sizes scale with Windows DPI settings.
 Drag the title bar to move it. The title-bar menu controls always-on-top,

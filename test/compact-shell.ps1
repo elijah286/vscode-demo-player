@@ -19,6 +19,7 @@ try {
         'GenerateOutputSummaries', 'TranslateSummaries', 'AISettings', 'CheckUpdates', 'UpdateNotice',
         'OperationPanel', 'LibraryActivity', 'CancelLibraryOperation')
     foreach ($name in $names) { Assert ($null -ne $window.FindName($name)) ("Missing compatibility surface: " + $name) }
+    Assert ([Windows.Automation.AutomationProperties]::GetAutomationId($window.FindName('SummaryLanguage')) -ceq 'SummaryDisplayLanguage') 'Saved-language accessibility identity must remain compatible.'
     Assert (-not $window.FindName('PlayPause').IsEnabled) 'Play must be disabled without a selection.'
     Assert (-not $window.FindName('PresentationOptions').IsExpanded) 'Presentation settings must start collapsed.'
     Assert (-not $window.FindName('PreparationOptions').IsExpanded) 'Preparation tools must start collapsed.'

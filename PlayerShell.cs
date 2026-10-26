@@ -164,7 +164,9 @@ namespace VibeReplay {
             presentationBody.Children.Add(Register("SpeedLabel", new TextBlock { Text = "Speed: user 2.0s / reply 5.0s", FontSize = 10 }));
             presentationBody.Children.Add(Register("PlaybackSpeed", new Slider { Minimum = 0, Maximum = 100, TickFrequency = 1, IsSnapToTickEnabled = true, Margin = new Thickness(0, 7, 0, 7) }));
             presentationBody.Children.Add(new TextBlock { Text = "Summary language", FontSize = 10, Margin = new Thickness(0, 4, 0, 4) });
-            presentationBody.Children.Add(Register("SummaryLanguage", new ComboBox { DisplayMemberPath = "label", SelectedValuePath = "value", IsEnabled = false }));
+            var summaryLanguage = Register("SummaryLanguage", new ComboBox { DisplayMemberPath = "label", SelectedValuePath = "value", IsEnabled = false });
+            AutomationProperties.SetAutomationId(summaryLanguage, "SummaryDisplayLanguage");
+            presentationBody.Children.Add(summaryLanguage);
             presentation.Content = presentationBody;
             tools.Children.Add(presentation);
             preparation = new Expander { Header = "Prepare & settings", Foreground = Muted, FontSize = 10, Margin = new Thickness(0, 5, 0, 0) };
@@ -350,9 +352,10 @@ namespace VibeReplay {
                     if (disposed || process.HasExited) throw new InvalidOperationException("The VibeReplay library worker is unavailable. Refresh before retrying; no success was confirmed.");
                     long requestId = Interlocked.Increment(ref sequence);
                     string envelope = "{\"id\":" + requestId + ",\"request\":" + json + "}";
-                    var write = process.StandardInput.WriteLineAsync(envelope);
+                    var bytes = new UTF8Encoding(false).GetBytes(envelope + "\n");
+                    var write = process.StandardInput.BaseStream.WriteAsync(bytes, 0, bytes.Length, cancellation);
                     Await(write, cancellation);
-                    Await(process.StandardInput.FlushAsync(), cancellation);
+                    Await(process.StandardInput.BaseStream.FlushAsync(cancellation), cancellation);
                     var read = process.StandardOutput.ReadLineAsync();
                     Await(read, cancellation);
                     if (read.Result == null) throw new InvalidOperationException("The VibeReplay library worker exited without a response. No success was confirmed. " + (errors.IsCompleted ? errors.Result : ""));

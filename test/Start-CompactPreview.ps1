@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory = $true)][string]$NodePath,
     [string]$CodePath,
-    [string]$EvidenceRoot
+    [string]$EvidenceRoot,
+    [string]$ApplicationRoot
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path $PSScriptRoot -Parent
+$root = if ($ApplicationRoot) { (Resolve-Path -LiteralPath $ApplicationRoot).Path } else { Split-Path $PSScriptRoot -Parent }
 if (-not $EvidenceRoot) { $EvidenceRoot = Join-Path $root '.build\compact-preview' }
 . (Join-Path $root 'DemoDialogs.ps1')
 $script:NodePath = (Resolve-Path -LiteralPath $NodePath).Path
