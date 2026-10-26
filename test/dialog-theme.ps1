@@ -82,9 +82,14 @@ try {
     $picker.Width = $picker.MinWidth
     $picker.Height = $picker.MinHeight
     Layout $picker
+    if ($picker.Content -is [Windows.Controls.ScrollViewer]) {
+        $picker.Content.ScrollToRightEnd()
+        $picker.Content.ScrollToBottom()
+        Layout $picker
+    }
     $save = $picker.FindName('Save')
     $bounds = $save.TransformToAncestor($picker.Content).TransformBounds([Windows.Rect]::new(0, 0, $save.ActualWidth, $save.ActualHeight))
-    Assert ($bounds.Right -le $picker.Content.ActualWidth -and $bounds.Bottom -le $picker.Content.ActualHeight) 'Primary capture action must fit at the minimum dialog size, allowing for native window chrome.'
+    Assert ($bounds.Left -ge 0 -and $bounds.Top -ge 0 -and $bounds.Right -le $picker.Content.ActualWidth -and $bounds.Bottom -le $picker.Content.ActualHeight) "Primary capture action must be reachable at the minimum dialog size, including the small-work-area scroll fallback. Bounds=$bounds; viewport=$($picker.Content.ActualWidth)x$($picker.Content.ActualHeight)."
     $picker.Width = 1180
     $picker.Height = 872
     $tabs.SelectedIndex = 0
