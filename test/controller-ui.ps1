@@ -1086,9 +1086,10 @@ try {
     Save-WindowImage $overlay 'overlay-resized-wrapped.png'
     $showOutput = Find-Element $window 'Id' 'ShowOutput'
     if (([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Output summary must default off.' }
-    $completeOutputEntry = Invoke-DemoLibrary @{ command = 'read'; id = $summaryEntry.id }
+    $playbackEntryId = if ($PlaybackOnly) { $saved.id } else { $summaryEntry.id }
+    $completeOutputEntry = Invoke-DemoLibrary @{ command = 'read'; id = $playbackEntryId }
     $secondOutputSummary = 'I showed the next recorded answer.'
-    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $summaryEntry.id
+    Invoke-DemoLibrary @{ command = 'summaries'; kind = 'output'; id = $playbackEntryId
         summaries = @($outputSummary, $secondOutputSummary); expected = @($completeOutputEntry.recording.outputSummaries) } | Out-Null
     Wait-Until { (Find-Element $window 'Id' 'GenerateOutputSummaries').Current.Name -match '\(2/2\)$' } 'controller observes complete output summaries' | Out-Null
     ([System.Windows.Automation.TogglePattern]$showOutput.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
