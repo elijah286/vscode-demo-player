@@ -8,7 +8,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { spawnSync } = require('node:child_process');
 const { discoverHistory, FILE_LIMIT } = require('../history-catalog');
 const library = require('../demo-library');
-const { sdkSnapshot, sdkEventMarkdown } = require('../sdk-transcript');
+const { sdkSnapshot, sdkEventMarkdown, sdkCompletedAt } = require('../sdk-transcript');
 const { readRecordings } = require('../replay');
 const { nativeResponsePart } = require('../native-response');
 const { RecordingAgentHost } = require('../recording-agent-host');
@@ -49,19 +49,42 @@ test('SDK completion timestamps drive working time for fresh and previously save
     state.responseOrigin = 0;
     state.clock = { now: () => 2500 };
     assert.equal(controlView(state).overlay.elapsedMs, 3000);
-    for (const change of ['missing', 'invalid', 'backwards', 'partial']) {
+    for (const change of ['missing', 'invalid', 'backwards']) {
         const broken = sdkEvents();
         if (change === 'missing') broken.splice(7, 1);
         if (change === 'invalid') broken[7].timestamp = 'invalid';
         if (change === 'backwards') broken[7].timestamp = broken[0].timestamp;
         const requests = sdkSnapshot(broken).requests;
-        if (change === 'partial') {
-            delete requests[0].modelState;
-            requests[0].sdkCompletion = 'partial';
-        }
         assert.equal(requests[0].modelState, undefined);
         assert.equal(controlView({ phase: 'complete', turnIndex: 2, recordings: requests.map(request => ({ request })) }).overlay.elapsedMs, null);
     }
+});
+
+test('archived partial-content SDK exchanges retain explicit recorded working time without claiming complete content or mutating old saves', () => {
+    const events = sdkEvents();
+    events[6].data.content = { archived: 'Unsupported content shape, not a completed replay response' };
+    const snapshot = sdkSnapshot(events);
+    const request = snapshot.requests[0];
+    assert.equal(request.sdkCompletion, 'partial');
+    assert.equal(request.modelState, undefined);
+    assert.equal(request.result, undefined);
+    const before = structuredClone(snapshot);
+    const recordings = snapshot.requests.map(request => ({ request }));
+    assert.equal(controlView({ phase: 'complete', turnIndex: 2, recordings }).overlay.elapsed, '00:00:08');
+    assert.equal(controlView({ phase: 'response', turnIndex: 0, recordings, responseOrigin: 0,
+        clock: { now: () => 2500 } }).overlay.elapsedMs, 3000);
+    assert.deepEqual(snapshot, before, 'Recovery is read-only and never reclassifies archived content as complete');
+    const isoStart = { ...request, timestamp: new Date(request.timestamp).toISOString() };
+    assert.equal(sdkCompletedAt(isoStart), Date.UTC(2026, 9, 16, 12, 0, 7));
+    for (const type of ['assistant.turn_start', 'assistant.message', 'tool.execution_start']) {
+        const unfinished = structuredClone(request);
+        unfinished.sdkEvents.push({ type, timestamp: new Date(Date.UTC(2026, 9, 16, 12, 0, 8)).toISOString(), data: {} });
+        assert.equal(sdkCompletedAt(unfinished), undefined, 'Activity after the last end must not inherit an earlier completion');
+    }
+    for (const invalid of [
+        { ...request, timestamp: 'invalid' }, { ...request, sdkSessionStart: { type: 'session.start', data: { version: 2 } } },
+        { ...request, sdkEvents: request.sdkEvents.filter(event => event.type !== 'assistant.turn_end') }
+    ]) assert.equal(sdkCompletedAt(invalid), undefined);
 });
 
 async function setup(context) {

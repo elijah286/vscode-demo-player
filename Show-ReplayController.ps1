@@ -669,7 +669,6 @@ $nextStep.Add_Click({
     }
 })
 $stop.Add_Click({
-    if ($script:lastView.phase -eq 'complete') { $script:exitRequested = $true }
     Request-Stop
 })
 $window.Add_Closing({
@@ -790,9 +789,10 @@ $timer.Add_Tick({
                 $status.ToolTip = $status.Text
             }
             $script:action = $view.action
-            $stop.ToolTip = if ($view.phase -eq 'complete') { 'Exit and close playback windows' } else { 'Stop playback' }
+            $stop.ToolTip = if ($view.phase -eq 'complete') { 'Close the recording and return to VibeReplay' } else { 'Stop playback' }
             $window.FindName('ExitLabel').Visibility = if ($view.phase -eq 'complete') { 'Visible' } else { 'Collapsed' }
-            [System.Windows.Automation.AutomationProperties]::SetName($stop, $(if ($view.phase -eq 'complete') { 'Exit' } else { 'Stop' }))
+            $window.FindName('ExitLabel').Text = 'Close recording'
+            [System.Windows.Automation.AutomationProperties]::SetName($stop, $(if ($view.phase -eq 'complete') { 'Close recording' } else { 'Stop' }))
             $playPause.IsEnabled = [bool]$view.enabled -and -not $script:actionTask
             $nextStep.IsEnabled = [bool]$view.nextEnabled -and -not $script:actionTask
             $playPause.ToolTip = $view.button

@@ -228,16 +228,16 @@ function Update-ReplayOverlays([switch]$MeasureOnly) {
     $conversationActive = $script:outputMode -and -not $script:stopping -and $overlay.conversation.active
     $showOutput.IsEnabled = -not $script:stopping -and [bool]$overlay.conversation.active
     $showPrompt.IsEnabled = -not $script:stopping -and -not [string]::IsNullOrWhiteSpace($overlay.promptSummary)
-    $showElapsed.IsEnabled = -not $script:outputMode -and -not $script:stopping -and $null -ne $overlay.elapsed
-    $showElapsed.ToolTip = if ($script:outputMode) { 'Working time is always shown at the top while Show summary of output is on. Turn it off to change this toggle.' } else { $legacyElapsedTooltip }
+    $showElapsed.IsEnabled = -not $script:stopping -and $null -ne $overlay.elapsed
+    $showElapsed.ToolTip = if ($null -eq $overlay.elapsed) { 'This selection has no complete recorded timing range. No duration is estimated or invented.' } else { $legacyElapsedTooltip }
     $promptVisible = -not $script:outputMode -and $showPrompt.IsChecked -and $showPrompt.IsEnabled
-    $timerVisible = $conversationActive -or ($showElapsed.IsChecked -and $showElapsed.IsEnabled)
+    $timerVisible = $showElapsed.IsChecked -and $showElapsed.IsEnabled
     $promptPanel.Visibility = if ($promptVisible) { 'Visible' } else { 'Collapsed' }
     $conversationPanel.Visibility = if ($conversationActive) { 'Visible' } else { 'Collapsed' }
     $timerPanel.Visibility = if ($timerVisible) { 'Visible' } else { 'Collapsed' }
     $promptText.Text = $overlay.promptSummary
     $promptProgress.Text = $script:lastView.progress
-    $elapsedText.Text = if ($script:outputMode -and $null -eq $overlay.elapsed) { 'Unavailable' } else { $overlay.elapsed }
+    $elapsedText.Text = $overlay.elapsed
     if ($conversationActive) { Update-Conversation $overlay -Immediate:$MeasureOnly } else {
         Stop-ConversationTransition
         $conversationMessages.Children.Clear()
@@ -256,7 +256,7 @@ function Update-ReplayOverlays([switch]$MeasureOnly) {
     if ($conversationActive -and -not $MeasureOnly -and -not (Ensure-CurrentSummaryPairFits)) { return }
     Update-OverlayLayout
     if ($MeasureOnly) { return }
-    if ($promptVisible -or $timerVisible) {
+    if ($promptVisible -or $timerVisible -or $conversationActive) {
         $script:overlayWindow.Owner = $window
         if (-not $script:overlayWindow.IsVisible) { $script:overlayWindow.Show() }
     } else { $script:overlayWindow.Hide() }
@@ -293,7 +293,8 @@ function Get-OverlayConversationHeight([double]$Width) {
     Set-ConversationFontSize $Width
     $timerPanel.Measure([System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
     $conversationMessages.Measure([System.Windows.Size]::new([Math]::Max(1, $Width - 58), [double]::PositiveInfinity))
-    $height = 32 + $timerPanel.DesiredSize.Height + 12 + [Math]::Ceiling($conversationMessages.DesiredSize.Height)
+    $timerHeight = if ($timerPanel.Visibility -eq 'Visible') { $timerPanel.DesiredSize.Height + 12 } else { 0 }
+    $height = 32 + $timerHeight + [Math]::Ceiling($conversationMessages.DesiredSize.Height)
     return [Math]::Min([Math]::Max(180, $height), [Math]::Min(600, [Math]::Max(132, $area.Height - 32)))
 }
 

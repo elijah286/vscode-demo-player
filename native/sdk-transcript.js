@@ -12,11 +12,14 @@ function sdkEventMarkdown(part) {
 }
 
 function sdkCompletedAt(request) {
-    if (request?.sdkCompletion !== 'complete' || request.sdkSessionStart?.type !== 'session.start' ||
+    if (request?.sdkSessionStart?.type !== 'session.start' ||
         request.sdkSessionStart.data?.version !== 1 || !Array.isArray(request.sdkEvents)) return undefined;
-    const end = request.sdkEvents.findLast(event => event.type === 'assistant.turn_end');
+    const end = request.sdkEvents.findLast(event =>
+        ['assistant.turn_end', 'assistant.turn_start', 'assistant.message', 'tool.execution_start'].includes(event.type));
+    if (end?.type !== 'assistant.turn_end') return undefined;
     const completedAt = Date.parse(end?.timestamp);
-    return Number.isFinite(completedAt) && completedAt >= request.timestamp ? completedAt : undefined;
+    const startedAt = typeof request.timestamp === 'number' ? request.timestamp : Date.parse(request.timestamp);
+    return Number.isFinite(completedAt) && Number.isFinite(startedAt) && completedAt >= startedAt ? completedAt : undefined;
 }
 
 function sdkSnapshot(records) {
