@@ -182,6 +182,8 @@ try {
     $build = Get-Content -LiteralPath (Join-Path $ApplicationRoot 'packaging\Build-Windows.ps1') -Raw
     Assert-Equal ($build -match "'PlayerTaskbarIdentity.cs'") $true 'Taskbar runtime helper is allowlisted'
     Assert-Equal ($build -match "'SummaryPresentation.ps1'") $true 'Measured summary layout helper is allowlisted'
+    Assert-Equal ($build -match "'DialogTheme.xaml'") $true 'Shared dialog theme is allowlisted'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $ApplicationRoot 'DialogTheme.xaml') -PathType Leaf) $true 'Shared dialog theme exists'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $ApplicationRoot 'SummaryPresentation.ps1') -PathType Leaf) $true 'Measured summary layout helper exists'
     Assert-Equal ($build -match "'prompt-summary-review.js'") $true 'Automatic summary review runtime is allowlisted'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $ApplicationRoot 'native\prompt-summary-review.js') -PathType Leaf) $true 'Summary review runtime exists'

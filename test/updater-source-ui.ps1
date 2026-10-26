@@ -12,7 +12,7 @@ $application = if ($ApplicationSource) { (Resolve-Path -LiteralPath $Application
 $fixture = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) ('source-fixture-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'native')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $fixture 'runtime')) | Out-Null
-foreach ($name in @('Show-ReplayController.ps1', 'PlayerShell.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'PlayerUpdates.ps1', 'PlayerAI.ps1')) {
+foreach ($name in @('Show-ReplayController.ps1', 'PlayerShell.ps1', 'ReplayPresentation.ps1', 'PlayerEnvironment.ps1', 'DemoDialogs.ps1', 'DialogTheme.xaml', 'PlayerUpdates.ps1', 'PlayerAI.ps1')) {
     Copy-Item -LiteralPath (Join-Path $application $name) -Destination (Join-Path $fixture $name)
 }
 $shellFile = if (Test-Path -LiteralPath (Join-Path $application 'VibeReplay.Shell.dll')) { 'VibeReplay.Shell.dll' } else { 'PlayerShell.cs' }

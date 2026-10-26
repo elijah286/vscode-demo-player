@@ -21,9 +21,17 @@ remain optional.
 Editor/experimental Agents mode, and saved summary language. **Prepare & settings**
 contains exchange selection, summary generation, translation, protected-key/model
 settings, and in-product updates. Opening playback collapses both sections.
-Capture, summary review, consent, and other existing preparation dialogs remain
-available on demand; this first increment does not redesign those dialogs or
-port the whole application to .NET 10.
+Capture, summary review, consent, translation, AI settings, progress, and update
+dialogs share the controller's dark green surfaces, mint primary actions,
+rounded controls, readable table rows, and visible keyboard-focus states.
+Native window frames, file/folder pickers, and system confirmation/error boxes
+remain Windows-managed. Windows high-contrast mode retains the system palette
+instead of applying the custom dialog theme.
+The interaction picker has a minimum size of 850 by 720 WPF layout units to
+keep its review and playback actions reachable with the larger controls.
+If the Windows work area is smaller, the dialog fits that work area and provides
+an outer scrollable viewport over a bounded layout, keeping actions reachable
+without expanding thousands of virtualized rows.
 
 The controller view and persistent library connection are implemented in
 [PlayerShell.cs](PlayerShell.cs). Packaging compiles `VibeReplay.Shell.dll`;
@@ -41,6 +49,13 @@ already have committed. Error and cancellation messages require refresh before
 retrying. Closing the controller stops its library worker.
 Controller operations use inline activity instead of opening another progress
 window. Existing preparation dialogs retain their established progress behavior.
+Dialog resources are parsed once per PowerShell UI session and reused.
+History text/numeric filters wait for a 150 ms typing pause before refreshing
+the in-memory view (no disk rescan); dropdowns, dates, and Clear filters apply
+immediately. History and saved-selection lists recycle visible rows. Bulk
+exchange inclusion updates the count once, rather than rescanning every
+checkbox after each change. Preview limits, original content, cancellation,
+privacy review, and summary/translation approval semantics are unchanged.
 
 To run a real native preview using only a new synthetic library:
 
@@ -60,15 +75,21 @@ Focused validation:
 
 ```powershell
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-shell.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-theme.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\dialog-performance.ps1
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\persistent-library.ps1 -NodePath 'C:\Tools\node\node.exe'
 # Interactive desktop only, against the PID printed by Start-CompactPreview:
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\test\compact-ui.ps1 -ControllerProcessId 12345 -EvidenceRoot .\.build\compact-acceptance -ExercisePlayback
 ```
 
-The first checks actual offscreen WPF layout and compatibility controls; the
-second checks persistent transport, explicit errors, completion beyond the former
+The compact-shell check exercises actual offscreen WPF layout and compatibility
+controls. The dialog checks load all secondary windows with the production theme,
+render synthetic picker evidence under `.build\dialog-theme`, verify bounded
+row realization with 5,000 conversations, and exercise filter coalescing and
+bulk-selection updates using real controls and production handlers.
+The persistent-library check verifies persistent transport, explicit errors, completion beyond the former
 30-second cutoff, explicit cancellation, and cleanup.
-The third exercises the native controller, mini mode, Open-without-autoplay,
+The interactive check exercises the native controller, mini mode, Open-without-autoplay,
 Play/Pause/Resume, both exchanges, completion, and scoped Stop in actual isolated
 VS Code playback. It leaves the synthetic controller open for inspection.
 None of these is an installed old-version-to-new-version upgrade test.
