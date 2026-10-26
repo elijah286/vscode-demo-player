@@ -96,7 +96,7 @@ None of these is an installed old-version-to-new-version upgrade test.
 Legacy installer identity, stable launcher/asset names, version metadata,
 library/settings formats, and update handoff remain unchanged.
 
-**[Download the Windows installer - v0.2.31](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.31/VSCodeDemoPlayer-Setup.exe)** |
+**[Download the Windows installer - v0.2.32](https://github.com/elijah286/vscode-demo-player/releases/download/v0.2.32/VSCodeDemoPlayer-Setup.exe)** |
 [Releases and SHA-256 checksums](https://github.com/elijah286/vscode-demo-player/releases/latest)
 
 ## Install and launch
