@@ -50,6 +50,46 @@ function previousExchangeContext(recording, index) {
 
 class SummaryDraftError extends Error {}
 
+function summaryValidationText(summary) {
+    let text = summary.trim();
+    const markers = ['**', '__', '~~', '`', '*', '_'];
+    const pairs = { ')': '(', ']': '[', '}': '{' };
+    let previous;
+    do {
+        previous = text;
+        for (const marker of markers) {
+            if (text.startsWith(marker) && text.endsWith(marker) && text.length > 2 * marker.length) {
+                text = text.slice(marker.length, -marker.length).trim();
+                break;
+            }
+            if (text.endsWith(marker) && text.split(marker).length > 2 && (text.split(marker).length - 1) % 2 === 0) {
+                text = text.slice(0, -marker.length).trimEnd();
+                break;
+            }
+        }
+        text = text.replace(/["'\u2019\u201D]+$/, '').trimEnd();
+        const closing = text.at(-1);
+        if (pairs[closing]) {
+            let balance = 0;
+            for (const character of text) {
+                if (character === pairs[closing]) balance++;
+                if (character === closing && --balance < 0) break;
+            }
+            if (balance === 0) {
+                let depth = 1;
+                for (let index = text.length - 2; index >= 0; index--) {
+                    if (text[index] === closing) depth++;
+                    if (text[index] === pairs[closing] && --depth === 0) {
+                        text = (text.slice(0, index) + text.slice(index + 1, -1)).trimEnd();
+                        break;
+                    }
+                }
+            }
+        }
+    } while (text !== previous);
+    return text;
+}
+
 function validateGeneratedSummary(summary, { english = true } = {}) {
     if (typeof summary !== 'string' || !summary.trim() || /[\r\n]/.test(summary)) {
         throw new Error('The generated summary must contain a nonempty statement on one line. No summary was saved.');
@@ -57,14 +97,29 @@ function validateGeneratedSummary(summary, { english = true } = {}) {
     if (summary.length > 4096) {
         throw new Error('The model returned too much text (over 4096 characters). No summary was saved.');
     }
-    if (english && /^(?:the\s+)?(?:user|assistant)\b/i.test(summary)) {
+    const text = summaryValidationText(summary);
+    if (english && /^(?:the\s+)?(?:user|assistant)\b/i.test(text.replace(/^(?:\*\*|__|~~|`|\*|_)+/, ''))) {
         throw new SummaryDraftError('The generated summary narrates the speaker in third person. No summary was saved; use the speaker\'s own voice, such as "I want..." or "Yes.".');
     }
-    if (!/[.!?\u3002\uFF01\uFF1F]["'\u2019\u201D]?$/.test(summary) ||
-        /(?:\.\.\.|\u2026)["'\u2019\u201D]?$/.test(summary) ||
-        (english && /\b(?:a|an|the|and|or|but|my|your|our|their)\s*[.!?]["'\u2019\u201D]?$/i.test(summary))) {
+    if (!/[.!?\u3002\uFF01\uFF1F]$/.test(text) ||
+        /(?:\.\.\.|\u2026)$/.test(text) ||
+        (english && /\b(?:a|an|the|and|or|but|my|your|our|their)\s*[.!?]$/i.test(text))) {
         throw new SummaryDraftError('The generated summary ends without a complete statement or question. No summary was saved; rewrite the whole thought instead of cutting it off or adding punctuation to a fragment.');
     }
+}
+
+function summaryDraftIssues(drafts, english = true) {
+    if (!Array.isArray(drafts) || typeof english !== 'boolean' ||
+        drafts.some(draft => !Number.isSafeInteger(draft?.item) || draft.item < 0 ||
+            typeof draft.summary !== 'string')) throw new Error('Invalid recovered summary validation request.');
+    return drafts.map(draft => {
+        let issue = '';
+        if (draft.summary.trim()) {
+            try { validateGeneratedSummary(draft.summary, { english }); }
+            catch (error) { issue = error.message; }
+        }
+        return { item: draft.item, issue };
+    });
 }
 
 function recordedOutput(request) {
@@ -119,7 +174,7 @@ function summaryPrompt(prompt, kind = 'input', { partial = false, combine = fals
         'Do not invent details. Recorded query (JSON string):\n' + JSON.stringify(prompt);
 }
 
-async function fitGeneratedSummary(request, { initial = '', checkCancelled = () => {}, progress = () => {}, validate = validateGeneratedSummary } = {}) {
+async function fitGeneratedSummary(request, { initial = '', checkCancelled = () => {}, progress = () => {}, validate = validateGeneratedSummary, recoverDraft = false } = {}) {
     checkCancelled();
     let rewrite = initial;
     let issue = '';
@@ -143,6 +198,8 @@ async function fitGeneratedSummary(request, { initial = '', checkCancelled = () 
         if (!issue && summary.length <= GENERATED_SUMMARY_LENGTH) return summary;
         rewrite = summary;
     }
+    if (recoverDraft) return { summary: rewrite, reviewIssue: issue || 'The completed draft exceeds the AI limit of 600 characters.',
+        attempts: MAX_SUMMARY_REQUESTS };
     throw new Error('AI could not produce a complete, first-person summary within 600 characters after ' + MAX_SUMMARY_REQUESTS +
         ' requests. No drafts were saved or offered for approval. Retry generation explicitly, choose another model, or edit summaries manually.' +
         (issue ? ' Last draft issue: ' + issue : ''));
@@ -490,4 +547,4 @@ function activateSummaryInbox(context, vscode, inbox) {
     return { ...authoring, ready, scan };
 }
 
-module.exports = { generateSummary, summaryPrompt, fitGeneratedSummary, MAX_SUMMARY_REQUESTS, recordedOutput, summaryWorkspaceInbox, activateSummaryAuthoring, activateSummaryInbox, GENERATED_SUMMARY_LENGTH, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary };
+module.exports = { generateSummary, summaryPrompt, fitGeneratedSummary, MAX_SUMMARY_REQUESTS, recordedOutput, summaryWorkspaceInbox, activateSummaryAuthoring, activateSummaryInbox, GENERATED_SUMMARY_LENGTH, QUESTION_CONTEXT_LENGTH, summaryQuestionContext, previousExchangeContext, validateGeneratedSummary, summaryDraftIssues };

@@ -43,6 +43,18 @@ function Get-PlayerOpenAIKey {
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
 }
 
+function ConvertTo-PlayerAISummaryDraft($Candidate, $Result) {
+    if ($Result -is [string]) {
+        return [pscustomobject]@{ index = $Candidate.index; kind = $Candidate.kind; summary = $Result; reviewIssue = '' }
+    }
+    if ($Result.summary -isnot [string] -or [string]::IsNullOrWhiteSpace($Result.summary) -or
+        $Result.summary.Length -gt 4096 -or $Result.reviewIssue -isnot [string] -or
+        [string]::IsNullOrWhiteSpace($Result.reviewIssue) -or $Result.attempts -ne 4) {
+        throw 'AI returned an invalid recovered draft. Nothing was saved.'
+    }
+    return [pscustomobject]@{ index = $Candidate.index; kind = $Candidate.kind; summary = $Result.summary; reviewIssue = $Result.reviewIssue }
+}
+
 function Show-PlayerAISettings($Owner, [switch]$RequireKey, [switch]$Rejected) {
     $settings = Get-PlayerAISettings
     $dialog = New-DemoDialog @'
@@ -139,9 +151,9 @@ function Invoke-DemoSummaryTranslation($Owner, [string]$Id) {
                 foreach ($candidate in $prepared.candidates) {
                     $translated = Invoke-DemoLibrary @{
                         command = 'generateSummary'; apiKey = $key; model = $settings.model; language = $language
-                        source = $candidate.source; kind = $candidate.kind
+                        source = $candidate.source; kind = $candidate.kind; recoverDraft = $true
                     } $translationDialog -Helper 'openai-summaries.js'
-                    $translationDialog.Tag.Drafts.Add([pscustomobject]@{ index = $candidate.index; kind = $candidate.kind; summary = $translated })
+                    $translationDialog.Tag.Drafts.Add((ConvertTo-PlayerAISummaryDraft $candidate $translated))
                 }
                 $translationDialog.DialogResult = $true
             } catch {
@@ -187,10 +199,11 @@ function Invoke-PlayerAISummary($Candidate, $Progress, [string]$ApiKey, [string]
                 question = $(if ($Candidate.kind -eq 'output') { [string]$Candidate.question } else { '' })
                 previous = [string]$Candidate.previous
                 rewrite = $(if ($parts.Count -eq 1) { [string]$Candidate.rewrite } else { '' })
+                recoverDraft = ($parts.Count -eq 1)
             } $Progress -Helper 'openai-summaries.js' -KeepOwnerEnabled
+            if ($parts.Count -eq 1) { return $summary }
             $notes.Add($summary)
         }
-        if ($parts.Count -eq 1) { return $summary }
         $parts = @(Split-PlayerAISummarySource ($notes -join "`n") 60000)
         $combine = $true
     } while ($parts.Count)
@@ -263,7 +276,7 @@ function Invoke-DemoOpenAISummaries($Owner, [string]$Id, [ValidateSet('both','in
                 foreach ($candidate in $prepared.candidates) {
                     $progress.FindName('Progress').Text = 'Generating ' + ($progress.Tag.Drafts.Count + 1) + '/' + @($prepared.candidates).Count + ': Exchange ' + ($candidate.index + 1) + ' ' + $candidate.kind
                     $summary = Invoke-PlayerAISummary $candidate $progress $key $settings.model
-                    $progress.Tag.Drafts.Add([pscustomobject]@{ index = $candidate.index; kind = $candidate.kind; summary = $summary })
+                    $progress.Tag.Drafts.Add((ConvertTo-PlayerAISummaryDraft $candidate $summary))
                 }
                 $progress.DialogResult = $true
             } catch {

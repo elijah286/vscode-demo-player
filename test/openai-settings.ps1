@@ -66,6 +66,7 @@ try {
         function Invoke-DemoLibrary($Request, $Owner, [string]$Helper, [switch]$KeepOwnerEnabled) {
             $script:summaryCalls.Add($Request)
             if ($script:failSummaryCall -and $script:summaryCalls.Count -eq $script:failSummaryCall) { throw 'Synthetic part failure.' }
+            if ($script:returnRejected) { return @{ summary = 'I set a !'; reviewIssue = 'Synthetic completed content rejection.'; attempts = 4 } }
             return ('s' * 300)
         }
         foreach ($kind in @('input', 'output')) {
@@ -81,6 +82,7 @@ try {
             Assert-True (@($summaryCalls | Where-Object { $_.question -cne $question }).Count -eq 0) 'Every source and reduction request retains exact paired context only for outputs.'
             Assert-True ($summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Source parts have explicit incomplete-context instructions.'
             Assert-True ($summaryCalls[3].combine -and -not $summaryCalls[3].partial) 'Final reduction combines notes rather than claiming they are original output.'
+            Assert-True (@($summaryCalls | Where-Object { $_.recoverDraft -eq $_.partial }).Count -eq 0) 'Only complete full-source/final-combination drafts allow recovery; no incomplete source-part fallback.'
         }
         $script:summaryCalls = [Collections.Generic.List[object]]::new()
         $question = 'What was the actual recorded result?'
@@ -98,6 +100,14 @@ try {
         $script:failSummaryCall = 0
         Invoke-PlayerAISummary ([pscustomobject]@{ index = 0; kind = 'input'; source = 'Short prompt.' }) $progress $key 'gpt-4.1-mini' | Out-Null
         Assert-True ($summaryCalls.Count -eq 1 -and -not $summaryCalls[0].partial -and -not $summaryCalls[0].combine) 'Short sources still use exactly one request without reduction.'
+        $script:returnRejected = $true
+        try {
+            $candidate = @{ index = 1; kind = 'output'; source = 'Synthetic complete source.' }
+            $recovered = Invoke-PlayerAISummary $candidate $progress $key 'gpt-4.1-mini'
+            $draft = ConvertTo-PlayerAISummaryDraft $candidate $recovered
+            Assert-True ($draft.index -eq 1 -and $draft.kind -eq 'output' -and $draft.summary -ceq 'I set a !' -and
+                $draft.reviewIssue -ceq 'Synthetic completed content rejection.') 'Structured recovery survives the PowerShell source pipeline without string conversion or loss of its warning.'
+        } finally { $script:returnRejected = $false }
     } finally { ${function:Invoke-DemoLibrary} = $originalInvoke }
     function Test-TranslationWorkflow {
         function Get-PlayerAISettings { return @{ encryptedKey = 'synthetic'; model = 'gpt-4.1-mini' } }
@@ -114,7 +124,8 @@ try {
             Assert-True ($Request.command -eq 'generateSummary') 'Translation uses the completion-driven generation helper.'
             Assert-True ($Request.language -ceq $script:translationLanguage) 'The selected translation language reaches every request.'
             Assert-True ($Request.apiKey -ceq 'synthetic-translation-key-only') 'Translation uses the saved key.'
-            Assert-True (($Request.Keys | Sort-Object) -join ',' -eq 'apiKey,command,kind,language,model,source') 'Only summaries and required provider options are sent; no originals or context.'
+            Assert-True (($Request.Keys | Sort-Object) -join ',' -eq 'apiKey,command,kind,language,model,recoverDraft,source') 'Only summaries and required provider/recovery options are sent; no originals or context.'
+            Assert-True $Request.recoverDraft 'Completed translation drafts use guarded recovery after bounded corrections.'
             $script:translationCalls++
             if ($script:translationMode -eq 'failure') { throw 'Synthetic translation failure.' }
             return ([string][char]0x6211 + [char]0x9009 + [char]0x62E9 + [char]0x84DD + [char]0x8272 + [char]0x3002)
@@ -270,6 +281,7 @@ try {
             $parsed = [Windows.Markup.XamlReader]::Parse($Xaml)
             $fake = [pscustomobject]@{ Window = $parsed; Tag = $null; DialogResult = $false; Title = '' }
             $fake | Add-Member ScriptMethod FindName { param($Name) return $this.Window.FindName($Name) }
+            $fake | Add-Member ScriptMethod Add_Closed { param($Handler) $this.Window.Add_Closed($Handler) }
             $fake | Add-Member ScriptMethod ShowDialog {
                 Assert-True ($this.FindName('Summary').Text -ceq 'Translated input.') 'Review shows the generated target-language draft.'
                 $this.FindName('Exchange').SelectedIndex = 2

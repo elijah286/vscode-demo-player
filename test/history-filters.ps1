@@ -69,7 +69,8 @@ foreach ($call in $ast.FindAll({
         Assert-Equal ($call.CommandElements.Extent.Text -contains '-CancellationToken') $true 'Background worker preserves cancellation without a WPF owner'
         continue
     }
-    Assert-Equal $call.CommandElements.Count 3 'Every dialog library operation supplies its owner'
+    Assert-Equal ($call.CommandElements.Count -eq 3 -or ($call.CommandElements.Count -eq 4 -and
+        $call.CommandElements[3].Extent.Text -ceq '-KeepOwnerEnabled')) $true 'Every dialog library operation supplies its owner, optionally keeping it responsive during local validation'
     Assert-Equal ($call.CommandElements[2].Extent.Text -in @('$dialog', '$Owner')) $true 'Every dialog library operation routes through its current owner'
 }
 $xaml = $ast.FindAll({
@@ -637,7 +638,9 @@ try {
         outputSummaries = @('First recorded result', 'Second recorded result')
     } }
     $outputs = @('First original answer', 'Second original answer')
-    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Included = @($true, $true); Index = -1; GeneratedOriginals = @{} }
+    $dialog.Tag = @{ Summaries = [object[]]$entry.recording.promptSummaries.Clone(); Outputs = [object[]]$entry.recording.outputSummaries.Clone(); Included = @($true, $true); Index = -1; GeneratedOriginals = @{}
+        RecoveredItems = @{}; ContentIssues = @{} }
+    $contentTimer = [Windows.Threading.DispatcherTimer]::new()
     $exchange = $dialog.FindName('Exchange')
     $summary = $dialog.FindName('Summary')
     $include = $dialog.FindName('Include')

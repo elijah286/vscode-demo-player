@@ -80,11 +80,12 @@ async function readResponse(response) {
     catch { throw new SummaryError('OpenAI returned invalid JSON. No summaries were saved.'); }
 }
 
-async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '', previous = '', rewrite = '', language }, { fetchImpl = fetch, signal, progress } = {}) {
+async function generateOpenAISummary({ apiKey, model, source, kind, partial = false, combine = false, question = '', previous = '', rewrite = '', language, recoverDraft = false }, { fetchImpl = fetch, signal, progress } = {}) {
     const checkCancelled = () => {
         if (signal?.aborted) throw new SummaryError('Summary generation canceled. No summaries were saved.', 'OPENAI_CANCELLED');
     };
     if (typeof rewrite !== 'string') throw new SummaryError('The length correction draft is invalid. No request was sent.');
+    if (typeof recoverDraft !== 'boolean' || (recoverDraft && partial)) throw new SummaryError('Only completed full-source drafts may be recovered for review. No request was sent.');
     if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(apiKey)) {
         throw new SummaryError('Enter a valid OpenAI API key in Settings.', 'OPENAI_AUTH');
     }
@@ -103,7 +104,7 @@ async function generateOpenAISummary({ apiKey, model, source, kind, partial = fa
     }
     try {
         return await fitGeneratedSummary(candidate => requestOpenAISummary({ apiKey, model, source, kind, partial, combine, question, previous, language, rewrite: candidate },
-            { fetchImpl, signal }), { initial: rewrite, checkCancelled, progress,
+            { fetchImpl, signal }), { initial: rewrite, checkCancelled, progress, recoverDraft,
             validate: summary => validateGeneratedSummary(summary, { english: language === undefined || language === 'en' }) });
     } catch (error) {
         if (error instanceof SummaryError) throw error;

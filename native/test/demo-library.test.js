@@ -81,6 +81,34 @@ test('six recorded exchanges retain four read-only event turns without inventing
     await assert.rejects(library.createPackage(source, [], 'Empty selection', unavailable.sha256), /1 to 100/);
 });
 
+test('recovered draft saves revalidate content before atomic replacement and retain stale-save guards', async context => {
+    const { root, source, inspection } = await fixture(context);
+    const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Recovered drafts', inspection.sha256));
+    const { execute } = require('../library-cli');
+    const entry = await library.readEntry(root, saved.id);
+    const file = path.join(root, saved.id + '.demo.json');
+    const bytes = await fs.readFile(file);
+    const summaries = { promptSummaries: ['I chose blue.', 'I set a !'], outputSummaries: [null, null] };
+    const request = { command: 'summaryBatch', root, id: saved.id, summaries,
+        expected: { promptSummaries: entry.recording.promptSummaries ?? null, outputSummaries: entry.recording.outputSummaries ?? null }, recoveredItems: [2] };
+    await assert.rejects(execute(request), /Recovered exchange 2.*complete/);
+    assert.deepEqual(await fs.readFile(file), bytes);
+    for (const recoveredItems of [null, [-1], [4], ['2']]) {
+        await assert.rejects(execute({ ...request, recoveredItems }), /Invalid recovered/);
+        assert.deepEqual(await fs.readFile(file), bytes);
+    }
+    summaries.promptSummaries[1] = '**I checked the result.**';
+    await execute(request);
+    const updated = await library.readEntry(root, saved.id);
+    assert.deepEqual(updated.recording.promptSummaries, summaries.promptSummaries);
+    const savedBytes = await fs.readFile(file);
+    await assert.rejects(execute(request), /changed since/);
+    assert.deepEqual(await fs.readFile(file), savedBytes);
+    summaries.promptSummaries[1] = null;
+    await execute({ ...request, expected: updated.recording });
+    assert.deepEqual((await library.readEntry(root, saved.id)).recording.promptSummaries, ['I chose blue.', null]);
+});
+
 test('saved summary languages switch offline, retain originals and edits, and survive CLI, restart and export/import', async context => {
     const { root, source, inspection, directory } = await fixture(context);
     const saved = await library.addPackage(root, await library.createPackage(source, [0, 1], 'Languages', inspection.sha256));

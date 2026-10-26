@@ -15,7 +15,10 @@ test('both providers reject the reported fragment near the old cap and preserve 
         { text: 'I inspected the settings. '.repeat(11) + 'I set a !', valid: false },
         { text: 'I inspected the settings. '.repeat(15) + 'Should I use blue or green?', valid: true },
         { text: 'I checked the result. What should I use it for?', valid: true },
-        { text: 'I completed the check. '.repeat(25) + 'Ready.', valid: true }
+        { text: 'I completed the check. '.repeat(25) + 'Ready.', valid: true },
+        { text: '**I checked the result.**', valid: true },
+        { text: 'I checked the result. (It passed.)', valid: true },
+        { text: '**I set a !**', valid: false }
     ];
     assert.ok(sources[0].text.length < 300 && sources[0].text.length > 240);
     assert.ok(sources[1].text.length > 300);
@@ -66,6 +69,79 @@ const key = 'synthetic-key-not-a-real-openai-key';
 const request = { apiKey: key, model: DEFAULT_MODEL, source: 'Synthetic user request: name three colors.', kind: 'input' };
 const completed = summary => ({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ summary }) }] }] });
 const reply = body => async () => Response.json(body);
+
+test('completion checks preserve formatting and balanced closing punctuation without accepting wrapped fragments or role narration', () => {
+    const { validateGeneratedSummary } = require('../prompt-summary-authoring');
+    for (const summary of [
+        '**I checked the result.**', 'I checked **the result.**', 'I checked `the result.`',
+        'I checked the result. (It passed.)', 'I checked the result ((it passed.))',
+        'I checked the result [it passed.]', 'I checked the result. (I said "Yes.")'
+    ]) assert.doesNotThrow(() => validateGeneratedSummary(summary), summary);
+    for (const summary of [
+        '**I set a !**', 'I set **a !**', '(I set a !)', '**I found a mismatch...**',
+        '**The user checked the result.**', '**The user** checked the result.',
+        'I checked the result.)', 'I checked the result. (Still checking)'
+    ]) assert.throws(() => validateGeneratedSummary(summary), /complete|speaker/);
+});
+
+test('opt-in recovery retains only exhausted completed full-source drafts, with the exact shared four-request budget', async () => {
+    const { execute } = require('../library-cli');
+    const texts = ['I set a !', 'The user wants a blue frame.', 'I checked it. '.repeat(50).trim()];
+    for (const summary of texts) {
+        let calls = 0;
+        const draft = await generateOpenAISummary({ ...request, recoverDraft: true }, { fetchImpl: async () => {
+            calls++;
+            return Response.json(completed(summary));
+        } });
+        assert.equal(calls, 4);
+        assert.equal(draft.summary, summary);
+        assert.equal(draft.attempts, 4);
+        assert.ok(draft.reviewIssue);
+    }
+    assert.equal(await generateOpenAISummary({ ...request, recoverDraft: true }, { fetchImpl: reply(completed('I chose blue.')) }), 'I chose blue.');
+    for (const partial of [true, 'invalid']) {
+        await assert.rejects(generateOpenAISummary({ ...request, partial, recoverDraft: true }, {
+            fetchImpl: () => assert.fail('Partial source recovery must not send a request.')
+        }), /full-source/);
+    }
+    const results = await execute({ command: 'summaryDraftIssues', drafts: [
+        { item: 0, summary: 'I set a !' }, { item: 1, summary: '**I chose blue.**' }, { item: 2, summary: '' }
+    ] });
+    assert.match(results[0].issue, /complete/);
+    assert.equal(results[1].issue, '');
+    assert.equal(results[2].issue, '', 'Explicit deletion remains possible.');
+    for (const drafts of [null, [{ item: -1, summary: 'I chose blue.' }], [{ item: 0, summary: null }]]) {
+        await assert.rejects(execute({ command: 'summaryDraftIssues', drafts }), /Invalid/);
+    }
+});
+
+test('recovery never converts malformed, empty, multiline, refused, incomplete, network or canceled requests into review drafts', async () => {
+    const bodies = [
+        completed(''), completed('I chose\nblue.'), completed('x'.repeat(4097)),
+        { status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No.' }] }] },
+        { status: 'incomplete', output: [] },
+        { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'not JSON' }] }] }
+    ];
+    for (const body of bodies) {
+        let calls = 0;
+        await assert.rejects(generateOpenAISummary({ ...request, recoverDraft: true }, { fetchImpl: async () => {
+            calls++;
+            return Response.json(body);
+        } }));
+        assert.equal(calls, 1);
+    }
+    const controller = new AbortController();
+    let calls = 0;
+    await assert.rejects(generateOpenAISummary({ ...request, recoverDraft: true }, { signal: controller.signal, fetchImpl: async () => {
+        calls++;
+        controller.abort();
+        return Response.json(completed('I set a !'));
+    } }), /cancel/i);
+    assert.equal(calls, 1);
+    await assert.rejects(generateOpenAISummary({ ...request, recoverDraft: true }, {
+        fetchImpl: async () => { throw new TypeError('Synthetic network failure'); }
+    }), /network|connect/i);
+});
 
 test('summary translation supports Simplified Chinese and European languages without sending original exchanges', async () => {
     const { TRANSLATION_LANGUAGES } = require('../openai-summaries');
